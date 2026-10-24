@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#
+# Quản lý tài khoản CloudGram trên VPS. Cài vào /usr/local/bin bởi
+# deploy/vps-setup.sh, chạy bằng root:
+#
+#     cloudgram-admin add <username>     tạo tài khoản, in link thiết lập
+#     cloudgram-admin reset <username>   link thiết lập mới, xoá kho mã hoá cũ
+#     cloudgram-admin delete <username>
+#     cloudgram-admin list
+#
+# Dịch vụ giữ db.json trong bộ nhớ và sẽ ghi bản cũ của nó đè lên thay đổi
+# của lệnh này, nên phải dừng dịch vụ trước rồi mới chạy, xong thì bật lại.
+set -euo pipefail
+
+systemctl stop cloudgram-api
+trap 'systemctl start cloudgram-api' EXIT
+
+set -a
+. /etc/cloudgram-api.env
+set +a
+export CLOUDGRAM_DATA=${CLOUDGRAM_DATA:-/var/lib/cloudgram-api}
+
+# chạy bằng user của dịch vụ để file nó tạo vẫn thuộc về dịch vụ
+runuser -u cloudgram -- /usr/bin/node /opt/cloudgram-api/cli.js "$@"

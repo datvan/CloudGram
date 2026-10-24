@@ -40,3 +40,9 @@ export function completedProgress(id) {
         type: "COMPLETED",
     };
 }
+
+export function clearFinished() {
+    return {
+        type: "CLEAR_FINISHED",
+    };
+}

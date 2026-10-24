@@ -12,13 +12,15 @@ Repo: https://github.com/datvan/CloudGram
 
 ## Trước khi đọc tiếp: api_hash sẽ nằm công khai
 
-Vite nhúng thẳng mọi biến `VITE_*` vào file JS gửi cho trình duyệt. Không có
-backend nào ở giữa — app nói chuyện MTProto trực tiếp từ browser, đó là kiến
-trúc của CloudGram chứ không phải lỗi cấu hình.
+Vite nhúng thẳng mọi biến `VITE_*` vào file JS gửi cho trình duyệt. App nói
+chuyện MTProto với Telegram trực tiếp từ browser; dịch vụ tài khoản trên VPS
+(xem [Tài khoản và kho mã hoá](#tài-khoản-và-kho-mã-hoá)) chỉ giữ bản mã hoá
+của phiên, không chuyển tiếp gì tới Telegram. Đó là kiến trúc của CloudGram chứ
+không phải lỗi cấu hình.
 
 Hệ quả: **bất kỳ ai mở cloudgram.datvan.com đều đọc được `api_id` và `api_hash`
 của bạn** bằng cách xem source. Họ không lấy được tài khoản Telegram của bạn
-(cái đó nằm sau đăng nhập và lưu trong IndexedDB của từng máy), nhưng họ có thể
+(cái đó nằm sau tài khoản CloudGram và được mã hoá bằng mật khẩu của nó), nhưng họ có thể
 dùng cặp api_id/api_hash đó cho ứng dụng của họ, và nếu họ lạm dụng thì
 **Telegram khóa api_id — của bạn.**
 
@@ -64,21 +66,82 @@ DEPLOY_HOST=root@<ip-vps>
 ```
 
 Tiền tố không phải `VITE_` nên Vite không nhúng nó vào bundle gửi cho trình
-duyệt. Rồi:
+duyệt.
+
+**Lần đầu**, cài dịch vụ tài khoản và cấu hình nginx mới:
+
+```bash
+bash deploy/vps-setup.sh
+```
+
+Script này đổi cấu hình hệ thống trên VPS, nên đọc nó trước khi chạy. Nó tạo
+user hệ thống `cloudgram`, chép `server/` vào `/opt/cloudgram-api`, sinh
+`/etc/cloudgram-api.env` (chứa `CLOUDGRAM_PEPPER` ngẫu nhiên, chỉ root đọc được),
+cài unit [cloudgram-api.service](../deploy/systemd/cloudgram-api.service) và
+lệnh `cloudgram-admin`, rồi thay cấu hình nginx — chạy `nginx -t` trước, lỗi thì
+tự trả bản cũ. Chạy lại an toàn; pepper đã có thì giữ nguyên.
+
+**Các lần sau**, chỉ cần:
 
 ```bash
 npm run deploy
 ```
 
-Script này build rồi chạy [deploy/vps-deploy.sh](../deploy/vps-deploy.sh): tải
-`dist` vào `/var/www/cloudgram.incoming` trên VPS, rồi `mv` đè lên
-`/var/www/cloudgram`. Tải trước, hoán đổi sau — vì `scp` mất vài giây cho ~50
-file, mà trong khoảng đó nginx vẫn đang phục vụ người dùng; hoán đổi bằng `mv`
-thì cửa sổ hỏng chỉ còn vài mili giây.
+Script này build rồi chạy [deploy/vps-deploy.sh](../deploy/vps-deploy.sh):
+cập nhật mã dịch vụ trong `/opt/cloudgram-api` và khởi động lại nó, rồi tải
+`dist` vào `/var/www/cloudgram.incoming` và `mv` đè lên `/var/www/cloudgram`.
+Tải trước, hoán đổi sau — vì `scp` mất vài giây cho ~50 file, mà trong khoảng
+đó nginx vẫn đang phục vụ người dùng; hoán đổi bằng `mv` thì cửa sổ hỏng chỉ
+còn vài mili giây. Nó từ chối chạy nếu VPS chưa có dịch vụ, vì bản build mới
+không dùng được khi thiếu `/api`.
 
-Cuối script có sẵn hai lệnh kiểm tra `/` và `/folder/x`.
+Cuối script có sẵn lệnh kiểm tra `/`, `/folder/x` và `/api/me` (trả 401 khi
+chưa đăng nhập là đúng).
 
 Đổi `.env` thì chạy lại lệnh trên là đủ — biến được đọc lúc build.
+
+---
+
+## Tài khoản và kho mã hoá
+
+Đăng nhập vào CloudGram bằng tài khoản riêng của nó; tài khoản Telegram nằm
+phía sau. Chỉ admin tạo tài khoản:
+
+```bash
+ssh root@<ip-vps> cloudgram-admin add <tên>      # in link thiết lập, dùng 7 ngày, 1 lần
+ssh root@<ip-vps> cloudgram-admin reset <tên>    # quên mật khẩu: link mới, kho cũ bị xoá
+ssh root@<ip-vps> cloudgram-admin delete <tên>
+ssh root@<ip-vps> cloudgram-admin list
+```
+
+`cloudgram-admin` dừng dịch vụ trong lúc chạy rồi bật lại, vì dịch vụ giữ
+`db.json` trong bộ nhớ và sẽ ghi đè thay đổi.
+
+Người dùng mở link, đặt mật khẩu (ít nhất 10 ký tự), rồi liên kết Telegram một
+lần. Từ đó đăng nhập trên máy nào cũng dùng được ngay.
+
+**VPS không đọc được dữ liệu.** Mật khẩu đi qua PBKDF2-SHA256 (600 000 vòng)
+ngay trong trình duyệt, ra hai nửa: một nửa gửi lên làm khoá đăng nhập (server
+chỉ lưu scrypt của nó), nửa kia là khoá mở một khoá dữ liệu AES-256-GCM ngẫu
+nhiên. Phiên Telegram và cây thư mục được mã hoá bằng khoá dữ liệu đó trước khi
+gửi lên. Hệ quả: **quên mật khẩu là mất kho** — `reset` cho đăng nhập lại, nhưng
+phải liên kết Telegram lại và cây thư mục trống (file vẫn còn trong Saved
+Messages).
+
+**Dữ liệu trên VPS** nằm ở `/var/lib/cloudgram-api` (`db.json` cho tài khoản và
+phiên, `trees/<id>.json` cho cây thư mục đã mã hoá). Sao lưu thư mục đó là đủ;
+nó vô dụng nếu thiếu mật khẩu người dùng. Pepper trong `/etc/cloudgram-api.env`
+chỉ dùng để sinh salt giả cho tên không tồn tại (để không ai dò được tên nào
+có tài khoản); mất hay đổi nó thì đăng nhập vẫn chạy, nhưng nên giữ cố định.
+
+**Một máy dùng Telegram tại một thời điểm.** Hai trình duyệt cùng dùng một phiên
+Telegram thì Telegram huỷ phiên (`AUTH_KEY_DUPLICATED`), nên dịch vụ cấp "lượt"
+cho từng trình duyệt. Mở ở máy thứ hai thì app hỏi có chuyển sang máy này không;
+máy cũ nhả ra trong vòng vài giây.
+
+**Đăng xuất** chỉ xoá phiên CloudGram trên máy đó, phiên Telegram vẫn còn cho
+các máy khác. Muốn cắt hẳn Telegram thì dùng "Huỷ liên kết Telegram" trong menu
+tài khoản.
 
 ---
 
@@ -110,18 +173,19 @@ khi mọi đường khác bị Cloudflare 301 tại biên.
 **Chứng chỉ** hết hạn 2027-01-22, Certbot đã cài sẵn tác vụ tự gia hạn.
 
 **Cấu hình nginx** nằm ở [deploy/nginx/cloudgram.conf](../deploy/nginx/cloudgram.conf),
-bản sao của `/etc/nginx/sites-available/cloudgram.conf`. Hai điểm đáng chú ý:
+bản sao của `/etc/nginx/sites-available/cloudgram.conf`. Những điểm đáng chú ý:
 
 -   `location /` dùng `try_files $uri $uri/ /index.html` — đây là thứ làm
     `/folder/<id>` không 404 khi bấm F5.
 -   `location /assets/` dùng `try_files $uri =404` — cố ý. Asset thiếu phải báo
     thiếu; nếu để nó rơi về `index.html` thì trình duyệt nhận HTML với mã 200
     trong lúc đang chờ JavaScript, và lỗi đó rất khó lần.
-
-Khác với `qase-review.datvan.com`, site này **không** dùng `proxy_pass`.
-`qase-review` có một app chạy ở `127.0.0.1:4321` nên nginx phải chuyển tiếp vào
-đó; CloudGram là web tĩnh, dựng thêm một tiến trình chỉ để nginx gọi vào là
-thừa.
+-   `location /api/` dùng `proxy_pass` tới dịch vụ tài khoản ở
+    `127.0.0.1:4322`, không có `try_files`: đường `/api` sai phải nhận 404 JSON.
+-   Content-Security-Policy chỉ cho script từ chính site và kết nối tới
+    `wss://*.web.telegram.org` (nơi GramJS nói MTProto). Thêm thư viện gọi ra
+    ngoài thì phải mở thêm ở đây, không thì trình duyệt chặn lặng lẽ — xem
+    console.
 
 **Đăng nhập SSH chỉ bằng khoá.** Từ 2026-10-24 máy chủ không nhận mật khẩu nữa.
 Ba dòng sau nằm trong `/etc/ssh/sshd_config.d/00-hardening.conf`:
@@ -188,15 +252,19 @@ certbot --nginx -d cloudgram.datvan.com -n --redirect
 Thứ tự quan trọng: phải có DNS trỏ đúng và proxy đã bật trước khi gọi certbot,
 nếu không Let's Encrypt gọi thẳng vào IP và bị ufw chặn.
 
+Bản bootstrap không có `/api`. Sau khi certbot xong, chạy `bash deploy/vps-setup.sh`
+để cài dịch vụ tài khoản và thay bằng `cloudgram.conf`. Trước đó, xem lại phần
+SSL trong `cloudgram.conf` có khớp những gì certbot vừa ghi không.
+
 ---
 
 ## Kiểm tra sau khi deploy
 
--   [ ] `https://cloudgram.datvan.com` → màn hình đăng nhập. **Vài giây đầu
-        trắng là bình thường**: app đợi GramJS nối xong tới Telegram rồi mới
-        vẽ. Trắng mãi không hết mới là dấu hiệu sai `VITE_API_ID`.
--   [ ] Console (F12) không có lỗi kết nối MTProto.
--   [ ] Đăng nhập được bằng số điện thoại.
+-   [ ] `https://cloudgram.datvan.com` → màn hình đăng nhập CloudGram.
+-   [ ] Đăng nhập, liên kết Telegram bằng số điện thoại (chỉ lần đầu).
+-   [ ] Console (F12) không có lỗi kết nối MTProto hay vi phạm CSP.
+-   [ ] Đăng nhập ở một trình duyệt khác → thấy đúng cây thư mục, không phải
+        liên kết Telegram lại.
 -   [ ] Tạo một folder, vào trong nó, bấm **F5** → vẫn đúng folder đó, không 404. Đây là bài test cho `try_files`.
 -   [ ] Upload vài file một lúc, xong chạy qua checklist trong
         [upgrade-plan.md](upgrade-plan.md).
@@ -212,12 +280,10 @@ Trước khi chuyển sang VPS, app từng được deploy bằng Cloudflare Pag
 (direct upload). Project `cloudgram` vẫn còn, phục vụ ở
 `cloudgram-cew.pages.dev`, không gắn domain.
 
-```bash
-npm run deploy:pages
-```
-
-Giữ lại làm bản dự phòng: nó phục vụ đúng bundle đã deploy lên VPS, kèm cùng
-`api_id`/`api_hash`, nên mở lên cũng ra màn hình đăng nhập. Muốn dọn thì:
+Project đó vẫn phục vụ **bản cũ** (trước khi có tài khoản), kèm cùng
+`api_id`/`api_hash`. Lệnh `deploy:pages` đã bị bỏ: Pages không có `/api`, nên
+bản mới đẩy lên đó không dùng được. Nên xoá project để khỏi có một bản cũ trôi
+nổi:
 
 ```bash
 npx wrangler pages project delete cloudgram

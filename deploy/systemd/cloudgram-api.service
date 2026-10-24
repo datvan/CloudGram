@@ -1,0 +1,36 @@
+# Dịch vụ tài khoản của CloudGram (server/ trong repo).
+# Cài bằng deploy/vps-setup.sh; cấu hình nằm trong /etc/cloudgram-api.env.
+[Unit]
+Description=CloudGram account API
+After=network.target
+
+[Service]
+User=cloudgram
+Group=cloudgram
+EnvironmentFile=/etc/cloudgram-api.env
+WorkingDirectory=/opt/cloudgram-api
+ExecStart=/usr/bin/node /opt/cloudgram-api/index.js
+Restart=on-failure
+RestartSec=2
+
+# /var/lib/cloudgram-api, do systemd tạo và giao cho User ở trên
+StateDirectory=cloudgram-api
+StateDirectoryMode=0700
+UMask=0077
+
+# Dịch vụ chỉ cần đọc mã của nó, ghi vào StateDirectory và nghe trên loopback.
+# Không bật MemoryDenyWriteExecute: V8 cần trang nhớ vừa ghi vừa chạy cho JIT.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

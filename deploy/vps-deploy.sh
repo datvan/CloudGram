@@ -16,6 +16,7 @@ set -euo pipefail
 
 ROOT=/var/www/cloudgram
 STAGE=/var/www/cloudgram.incoming
+API=/opt/cloudgram-api
 SITE=${DEPLOY_URL:-https://cloudgram.datvan.com}
 
 if [ -z "${DEPLOY_HOST:-}" ] && [ -f .env ]; then
@@ -33,6 +34,22 @@ if [ ! -f dist/index.html ]; then
     exit 1
 fi
 
+# Bản build mới gọi /api, nên dịch vụ tài khoản phải có trước. Lần đầu thì
+# chạy deploy/vps-setup.sh, script này chỉ cập nhật mã của nó.
+if ! ssh -o BatchMode=yes "$DEPLOY_HOST" "systemctl cat cloudgram-api >/dev/null 2>&1"; then
+    echo "VPS chưa có dịch vụ cloudgram-api — chạy 'bash deploy/vps-setup.sh' trước." >&2
+    exit 1
+fi
+
+echo "→ cập nhật dịch vụ tài khoản"
+ssh -o BatchMode=yes "$DEPLOY_HOST" "rm -rf '$API.incoming' && mkdir -p '$API.incoming'"
+# tar thay vì scp để bỏ được dữ liệu và cấu hình dev (server/.data, .env.dev)
+tar -C server --exclude=.data --exclude='.env*' --exclude=test --exclude=node_modules -cf - . |
+    ssh -o BatchMode=yes "$DEPLOY_HOST" "tar -xf - -C '$API.incoming'"
+ssh -o BatchMode=yes "$DEPLOY_HOST" "chown -R root:root '$API.incoming' && chmod -R a+rX,go-w '$API.incoming' \
+    && rm -rf '$API.old' && mv '$API' '$API.old' && mv '$API.incoming' '$API' && rm -rf '$API.old' \
+    && systemctl restart cloudgram-api"
+
 echo "→ dọn thư mục tạm trên máy đích"
 ssh "$DEPLOY_HOST" "rm -rf '$STAGE' && mkdir -p '$STAGE'"
 
@@ -45,5 +62,6 @@ ssh "$DEPLOY_HOST" "rm -rf '$ROOT.old' && mv '$ROOT' '$ROOT.old' && mv '$STAGE' 
 echo "→ kiểm tra"
 curl -sS -o /dev/null -w "   /          %{http_code}\n" --max-time 20 "$SITE/"
 curl -sS -o /dev/null -w "   /folder/x  %{http_code}\n" --max-time 20 "$SITE/folder/x"
+curl -sS -o /dev/null -w "   /api/me    %{http_code} (401 là đúng)\n" --max-time 20 "$SITE/api/me"
 
 echo "Xong: $SITE"

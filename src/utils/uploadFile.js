@@ -1,6 +1,6 @@
 import { CustomFile } from "telegram/client/uploads";
 
-import client from "../services/telegram";
+import { getClient } from "../services/telegram";
 import { Store } from "../redux/store";
 import { uploadProgress } from "../redux/actions/progressAction";
 
@@ -28,7 +28,7 @@ export default async function uploadFile(id, file) {
         Store.dispatch(uploadProgress(id, _progress));
     }
 
-    const result = await client.sendFile("me", {
+    const result = await getClient().sendFile("me", {
         file: toUpload,
         workers: 1,
         forceDocument: true,

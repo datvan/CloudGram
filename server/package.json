@@ -1,0 +1,14 @@
+{
+    "name": "cloudgram-api",
+    "private": true,
+    "version": "1.0.0",
+    "description": "Account and encrypted-vault service behind cloudgram.datvan.com",
+    "type": "module",
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "start": "node index.js",
+        "test": "node --test test/*.test.js"
+    }
+}

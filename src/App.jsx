@@ -1,64 +1,66 @@
-import { PropTypes } from "prop-types";
-import { useEffect, useState } from "react";
-import { BrowserRouter } from "react-router-dom";
-import { initDB } from "react-indexed-db-hook";
-import { connect } from "react-redux";
+import { useEffect } from "react";
+import PropTypes from "prop-types";
+import { useSelector } from "react-redux";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 
-import { AuthRoutes, UnAuthRoutes } from "./AppRoutes";
-import client from "./services/telegram";
-import { authenticateUser } from "./redux/actions/authAction";
+import DriveApp from "./pages/drive/DriveApp";
+import SignIn from "./pages/auth/SignIn";
+import Setup from "./pages/auth/Setup";
+import TelegramLink from "./pages/auth/TelegramLink";
+import {
+    Connecting,
+    ErrorScreen,
+    LeaseScreen,
+} from "./pages/auth/StatusScreens";
+import { boot, logout } from "./services/account";
 
-// initDB
-import { DBConfig } from "./db/config";
-import SplashScreen from "./components/SplashScreen";
-initDB(DBConfig);
-
-// css
-// import './styles/app.css'
-
-// eslint-disable-next-line react-refresh/only-export-components
-function App(props) {
-    const { dispatch, isAuthenticated } = props;
-    const [isLoading, setIsLoading] = useState(true);
+/** Which screen the sign-in phase calls for; services/account.js drives it. */
+export default function App({ mode, onToggleMode }) {
+    const { phase, username, setupToken } = useSelector((state) => state.auth);
 
     useEffect(() => {
-        checkAuth();
-    });
+        boot();
+    }, []);
 
-    async function checkAuth() {
-        await client.connect();
-        if (!isAuthenticated && (await client.isUserAuthorized())) {
-            dispatch(authenticateUser());
-        }
-        setIsLoading(false);
+    let screen;
+    switch (phase) {
+        case "setup":
+            screen = <Setup token={setupToken} />;
+            break;
+        case "signedOut":
+            screen = <SignIn />;
+            break;
+        case "locked":
+            screen = (
+                <SignIn locked username={username} onSwitchUser={logout} />
+            );
+            break;
+        case "lease":
+            screen = <LeaseScreen />;
+            break;
+        case "link":
+            screen = <TelegramLink />;
+            break;
+        case "error":
+            screen = <ErrorScreen />;
+            break;
+        case "ready":
+            screen = <DriveApp mode={mode} onToggleMode={onToggleMode} />;
+            break;
+        default:
+            screen = <Connecting />;
     }
 
     return (
-        <>
-            <BrowserRouter>
-                {isLoading ? (
-                    <SplashScreen />
-                ) : isAuthenticated ? (
-                    <AuthRoutes />
-                ) : (
-                    <UnAuthRoutes />
-                )}
-            </BrowserRouter>
-        </>
+        <BrowserRouter>
+            <Routes>
+                <Route path="*" element={screen} />
+            </Routes>
+        </BrowserRouter>
     );
 }
 
-const mapStateToProps = (state) => {
-    return {
-        dispatch: state.dispatch,
-        isAuthenticated: state.auth.isAuthenticated,
-    };
-};
-
 App.propTypes = {
-    dispatch: PropTypes.func.isRequired,
-    isAuthenticated: PropTypes.bool.isRequired,
+    mode: PropTypes.string,
+    onToggleMode: PropTypes.func,
 };
-
-// eslint-disable-next-line react-refresh/only-export-components
-export default connect(mapStateToProps)(App);

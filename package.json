@@ -10,7 +10,8 @@
         "prettier": "prettier . --check",
         "preview": "vite preview",
         "deploy": "npm run build && bash deploy/vps-deploy.sh",
-        "deploy:pages": "npm run build && wrangler pages deploy dist --project-name cloudgram --branch main"
+        "dev:api": "node --env-file=server/.env.dev server/index.js",
+        "test:api": "npm --prefix server test"
     },
     "dependencies": {
         "@emotion/react": "^11.11.1",
@@ -19,9 +20,10 @@
         "@mui/icons-material": "^5.13.7",
         "@mui/material": "^5.13.7",
         "@reduxjs/toolkit": "^1.9.5",
+        "buffer": "^6.0.3",
+        "prop-types": "^15.8.1",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
-        "react-indexed-db-hook": "^1.0.14",
         "react-redux": "^8.1.1",
         "react-router-dom": "^6.14.1",
         "telegram": "^2.17.9",

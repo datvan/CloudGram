@@ -1,13 +1,8 @@
 /**
- * Pure helpers over the flat record list kept in IndexedDB.
+ * Pure helpers over the flat record list of the file tree (services/drive.js).
  *
- * react-indexed-db-hook cannot list the children of a folder: its getByIndex()
- * resolves to index.get(), which yields only the first match, and its
- * openCursor() only accepts a key range over the keyPath. So everything here
- * works off a full getAll() snapshot instead of an index.
- *
- * Records sitting at the root carry no `parent` key at all, so undefined and
- * null both mean "at the root" throughout.
+ * Records imported from the old IndexedDB tree may carry no `parent` key at
+ * all, so undefined and null both mean "at the root" throughout.
  */
 
 const parentOf = (record) => record.parent ?? undefined;
@@ -22,9 +17,35 @@ export function findFolder(records, parentId, name) {
     return records.find(
         (record) =>
             record.type === "folder" &&
+            !record.trashedAt &&
             record.name === name &&
             parentOf(record) === parent,
     );
+}
+
+/** Folders from the root down to `id`, for breadcrumbs. */
+export function pathTo(byId, id) {
+    const path = [];
+    const seen = new Set();
+    let cursor = id ? byId.get(id) : undefined;
+    while (cursor && !seen.has(cursor.id)) {
+        seen.add(cursor.id);
+        path.unshift(cursor);
+        cursor = cursor.parent ? byId.get(cursor.parent) : undefined;
+    }
+    return path;
+}
+
+/** Trashed itself, or sitting somewhere under a trashed folder. */
+export function isHidden(byId, record) {
+    const seen = new Set();
+    let cursor = record;
+    while (cursor && !seen.has(cursor.id)) {
+        if (cursor.trashedAt) return true;
+        seen.add(cursor.id);
+        cursor = cursor.parent ? byId.get(cursor.parent) : undefined;
+    }
+    return false;
 }
 
 /**
@@ -67,7 +88,7 @@ export function collectSubtree(records, rootId) {
     return { folders, files };
 }
 
-/** Records to drop from IndexedDB, files that never finished uploading included. */
+/** Records to drop from the tree, files that never finished uploading included. */
 export function recordIdsOf({ folders, files }) {
     return [...folders.map((folder) => folder.id), ...files.map((f) => f.id)];
 }

@@ -1,20 +1,23 @@
+/**
+ * Where the sign-in flow stands. `phase` is one of loading, setup, signedOut,
+ * locked, connecting, lease, link, ready, error; services/account.js moves it.
+ */
 export default function reducer(
     state = {
-        isAuthenticated: false,
+        phase: "loading",
+        username: null,
+        me: null,
+        lease: null,
+        notice: null,
+        error: null,
+        hasLegacy: false,
+        setupToken: null,
     },
     action,
 ) {
     switch (action.type) {
-        case "LOGIN_SUCCESS":
-            return {
-                ...state,
-                isAuthenticated: true,
-            };
-        case "LOGOUT_SUCCESS":
-            return {
-                ...state,
-                isAuthenticated: false,
-            };
+        case "SET_AUTH":
+            return { ...state, ...action.state };
         default:
             return state;
     }
