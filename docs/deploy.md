@@ -1,20 +1,9 @@
-# Deploy CloudGram lên cloudgram.datvan.com (Cloudflare Pages)
+# Deploy CloudGram lên cloudgram.datvan.com
+
+Đang chạy tại https://cloudgram.datvan.com, phục vụ bởi nginx trên VPS
+`163.61.182.248`, đứng sau proxy Cloudflare.
 
 Repo: https://github.com/datvan/CloudGram
-
-Cách deploy ở đây là **Direct Upload**: build ngay trên máy bạn rồi đẩy thư mục
-`dist` lên Cloudflare bằng `wrangler`. Khác với kiểu nối thẳng vào Git, cách này
-không cần đụng gì tới form cấu hình build trên dashboard, và **api_id/api_hash
-không bao giờ phải nhập vào dashboard** — chúng chỉ nằm trong file `.env` ở máy
-bạn và được Vite nhúng vào bundle lúc build.
-
-Đánh đổi: push lên `main` sẽ **không** tự deploy nữa. Mỗi lần muốn cập nhật
-production thì chạy `npm run deploy`. Nếu sau này muốn quay lại kiểu tự động
-theo Git thì tạo một project Pages mới nối với Git rồi chuyển domain sang.
-
-`datvan.com` đang dùng nameserver Cloudflare (`fish.ns.cloudflare.com`,
-`isaac.ns.cloudflare.com`), nên Pages tự tạo được bản ghi DNS cho subdomain và
-tự cấp SSL. Không phải thêm CNAME thủ công.
 
 ---
 
@@ -33,158 +22,148 @@ dùng cặp api_id/api_hash đó cho ứng dụng của họ, và nếu họ l�
 Vì vậy: tạo một app Telegram **riêng** cho bản deploy này, đừng dùng lại cặp
 api_id/api_hash bạn đang dùng cho việc khác.
 
+Đổi chỗ đặt trang không thay đổi điều này. Khoá đó để Telegram nhận diện ứng
+dụng, không liên quan tới việc ai phục vụ file HTML.
+
 ---
 
-## Bước 1 — Lấy api_id, api_hash và điền vào `.env` (bạn làm)
+## Bước 1 — Lấy api_id, api_hash và điền vào `.env`
 
 1. Mở https://my.telegram.org và đăng nhập bằng **số điện thoại Telegram** của
    bạn. Mã xác nhận được gửi vào chính app Telegram, không phải SMS.
 2. Chọn **API development tools**.
-3. Điền form tạo app:
-    - **App title**: `CloudGram` (hoặc tên gì tùy bạn)
-    - **Short name**: `cloudgram`
-    - **Platform**: Web
-    - **URL**: `https://cloudgram.datvan.com`
-4. Bấm **Create application**.
-5. Màn hình kết quả cho hai giá trị cần lấy:
-    - `App api_id` — một dãy số, ví dụ `1234567`
-    - `App api_hash` — chuỗi 32 ký tự hex
-
-Trang này không cho tạo lại app đã có, nên lưu hai giá trị đó vào password
-manager ngay.
-
-6. Mở file `.env` ở thư mục gốc repo (đã tạo sẵn, nội dung còn là placeholder)
-   và thay hai dòng bằng giá trị thật:
+3. Điền form: App title `CloudGram`, Short name `cloudgram`, Platform **Web**,
+   URL `https://cloudgram.datvan.com`.
+4. Bấm **Create application**. Màn hình kết quả cho `App api_id` (dãy số) và
+   `App api_hash` (32 ký tự hex). Lưu vào password manager ngay.
+5. Điền vào `.env` ở thư mục gốc repo:
 
 ```
 VITE_API_ID=1234567
 VITE_API_HASH='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
 ```
 
-`.env` nằm trong `.gitignore` nên không bao giờ bị commit. Đừng paste hai giá
-trị này vào chat.
+`.env` nằm trong `.gitignore` nên không bao giờ bị commit.
+
+> Trang my.telegram.org giới hạn số lần thử rất chặt và hay trả
+> `Too many attempts. Please try again later.` Gặp lỗi đó thì **ngừng bấm**,
+> chờ vài giờ rồi thử lại; thử dồn dập làm đồng hồ đếm lại từ đầu. Đổi mạng
+> (phát 4G thay vì wifi) đôi khi có tác dụng vì giới hạn tính theo IP.
 
 ---
 
-## Bước 2 — Đăng nhập Cloudflare (bạn bấm Allow)
-
-```bash
-npx wrangler login
-```
-
-Lệnh này mở trình duyệt tới trang OAuth của Cloudflare. Bạn bấm **Allow**, token
-được lưu vào máy; không ai phải gõ mật khẩu hay API token ở đâu cả.
-
-Phải đăng nhập đúng **tài khoản Cloudflare đang giữ zone `datvan.com`**, nếu
-không thì tới Bước 4 sẽ không tự tạo được bản ghi DNS.
-
-Kiểm tra lại:
-
-```bash
-npx wrangler whoami
-```
-
-Nếu nó liệt kê nhiều hơn một account, đặt `CLOUDFLARE_ACCOUNT_ID` trước khi chạy
-các lệnh sau, để wrangler không dừng lại hỏi chọn account.
-
----
-
-## Bước 3 — Build và deploy
-
-```bash
-npx wrangler pages project create cloudgram --production-branch main --force
-```
-
-Chạy một lần duy nhất — và project `cloudgram` đã được tạo rồi, đây chỉ là ghi
-lại cho lần sau.
-
-`--force` ở đây không phá gì cả. Wrangler mặc định đẩy project mới sang nền
-Workers, mà nền đó đòi Vite ≥ 6 còn repo này đang dùng Vite 4, nên nó dừng lại.
-Cờ này bảo nó tạo thẳng trên Cloudflare Pages như cũ. Chỉ cần đúng một lần lúc
-tạo; các lệnh sau không dùng tới nó nữa.
-
-Sau đó:
+## Bước 2 — Deploy
 
 ```bash
 npm run deploy
 ```
 
-Script này là `vite build` rồi `wrangler pages deploy dist --project-name
-cloudgram --branch main`. Cờ `--branch main` là bắt buộc: wrangler đoán branch
-từ git, và bất kỳ branch nào khác `main` sẽ thành **preview deployment** —
-build xanh, có URL riêng, nhưng domain thật không trỏ vào đó.
+Script này build rồi chạy [deploy/vps-deploy.sh](../deploy/vps-deploy.sh): tải
+`dist` vào `/var/www/cloudgram.incoming` trên VPS, rồi `mv` đè lên
+`/var/www/cloudgram`. Tải trước, hoán đổi sau — vì `scp` mất vài giây cho ~50
+file, mà trong khoảng đó nginx vẫn đang phục vụ người dùng; hoán đổi bằng `mv`
+thì cửa sổ hỏng chỉ còn vài mili giây.
 
-Output phải ghi là deploy lên **Production**. URL thử nghiệm là
-https://cloudgram-cew.pages.dev — tên `cloudgram.pages.dev` đã có người khác
-lấy, nên Cloudflare thêm hậu tố; tên _project_ thì vẫn là `cloudgram`, đó mới là
-cái `--project-name` cần.
+Cuối script có sẵn hai lệnh kiểm tra `/` và `/folder/x`.
 
-Mở thử URL đó: phải ra màn hình đăng nhập, không phải trang trắng. Trang trắng
-nghĩa là `.env` sai hoặc chưa điền.
+Đổi `.env` thì chạy lại lệnh trên là đủ — biến được đọc lúc build.
 
 ---
 
-## Bước 4 — Gắn domain (bạn làm, trên dashboard)
+## Hạ tầng được nối như thế nào
 
-wrangler không có lệnh nào cho custom domain, nên bước này phải qua giao diện web.
+Phần này ghi lại những thứ mất công tìm ra, để lần sau khỏi dò lại.
 
-1. https://dash.cloudflare.com → **Workers & Pages** → chọn project **cloudgram**.
-2. Tab **Custom domains** → **Set up a custom domain**.
-3. Nhập `cloudgram.datvan.com` → **Continue** → **Activate domain**.
-4. Vì `datvan.com` nằm sẵn trong tài khoản Cloudflare, bản ghi CNAME được tạo
-   tự động. Chứng chỉ SSL cấp trong vài phút.
+**Mọi traffic web phải đi qua Cloudflare.** `ufw` trên VPS chỉ mở 80/443 cho 22
+dải IP của Cloudflare (15 IPv4 + 7 IPv6), chặn mọi nguồn khác. Gọi thẳng vào
+`163.61.182.248` từ ngoài sẽ timeout, kể cả cổng 443.
 
-Bản ghi A của `datvan.com` (`27.74.11.37`) không bị đụng tới — subdomain này
-độc lập hoàn toàn.
+Hệ quả thực tế: **bản ghi DNS bắt buộc phải để Proxied (đám mây cam).** Để
+`DNS only` thì trang không chạy — không phải vấn đề bảo mật mà là không có
+đường vào. Ngược lại, thiết kế này tốt: IP gốc không lộ, DDoS bị Cloudflare
+hứng, và mọi luật WAF hay rate limit đặt ở Cloudflare đều không bị đi vòng.
+
+**SSL mode của zone là Full (strict).** Biết được vì khi origin chưa có chứng
+chỉ cho hostname, Cloudflare trả `526` chứ không phải phục vụ tạm.
+
+**Certbot chạy được dù đứng sau proxy**, vì Cloudflare cho đường
+`/.well-known/acme-challenge/` đi thẳng qua HTTP về origin, không ép sang
+HTTPS. Đã kiểm chứng: đường đó trả 200 và có trong access log của nginx, trong
+khi mọi đường khác bị Cloudflare 301 tại biên.
+
+**Chứng chỉ** hết hạn 2027-01-22, Certbot đã cài sẵn tác vụ tự gia hạn.
+
+**Cấu hình nginx** nằm ở [deploy/nginx/cloudgram.conf](../deploy/nginx/cloudgram.conf),
+bản sao của `/etc/nginx/sites-available/cloudgram.conf`. Hai điểm đáng chú ý:
+
+-   `location /` dùng `try_files $uri $uri/ /index.html` — đây là thứ làm
+    `/folder/<id>` không 404 khi bấm F5.
+-   `location /assets/` dùng `try_files $uri =404` — cố ý. Asset thiếu phải báo
+    thiếu; nếu để nó rơi về `index.html` thì trình duyệt nhận HTML với mã 200
+    trong lúc đang chờ JavaScript, và lỗi đó rất khó lần.
+
+Khác với `qase-review.datvan.com`, site này **không** dùng `proxy_pass`.
+`qase-review` có một app chạy ở `127.0.0.1:4321` nên nginx phải chuyển tiếp vào
+đó; CloudGram là web tĩnh, dựng thêm một tiến trình chỉ để nginx gọi vào là
+thừa.
 
 ---
 
-## Những thứ đã chuẩn bị sẵn trong repo
+## Dựng lại từ đầu
 
--   **`public/_redirects`** — `/*  /index.html  200`. App dùng client-side
-    routing, nên `https://cloudgram.datvan.com/folder/<id>` là đường dẫn chỉ tồn
-    tại trong trình duyệt, không có file nào tương ứng trên đĩa. Dòng này bảo
-    host trả `index.html` cho mọi đường dẫn và để router tự xử lý.
+Nếu phải làm lại trên máy khác:
 
-    Đã kiểm chứng trên bản deploy thật ngày 2026-10-24: `/` và `/folder/x` đều
-    trả `200` kèm đúng nội dung `index.html`. Một đường dẫn chắc chắn không tồn
-    tại như `/khong-ton-tai.txt` cũng trả `200` HTML — nghĩa là luật catch-all
-    này thực sự đang chạy, chứ không phải Pages tự xử lý giúp.
+```bash
+# trên VPS
+mkdir -p /var/www/cloudgram
+# chép deploy/nginx/cloudgram.conf vào /etc/nginx/sites-available/
+# (bỏ các dòng "managed by Certbot" — certbot sẽ tự thêm lại)
+ln -s /etc/nginx/sites-available/cloudgram.conf /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+```
 
-    Hệ quả phụ: file tĩnh thiếu sẽ trả `200` kèm HTML thay vì `404`. Với SPA thì
-    đây là đánh đổi bình thường và không ảnh hưởng gì tới app này.
+Rồi tạo bản ghi DNS `cloudgram` kiểu A trỏ về IP VPS, **bật Proxied**, và:
 
--   **WebSocket bảo mật** — GramJS tự đặt `useWSS` theo `window.location.protocol`
-    (`telegramBaseClient.js`), nên trên HTTPS nó dùng `wss://` mà không cần chỉnh
-    gì. Không có lỗi mixed content.
+```bash
+certbot --nginx -d cloudgram.datvan.com -n --redirect
+```
+
+Thứ tự quan trọng: phải có DNS trỏ đúng và proxy đã bật trước khi gọi certbot,
+nếu không Let's Encrypt gọi thẳng vào IP và bị ufw chặn.
 
 ---
 
 ## Kiểm tra sau khi deploy
 
--   [ ] Mở `https://cloudgram.datvan.com` → hiện màn hình đăng nhập, không phải
-        trang trắng. Trang trắng kéo dài thường là sai `VITE_API_ID`.
+-   [ ] `https://cloudgram.datvan.com` → màn hình đăng nhập, không phải trang
+        trắng. Trang trắng kéo dài thường là sai `VITE_API_ID`.
 -   [ ] Console (F12) không có lỗi kết nối MTProto.
 -   [ ] Đăng nhập được bằng số điện thoại.
--   [ ] Tạo một folder, vào trong nó, bấm **F5** → vẫn đúng folder đó, không 404.
-        Đây là bài test cho `_redirects`.
+-   [ ] Tạo một folder, vào trong nó, bấm **F5** → vẫn đúng folder đó, không 404. Đây là bài test cho `try_files`.
 -   [ ] Upload vài file một lúc, xong chạy qua checklist trong
         [upgrade-plan.md](upgrade-plan.md).
 
+Ba mức HTTP đã kiểm chứng trên bản đang chạy: `/` và `/folder/x` trả 200,
+`/assets/<tên không tồn tại>.js` trả 404, `http://` chuyển 301 sang `https://`.
+
 ---
 
-## Lần deploy sau
+## Phụ lục — bản trên Cloudflare Pages
+
+Trước khi chuyển sang VPS, app từng được deploy bằng Cloudflare Pages
+(direct upload). Project `cloudgram` vẫn còn, phục vụ ở
+`cloudgram-cew.pages.dev`, không gắn domain.
 
 ```bash
-npm run deploy
+npm run deploy:pages
 ```
 
-Chỉ vậy. Đổi `VITE_API_ID` / `VITE_API_HASH` thì sửa `.env` rồi chạy lại lệnh
-trên — biến được đọc lúc build nên build lại là đủ, không cần làm gì trên
-dashboard.
-
-Muốn đẩy thử một bản preview mà không đụng domain thật:
+Giữ lại làm bản dự phòng. Muốn dọn thì:
 
 ```bash
-npm run build && npx wrangler pages deploy dist --project-name cloudgram --branch preview
+npx wrangler pages project delete cloudgram
 ```
+
+Khác biệt đáng nhớ giữa hai nơi: trên Pages, luật `public/_redirects`
+(`/* /index.html 200`) bắt **mọi** đường dẫn, nên asset thiếu cũng trả 200 kèm
+HTML. Bản nginx tách riêng `/assets/` nên không bị vậy.
