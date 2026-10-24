@@ -1,6 +1,16 @@
 # Deploy CloudGram lên cloudgram.datvan.com (Cloudflare Pages)
 
-Repo: https://github.com/datvan/CloudGram · nhánh production: `main`
+Repo: https://github.com/datvan/CloudGram
+
+Cách deploy ở đây là **Direct Upload**: build ngay trên máy bạn rồi đẩy thư mục
+`dist` lên Cloudflare bằng `wrangler`. Khác với kiểu nối thẳng vào Git, cách này
+không cần đụng gì tới form cấu hình build trên dashboard, và **api_id/api_hash
+không bao giờ phải nhập vào dashboard** — chúng chỉ nằm trong file `.env` ở máy
+bạn và được Vite nhúng vào bundle lúc build.
+
+Đánh đổi: push lên `main` sẽ **không** tự deploy nữa. Mỗi lần muốn cập nhật
+production thì chạy `npm run deploy`. Nếu sau này muốn quay lại kiểu tự động
+theo Git thì tạo một project Pages mới nối với Git rồi chuyển domain sang.
 
 `datvan.com` đang dùng nameserver Cloudflare (`fish.ns.cloudflare.com`,
 `isaac.ns.cloudflare.com`), nên Pages tự tạo được bản ghi DNS cho subdomain và
@@ -25,7 +35,7 @@ api_id/api_hash bạn đang dùng cho việc khác.
 
 ---
 
-## Bước 1 — Lấy api_id và api_hash
+## Bước 1 — Lấy api_id, api_hash và điền vào `.env` (bạn làm)
 
 1. Mở https://my.telegram.org và đăng nhập bằng **số điện thoại Telegram** của
    bạn. Mã xác nhận được gửi vào chính app Telegram, không phải SMS.
@@ -43,52 +53,73 @@ api_id/api_hash bạn đang dùng cho việc khác.
 Trang này không cho tạo lại app đã có, nên lưu hai giá trị đó vào password
 manager ngay.
 
-> Nếu muốn chạy thử ở máy trước: tạo file `.env` ở thư mục gốc repo với nội
-> dung như `.env.example`. File `.env` đã nằm trong `.gitignore` nên không bao
-> giờ bị commit.
+6. Mở file `.env` ở thư mục gốc repo (đã tạo sẵn, nội dung còn là placeholder)
+   và thay hai dòng bằng giá trị thật:
 
 ```
 VITE_API_ID=1234567
 VITE_API_HASH='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
 ```
 
----
-
-## Bước 2 — Tạo project trên Cloudflare Pages
-
-1. https://dash.cloudflare.com → **Workers & Pages** → **Create** → tab
-   **Pages** → **Connect to Git**.
-2. Cho Cloudflare quyền truy cập GitHub, chọn repo **datvan/CloudGram**.
-3. Cấu hình build:
-
-    | Mục                    | Giá trị         |
-    | ---------------------- | --------------- |
-    | Production branch      | `main`          |
-    | Framework preset       | `React (Vite)`  |
-    | Build command          | `npm run build` |
-    | Build output directory | `dist`          |
-
-4. **Khoan bấm Save and Deploy.** Mở **Environment variables** ngay trong form
-   này và thêm cho cả **Production** lẫn **Preview**:
-
-    | Variable        | Value                   |
-    | --------------- | ----------------------- |
-    | `VITE_API_ID`   | số api_id ở Bước 1      |
-    | `VITE_API_HASH` | chuỗi api_hash ở Bước 1 |
-
-    Phải thêm **trước** lần build đầu. Vite đọc biến lúc build chứ không phải
-    lúc chạy; thiếu biến thì `parseInt(undefined)` ra `NaN`, bundle vẫn build
-    thành công nhưng app không kết nối được, và lỗi đó không hiện rõ ràng.
-
-5. **Save and Deploy**. Build mất khoảng 1–2 phút.
+`.env` nằm trong `.gitignore` nên không bao giờ bị commit. Đừng paste hai giá
+trị này vào chat.
 
 ---
 
-## Bước 3 — Gắn domain
+## Bước 2 — Đăng nhập Cloudflare (bạn bấm Allow)
 
-1. Vào project vừa tạo → tab **Custom domains** → **Set up a custom domain**.
-2. Nhập `cloudgram.datvan.com` → **Continue** → **Activate domain**.
-3. Vì `datvan.com` nằm sẵn trong tài khoản Cloudflare, bản ghi CNAME được tạo
+```bash
+npx wrangler login
+```
+
+Lệnh này mở trình duyệt tới trang OAuth của Cloudflare. Bạn bấm **Allow**, token
+được lưu vào máy; không ai phải gõ mật khẩu hay API token ở đâu cả.
+
+Phải đăng nhập đúng **tài khoản Cloudflare đang giữ zone `datvan.com`**, nếu
+không thì tới Bước 4 sẽ không tự tạo được bản ghi DNS.
+
+Kiểm tra lại:
+
+```bash
+npx wrangler whoami
+```
+
+Nếu nó liệt kê nhiều hơn một account, đặt `CLOUDFLARE_ACCOUNT_ID` trước khi chạy
+các lệnh sau, để wrangler không dừng lại hỏi chọn account.
+
+---
+
+## Bước 3 — Build và deploy
+
+```bash
+npx wrangler pages project create cloudgram --production-branch main
+```
+
+Chạy một lần duy nhất. Sau đó:
+
+```bash
+npm run deploy
+```
+
+Script này là `vite build` rồi `wrangler pages deploy dist --project-name
+cloudgram --branch main`. Cờ `--branch main` là bắt buộc: wrangler đoán branch
+từ git, và bất kỳ branch nào khác `main` sẽ thành **preview deployment** —
+build xanh, có URL riêng, nhưng domain thật không trỏ vào đó.
+
+Output phải ghi là deploy lên **Production**, kèm URL `cloudgram.pages.dev`.
+Mở thử URL đó: phải ra màn hình đăng nhập, không phải trang trắng. Trang trắng
+nghĩa là `.env` sai hoặc chưa điền.
+
+---
+
+## Bước 4 — Gắn domain (bạn làm, trên dashboard)
+
+wrangler không có lệnh nào cho custom domain, nên bước này phải qua giao diện web.
+
+1. https://dash.cloudflare.com → **Workers & Pages** → chọn project **cloudgram**.
+2. Tab **Custom domains** → **Set up a custom domain**.
+3. Nhập `cloudgram.datvan.com` → **Continue** → **Activate domain**.
+4. Vì `datvan.com` nằm sẵn trong tài khoản Cloudflare, bản ghi CNAME được tạo
    tự động. Chứng chỉ SSL cấp trong vài phút.
 
 Bản ghi A của `datvan.com` (`27.74.11.37`) không bị đụng tới — subdomain này
@@ -129,8 +160,16 @@ Bản ghi A của `datvan.com` (`27.74.11.37`) không bị đụng tới — sub
 
 ## Lần deploy sau
 
-Mỗi lần push lên `main` là Cloudflare Pages build lại và tự lên production.
-Push lên nhánh khác thì ra một preview URL riêng, không đụng tới domain thật.
+```bash
+npm run deploy
+```
 
-Đổi `VITE_API_ID` / `VITE_API_HASH` thì phải **bấm Retry deployment** thủ công,
-vì biến chỉ được đọc lúc build.
+Chỉ vậy. Đổi `VITE_API_ID` / `VITE_API_HASH` thì sửa `.env` rồi chạy lại lệnh
+trên — biến được đọc lúc build nên build lại là đủ, không cần làm gì trên
+dashboard.
+
+Muốn đẩy thử một bản preview mà không đụng domain thật:
+
+```bash
+npm run build && npx wrangler pages deploy dist --project-name cloudgram --branch preview
+```
