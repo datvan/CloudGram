@@ -27,6 +27,7 @@ const ROUTES = {
     "POST /api/lease": "lease",
     "POST /api/lease/release": "release",
     "POST /api/shares": "shares.create",
+    "POST /api/dropbox/resolve": "dropbox.resolve",
     "GET /api/shares": "shares.list",
 };
 

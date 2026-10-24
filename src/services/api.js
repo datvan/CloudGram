@@ -69,6 +69,7 @@ export const api = {
     deleteShare: (id) => request("DELETE", `/shares/${id}`),
     listShares: () => request("GET", "/shares"),
     publicShare: (id) => request("GET", `/s/${encodeURIComponent(id)}`),
+    resolveDropbox: (url) => request("POST", "/dropbox/resolve", { url }),
 };
 
 export async function putShareChunk(id, index, bytes) {
@@ -118,6 +119,12 @@ const MESSAGES = {
     too_many_shares: "Đã có quá nhiều link chia sẻ.",
     bad_size: "Tệp quá lớn để chia sẻ (tối đa 2 GB).",
     disk_full: "Máy chủ đã gần đầy ổ đĩa.",
+    dropbox_bad_link: "Đây không phải link chia sẻ Dropbox.",
+    dropbox_not_found: "Link Dropbox không tồn tại hoặc đã bị xoá.",
+    dropbox_unavailable:
+        "Dropbox không cho tải link này: link sai, có mật khẩu, đã tắt tải xuống, hoặc thư mục quá lớn để tải một lần (trên 20 GB hoặc 10.000 tệp).",
+    dropbox_busy: "Dropbox đang giới hạn lượt tải. Đợi một lúc rồi thử lại.",
+    dropbox_unreachable: "Máy chủ không kết nối được Dropbox.",
 };
 
 export function describeError(error) {

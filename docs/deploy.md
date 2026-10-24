@@ -144,6 +144,12 @@ mỗi tài khoản tối đa 500 link và 20 GB (đổi bằng `CLOUDGRAM_SHARE_
 `/etc/cloudgram-api.env`); máy chủ luôn chừa lại 1 GB ổ trống. Chưa chia sẻ được
 cả thư mục.
 
+**Nhập từ Dropbox** thì ngược lại, không lưu gì trên VPS: máy chủ chỉ hỏi
+Dropbox xem link chia sẻ chuyển hướng tới đâu (`POST /api/dropbox/resolve`, chỉ
+nhận link `dropbox.com`), còn trình duyệt tự tải ZIP thẳng từ Dropbox và đưa
+từng tệp lên Telegram. Dropbox không cho tải một thư mục trên 20 GB hoặc hơn
+10.000 tệp thành một ZIP; thư mục như vậy phải chia thành nhiều link nhỏ.
+
 **Một máy dùng Telegram tại một thời điểm.** Hai trình duyệt cùng dùng một phiên
 Telegram thì Telegram huỷ phiên (`AUTH_KEY_DUPLICATED`), nên dịch vụ cấp "lượt"
 cho từng trình duyệt. Mở ở máy thứ hai thì app hỏi có chuyển sang máy này không;

@@ -19,6 +19,7 @@ import AddIcon from "@mui/icons-material/Add";
 import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutlined";
 import UploadFileOutlinedIcon from "@mui/icons-material/UploadFileOutlined";
 import DriveFolderUploadOutlinedIcon from "@mui/icons-material/DriveFolderUploadOutlined";
+import CloudDownloadOutlinedIcon from "@mui/icons-material/CloudDownloadOutlined";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
 import AddToDriveOutlinedIcon from "@mui/icons-material/AddToDriveOutlined";
 import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
@@ -47,6 +48,7 @@ export function NewMenu({
     onNewFolder,
     onUploadFiles,
     onUploadFolder,
+    onImportDropbox,
 }) {
     const run = (fn) => () => {
         onClose();
@@ -73,6 +75,13 @@ export function NewMenu({
                 </ListItemIcon>
                 Tải thư mục lên
             </MenuItem>
+            <Divider />
+            <MenuItem onClick={run(onImportDropbox)}>
+                <ListItemIcon>
+                    <CloudDownloadOutlinedIcon fontSize="small" />
+                </ListItemIcon>
+                Nhập từ link Dropbox
+            </MenuItem>
         </Menu>
     );
 }
@@ -83,12 +92,14 @@ NewMenu.propTypes = {
     onNewFolder: PropTypes.func,
     onUploadFiles: PropTypes.func,
     onUploadFolder: PropTypes.func,
+    onImportDropbox: PropTypes.func,
 };
 
 export default function Sidebar({
     onNewFolder,
     onUploadFiles,
     onUploadFolder,
+    onImportDropbox,
     onNavigate,
     onDropOn,
 }) {
@@ -153,6 +164,7 @@ export default function Sidebar({
                     onNewFolder={onNewFolder}
                     onUploadFiles={onUploadFiles}
                     onUploadFolder={onUploadFolder}
+                    onImportDropbox={onImportDropbox}
                 />
             </Box>
             <List dense disablePadding>
@@ -252,6 +264,7 @@ Sidebar.propTypes = {
     onNewFolder: PropTypes.func,
     onUploadFiles: PropTypes.func,
     onUploadFolder: PropTypes.func,
+    onImportDropbox: PropTypes.func,
     onNavigate: PropTypes.func,
     onDropOn: PropTypes.func,
 };

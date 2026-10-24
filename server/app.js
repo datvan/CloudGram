@@ -26,6 +26,7 @@ import {
 } from "node:crypto";
 import { promisify } from "node:util";
 
+import { Dropbox } from "./dropbox.js";
 import { Shares } from "./shares.js";
 
 const scryptAsync = promisify(scrypt);
@@ -158,6 +159,7 @@ export class CloudGramApi {
         pepper,
         now = () => Date.now(),
         shareQuota = 20 * 1024 * 1024 * 1024,
+        dropboxFetch = globalThis.fetch,
     }) {
         if (!pepper || pepper.length < 32)
             throw new Error("CLOUDGRAM_PEPPER must be set (32+ chars)");
@@ -173,6 +175,11 @@ export class CloudGramApi {
             db,
             now,
             quota: shareQuota,
+            authenticate: (req, res) => this.authenticate(req, res),
+        });
+        this.dropbox = new Dropbox({
+            now,
+            fetch: dropboxFetch,
             authenticate: (req, res) => this.authenticate(req, res),
         });
     }
@@ -590,6 +597,7 @@ export class CloudGramApi {
 
     async sweep() {
         await this.shares.sweep();
+        this.dropbox.sweep();
         this.loginByIp.sweep();
         this.loginByUser.sweep();
         this.preloginByIp.sweep();
