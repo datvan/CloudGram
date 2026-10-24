@@ -17,6 +17,9 @@ import "@fontsource/roboto/700.css";
 
 import { makeTheme } from "./theme";
 
+// the transfer speed benchmark (window.cgBench); dev server only
+if (import.meta.env.DEV) import("./utils/transferBench");
+
 function readMode() {
     try {
         return localStorage.getItem("cloudgram.theme");

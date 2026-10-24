@@ -11,10 +11,9 @@ import uploadFile from "./uploadFile";
 /**
  * One bounded worker pool behind every upload in the app.
  *
- * GramJS buffers a whole file in memory before sending it
- * (uploads.ts: `Buffer.from(await fileToBuffer(file))`), so what kills the tab
- * on a folder upload is memory, not bandwidth. Files are therefore read inside
- * a worker, one or two at a time, never all at once up front.
+ * Parts are read from the file as they go out (transfer.js), so a big file no
+ * longer sits in memory whole; two at a time still keeps the connection busy
+ * between one file's last part and the next file's first.
  */
 const MAX_CONCURRENT = 2;
 const MAX_FLOOD_RETRIES = 2;
