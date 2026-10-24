@@ -1,8 +1,9 @@
 /**
- * Turn the flat FileList produced by a directory pick into a tree.
+ * Turn the flat file list produced by a directory pick or drop into a tree.
  *
- * Every File from a `webkitdirectory` input carries a webkitRelativePath such
- * as "photos/2024/a.jpg". Folders come back parent-before-child, so a caller
+ * Every entry carries a relative path such as "photos/2024/a.jpg": a File from
+ * a `webkitdirectory` input has it as webkitRelativePath, and a dropped folder
+ * is walked into `{ file, path }` pairs. Folders come back parent-before-child, so a caller
  * can create them in order and resolve each tempId to a real record id as it
  * walks the list.
  *
@@ -14,8 +15,9 @@ export function buildTreeFromPaths(files) {
     const tempIdByPath = new Map();
     const entries = [];
 
-    for (const file of files) {
-        const relativePath = file.webkitRelativePath || file.name;
+    for (const item of files) {
+        const file = item instanceof File ? item : item.file;
+        const relativePath = item.path || file.webkitRelativePath || file.name;
         const segments = relativePath.split("/").filter(Boolean);
         const name = segments.pop();
         if (!name) continue;
@@ -41,7 +43,10 @@ export function buildTreeFromPaths(files) {
 
 /** Total bytes, for the confirmation shown before a folder upload starts. */
 export function totalSize(files) {
-    return files.reduce((sum, file) => sum + (file.size ?? 0), 0);
+    return files.reduce(
+        (sum, item) => sum + ((item.file ?? item).size ?? 0),
+        0,
+    );
 }
 
 export function formatSize(bytes) {

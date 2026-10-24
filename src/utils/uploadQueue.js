@@ -1,6 +1,5 @@
-import { v4 as uuid4 } from "uuid";
-
-import client from "../services/telegram";
+import { createFile, fileOps } from "../services/drive";
+import { getClient } from "../services/telegram";
 import { Store } from "../redux/store";
 import {
     completedProgress,
@@ -29,16 +28,18 @@ let running = 0;
 /**
  * Record the file, then line it up behind the pool.
  *
- * The record lands in IndexedDB immediately so the grid can show the file as
+ * The record lands in the tree immediately so the grid can show the file as
  * pending; `file_id` is filled in once the upload finishes.
  */
-export async function enqueueUpload({ ops, file, parentID, name, onChange }) {
-    const record = { id: uuid4(), name: name ?? file.name, type: "file" };
-    if (parentID) record.parent = parentID;
-
-    await ops.add(record);
+export function enqueueUpload({ file, parentID, name }) {
+    const record = createFile({
+        name: name ?? file.name,
+        parent: parentID,
+        size: file.size,
+        mime: file.type || undefined,
+    });
     Store.dispatch(queuedProgress(record.id, record.name));
-    waiting.push({ id: record.id, file, ops, onChange });
+    waiting.push({ id: record.id, file });
     pump();
     return record;
 }
@@ -92,7 +93,7 @@ function pump() {
 }
 
 async function run(job) {
-    const { id, file, onChange } = job;
+    const { id, file } = job;
 
     let result;
     for (let attempt = 0; ; attempt += 1) {
@@ -113,7 +114,6 @@ async function run(job) {
             Store.dispatch(
                 errorProgress(id, error?.message ?? "Upload failed"),
             );
-            if (onChange) onChange();
             return;
         }
     }
@@ -128,27 +128,25 @@ async function run(job) {
         Store.dispatch(
             errorProgress(id, error?.message ?? "Could not save the file id"),
         );
-        if (onChange) onChange();
     }
 }
 
 /**
  * Attach the message id to the record, unless the record is gone.
  *
- * `update()` is a put, so writing to an id that was deleted meanwhile would
- * resurrect the record under a parent that no longer exists. By this point the
- * file is already sitting in Saved Messages, so the message has to go instead.
+ * A record deleted meanwhile is a tombstone now, and writing to it would bring
+ * it back under a parent that may no longer exist. By this point the file is
+ * already sitting in Saved Messages, so the message has to go instead.
  */
 async function settle(job, result) {
-    const { id, ops, onChange } = job;
-    const record = cancelled.delete(id) ? undefined : await ops.getByID(id);
+    const { id } = job;
+    const record = cancelled.delete(id) ? undefined : await fileOps.getByID(id);
 
     if (record) {
-        await ops.update({ ...record, file_id: result.id });
+        await fileOps.setFileId(id, result.id);
     } else {
-        await client.deleteMessages("me", [result.id], { revoke: true });
+        await getClient().deleteMessages("me", [result.id], { revoke: true });
     }
 
     Store.dispatch(completedProgress(id));
-    if (onChange) onChange();
 }

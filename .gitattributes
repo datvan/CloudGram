@@ -1,2 +1,4 @@
 # bash không chịu được CRLF: "set -euo pipefail" là lỗi cú pháp
 *.sh text eol=lf
+deploy/cloudgram-admin text eol=lf
+*.service text eol=lf

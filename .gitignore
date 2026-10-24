@@ -28,3 +28,6 @@ dist-ssr
 
 # env
 .env
+# account service, local dev
+server/.env.dev
+server/.data

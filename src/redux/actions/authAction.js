@@ -1,11 +1,7 @@
-export function authenticateUser() {
+/** Merge into the sign-in state; see services/account.js for the phases. */
+export function setAuth(state) {
     return {
-        type: "LOGIN_SUCCESS",
-    };
-}
-
-export function logoutUser() {
-    return {
-        type: "LOGOUT_SUCCESS",
+        type: "SET_AUTH",
+        state,
     };
 }

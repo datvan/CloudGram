@@ -2,7 +2,7 @@
 
 CloudGram is an open-source application that allows you to store files in an organized manner on top of Telegram-like cloud storage. It acts as a different Telegram client application solely focused on file uploading and storage. All the uploaded files are stored on your own Telegram account's saved messages page.
 
-CloudGram takes advantage of Telegram's robust cloud storage infrastructure and utilizes IndexedDB to store meta-information about files and folders locally on your browser. This approach ensures efficient, secure, and private file management directly from your web browser.
+CloudGram takes advantage of Telegram's robust cloud storage infrastructure. This fork adds a small account service (`server/`): you sign in with a CloudGram account, and your Telegram session and folder tree are encrypted in the browser with a key derived from your password before they are stored on the server, so the same account works from any browser while the server only ever holds ciphertext.
 
 ## Features
 
@@ -10,7 +10,7 @@ CloudGram takes advantage of Telegram's robust cloud storage infrastructure and 
 
 -   **Organized File Management**: CloudGram provides a simple yet powerful folder-based organization system for your files. Create folders and maintain a structured file storage system.
 
--   **Privacy**: CloudGram prioritizes your privacy. Since the data is stored locally on your browser and in your Telegram account, neither CloudGram nor any third party can access your files and data without your explicit permission.
+-   **Privacy**: File contents live in your Telegram account; the folder tree and Telegram session are end-to-end encrypted with your CloudGram password, so the server cannot read them.
 
 ## Getting Started
 
@@ -48,12 +48,20 @@ npm install
 npm run dev
 ```
 
-6. Access CloudGram in your web browser at `http://localhost:5173/`.
+6. In a second terminal, start the account service (copy `server/.env.dev.example` to `server/.env.dev` first) and create an account:
+
+```bash
+npm run dev:api
+node --env-file=server/.env.dev server/cli.js add <username>
+```
+
+Restart `dev:api` after the CLI command; it keeps the database in memory.
+
+7. Open the printed setup link (it points at `http://localhost:5173/setup#...`), choose a password and link Telegram.
 
 ## Contribution, Feature Requests & Bugs
 
 -   For Contribution read [CONTRIBUTING.md](https://github.com/MQ-xz/CloudGram/blob/main/CONTRIBUTING.md).
 -   Use GitHub issues for opening bugs and feature requests
-
 
 Enjoy free and private cloud storage with CloudGram!

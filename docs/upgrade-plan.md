@@ -10,16 +10,26 @@ Mục tiêu:
 
 ## Tình trạng
 
-| Phase                           | Trạng thái                          | Commit                                                         |
-| ------------------------------- | ----------------------------------- | -------------------------------------------------------------- |
-| 0 — bug nền                     | xong                                | `Fix base bugs in DB writes, download name and progress state` |
-| 1 — truy cập DB ngoài component | xong (đổi cách làm, xem bên dưới)   | `Add folder delete and a bounded multi-file upload queue`      |
-| 2 — xóa folder đệ quy           | xong                                | cùng commit trên                                               |
-| 3 — upload nhiều file           | xong                                | cùng commit trên                                               |
-| 4 — upload nguyên folder        | xong                                | `Add whole-folder upload`                                      |
-| 5 — migration + export metadata | **chưa làm** (tùy chọn, rủi ro cao) | —                                                              |
+| Phase                           | Trạng thái                        | Commit                                                         |
+| ------------------------------- | --------------------------------- | -------------------------------------------------------------- |
+| 0 — bug nền                     | xong                              | `Fix base bugs in DB writes, download name and progress state` |
+| 1 — truy cập DB ngoài component | xong (đổi cách làm, xem bên dưới) | `Add folder delete and a bounded multi-file upload queue`      |
+| 2 — xóa folder đệ quy           | xong                              | cùng commit trên                                               |
+| 3 — upload nhiều file           | xong                              | cùng commit trên                                               |
+| 4 — upload nguyên folder        | xong                              | `Add whole-folder upload`                                      |
+| 5 — migration + export metadata | thay bằng phase 6 (xem bên dưới)  | —                                                              |
+| 6 — tài khoản + giao diện Drive | xong, chưa deploy                 | nhánh `feature/accounts-drive-ui`                              |
 
 Phase 2 và 3 nằm chung một commit vì đường xóa phải gọi `cancelUploads` của hàng đợi; tách ra thì không commit nào build được.
+
+**Phase 6** đổi kiến trúc nên phần lớn mục 1 bên dưới giờ là lịch sử:
+
+-   Có backend nhỏ trong `server/` (Node, không phụ thuộc gói ngoài): tài khoản CloudGram do admin tạo, phiên Telegram và cây thư mục được mã hoá phía trình duyệt rồi lưu trên VPS. Chi tiết và cách vận hành: [deploy.md](deploy.md#tài-khoản-và-kho-mã-hoá).
+-   Cây thư mục không còn nằm trong IndexedDB. Lần đăng nhập đầu, app tự nhập store `file` cũ của trình duyệt đó lên kho (không xoá bản cũ); phiên Telegram cũ trong localStorage dùng lại được bằng nút "Dùng phiên Telegram đã đăng nhập trên máy này". Thế là xong ý chính của phase 5: mất dữ liệu trình duyệt không còn mất cây.
+-   Record có thêm `size`, `mime`, `createdAt`, `updatedAt`, `starred`, `trashedAt`.
+-   Giao diện làm lại theo Google Drive: thanh bên, Gần đây / Có gắn dấu sao / Thùng rác, danh sách hoặc lưới, chọn nhiều, menu chuột phải, đổi tên, di chuyển, kéo thả, xem trước, bảng chi tiết, bảng tiến độ truyền, giao diện sáng/tối.
+
+Kiểm chứng phase 6: `npm run test:api` (6 test, gồm luồng hai thiết bị, giấu tên tài khoản, chuyển lượt Telegram, đổi mật khẩu), lint và build sạch, giao diện chạy thử trên máy với dữ liệu mẫu và dịch vụ thật. Chưa chạy với Telegram thật.
 
 Kiểm chứng đã chạy: `npm run lint` sạch, `npm run build` pass, prettier sạch (dạng LF), và 14 assertion trên các hàm thuần (`collectSubtree`, `buildTreeFromPaths`). Chưa chạy thử runtime — cần đăng nhập Telegram.
 

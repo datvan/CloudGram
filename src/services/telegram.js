@@ -1,13 +1,92 @@
 import { TelegramClient } from "telegram";
-import { StoreSession } from "telegram/sessions";
+import { StringSession } from "telegram/sessions";
+import { AuthKey } from "telegram/crypto/AuthKey";
+import { Buffer } from "buffer/";
 
 import { API_ID, API_HASH } from "../config/config";
 
-const SESSION = new StoreSession(""); //create a new StringSession, also you can use StoreSession
+/**
+ * The one Telegram connection the app uses.
+ *
+ * It used to be built at import time over a StoreSession, which wrote the auth
+ * key into localStorage in plain text. Now the session string is fetched from
+ * the encrypted vault after unlock and kept in memory only, so the client can
+ * only be created then; everything else reaches it through getClient().
+ */
+let client = null;
 
-const client = new TelegramClient(SESSION, API_ID, API_HASH, {
-    connectionRetries: 5,
-}); // Immediately create a client using your application data
-// await client.connect() // move this into app loading if white screen for long time or any performance issues
+export function newClient(session = "") {
+    return new TelegramClient(new StringSession(session), API_ID, API_HASH, {
+        connectionRetries: 5,
+    });
+}
 
-export default client;
+/** Adopt a connected client, e.g. the one that just finished logging in. */
+export function setClient(next) {
+    client = next;
+}
+
+export function getClient() {
+    if (!client) throw new Error("Telegram is not connected");
+    return client;
+}
+
+export function hasClient() {
+    return client !== null;
+}
+
+export async function stopClient() {
+    const current = client;
+    client = null;
+    if (!current) return;
+    try {
+        // destroy() also stops the update loop that disconnect() leaves running
+        await current.destroy();
+    } catch (e) {
+        console.log(e);
+    }
+}
+
+export function sessionString(c = client) {
+    return c?.session.save() ?? "";
+}
+
+/**
+ * Read a session left in localStorage by the old StoreSession build, so an
+ * existing login can move into the vault without a new OTP.
+ *
+ * store2 kept each value JSON-encoded under ":<name>"; the auth key went in as
+ * a serialised Buffer ({ type: "Buffer", data: [...] }).
+ */
+export async function legacySession() {
+    try {
+        const read = (name) =>
+            JSON.parse(localStorage.getItem(`:${name}`) ?? "null");
+        const authKey = read("authKey");
+        const dcId = read("dcId");
+        const serverAddress = read("serverAddress");
+        const port = read("port");
+        if (!authKey?.data || !dcId || !serverAddress || !port) return null;
+
+        const session = new StringSession("");
+        session.setDC(dcId, serverAddress, port);
+        const key = new AuthKey();
+        await key.setKey(Buffer.from(authKey.data));
+        session.authKey = key;
+        return session.save() || null;
+    } catch (e) {
+        console.log(e);
+        return null;
+    }
+}
+
+/** Drop every key the old StoreSession wrote, once the vault has the session. */
+export function clearLegacySession() {
+    try {
+        for (const key of Object.keys(localStorage)) {
+            if (key.startsWith(":")) localStorage.removeItem(key);
+        }
+    } catch {
+        // storage blocked: nothing could have been stored there either
+    }
+}
