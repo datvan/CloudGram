@@ -28,20 +28,18 @@ export default function CreateFolder({ parentID, fetchData, open, setOpen }) {
 
     const { add } = useIndexedDB("file");
 
-    function addFolder(name) {
+    async function addFolder(name) {
         let data = {
             id: uuid4(),
             name: name,
             type: "folder",
         };
         if (parentID) data["parent"] = parentID;
-        add(data)
-            .then((e) => {
-                console.log(e);
-            })
-            .catch((e) => {
-                console.log(e);
-            });
+        try {
+            await add(data);
+        } catch (e) {
+            console.log(e);
+        }
         fetchData();
         handleClose();
     }

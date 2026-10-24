@@ -23,35 +23,29 @@ export default function UploadFile({ parentID, fetchData, open, setOpen }) {
 
     const handleClose = () => setOpen(false);
 
-    function handlerUploadFile(file) {
-        console.log("handlerUploadFile");
+    async function handlerUploadFile(file) {
         let data = {
             id: uuid4(),
             name: file.name,
             type: "file",
         };
         if (parentID) data["parent"] = parentID;
-        add(data)
-            .then((e) => {
-                console.log(e);
-            })
-            .catch((e) => {
-                console.log(e);
-            });
-        uploadFile(data.id, file)
-            .then((res) => {
-                console.log(res, "handlerUploadFile");
-                update({ ...data, file_id: res.id })
-                    .then((e) => {
-                        console.log(e);
-                    })
-                    .catch((e) => {
-                        console.log(e);
-                    });
-            })
-            .catch((e) => {
-                console.log(e);
-            });
+        try {
+            await add(data);
+        } catch (e) {
+            console.log(e);
+            return;
+        }
+        // show the placeholder record before the upload starts
+        fetchData();
+
+        try {
+            const res = await uploadFile(data.id, file);
+            await update({ ...data, file_id: res.id });
+        } catch (e) {
+            console.log(e);
+        }
+        // refresh again so the record picks up its file_id
         fetchData();
     }
 
