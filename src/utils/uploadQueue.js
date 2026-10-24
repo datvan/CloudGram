@@ -31,7 +31,7 @@ let running = 0;
  * The record lands in the tree immediately so the grid can show the file as
  * pending; `file_id` is filled in once the upload finishes.
  */
-export function enqueueUpload({ file, parentID, name }) {
+export function enqueueUpload({ file, parentID, name, asMedia = false }) {
     const record = createFile({
         name: name ?? file.name,
         parent: parentID,
@@ -39,7 +39,7 @@ export function enqueueUpload({ file, parentID, name }) {
         mime: file.type || undefined,
     });
     Store.dispatch(queuedProgress(record.id, record.name));
-    waiting.push({ id: record.id, file });
+    waiting.push({ id: record.id, file, asMedia });
     pump();
     return record;
 }
@@ -93,13 +93,13 @@ function pump() {
 }
 
 async function run(job) {
-    const { id, file } = job;
+    const { id, file, asMedia } = job;
 
     let result;
     for (let attempt = 0; ; attempt += 1) {
         try {
             // the file is read here, inside the worker, not when it was queued
-            result = await uploadFile(id, file);
+            result = await uploadFile(id, file, { asMedia });
             break;
         } catch (error) {
             // GramJS sleeps through short floods itself and rethrows long ones
@@ -142,10 +142,19 @@ async function settle(job, result) {
     const { id } = job;
     const record = cancelled.delete(id) ? undefined : await fileOps.getByID(id);
 
+    const { message, changes } = result;
     if (record) {
-        await fileOps.setFileId(id, result.id);
+        const extra = { ...changes };
+        // Telegram recompressed a PNG photo to JPEG; keep the name honest so
+        // a download does not hand back JPEG bytes under a .png name
+        if (extra.mime === "image/jpeg" && !/\.jpe?g$/i.test(record.name)) {
+            extra.name = record.name.replace(/\.[^.]*$/, "") + ".jpg";
+        }
+        await fileOps.setFileId(id, message.id, extra);
     } else {
-        await getClient().deleteMessages("me", [result.id], { revoke: true });
+        await getClient().deleteMessages("me", [message.id], {
+            revoke: true,
+        });
     }
 
     Store.dispatch(completedProgress(id));

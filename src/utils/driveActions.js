@@ -15,7 +15,7 @@ import { createFolder, getSnapshot, removeRecords } from "../services/drive";
 import { getClient } from "../services/telegram";
 
 /** Upload loose files, or a picked/dropped folder, under `parentID`. */
-export function uploadEntries(entries, parentID) {
+export function uploadEntries(entries, parentID, { asMedia = false } = {}) {
     const tree = buildTreeFromPaths(entries);
     const records = [...getSnapshot().records];
     const realId = new Map();
@@ -42,6 +42,7 @@ export function uploadEntries(entries, parentID) {
         enqueueUpload({
             file: entry.file,
             name: entry.name,
+            asMedia,
             parentID: entry.parentTempId
                 ? realId.get(entry.parentTempId)
                 : parentID,

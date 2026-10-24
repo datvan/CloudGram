@@ -6,10 +6,12 @@ import {
     Box,
     Breadcrumbs,
     Button,
+    Checkbox,
     Dialog,
     DialogActions,
     DialogContent,
     DialogTitle,
+    FormControlLabel,
     Link,
     List,
     ListItemButton,
@@ -360,4 +362,85 @@ PasswordDialog.propTypes = {
     open: PropTypes.bool,
     onClose: PropTypes.func,
     onDone: PropTypes.func,
+};
+
+const COMPRESS_KEY = "cloudgram.compressMedia";
+
+function loadCompress() {
+    try {
+        return localStorage.getItem(COMPRESS_KEY) !== "0";
+    } catch {
+        return true;
+    }
+}
+
+/**
+ * Asked before uploading pictures or videos, like the Telegram apps: send them
+ * as media (compressed, shown inline) or as files kept byte for byte. The
+ * choice is remembered for the next upload.
+ */
+export function UploadModeDialog({
+    open,
+    mediaCount,
+    total,
+    onClose,
+    onStart,
+}) {
+    const [compress, setCompress] = useState(loadCompress);
+
+    useEffect(() => {
+        if (open) setCompress(loadCompress());
+    }, [open]);
+
+    function start() {
+        try {
+            localStorage.setItem(COMPRESS_KEY, compress ? "1" : "0");
+        } catch {
+            // private mode; the choice just is not remembered
+        }
+        onStart(compress);
+    }
+
+    return (
+        <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+            <DialogTitle>
+                {total === 1 ? "Tải lên 1 tệp" : `Tải lên ${total} tệp`}
+            </DialogTitle>
+            <DialogContent>
+                <FormControlLabel
+                    control={
+                        <Checkbox
+                            checked={compress}
+                            onChange={(e) => setCompress(e.target.checked)}
+                            autoFocus
+                        />
+                    }
+                    label="Nén ảnh và video (gửi dạng media như Telegram)"
+                />
+                <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mt: 1 }}
+                >
+                    {compress
+                        ? `${mediaCount} ảnh/video sẽ được Telegram nén: nhẹ hơn, xem ngay được, nhưng giảm chất lượng (ảnh PNG thành JPEG). Ảnh quá 10 MB hoặc định dạng khác vẫn gửi dạng tệp.`
+                        : "Mọi tệp được gửi dạng tệp (document), giữ nguyên bản gốc từng byte."}
+                </Typography>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose}>Huỷ</Button>
+                <Button onClick={start} variant="contained">
+                    Tải lên
+                </Button>
+            </DialogActions>
+        </Dialog>
+    );
+}
+
+UploadModeDialog.propTypes = {
+    open: PropTypes.bool,
+    mediaCount: PropTypes.number,
+    total: PropTypes.number,
+    onClose: PropTypes.func,
+    onStart: PropTypes.func,
 };
