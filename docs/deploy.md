@@ -192,8 +192,9 @@ nếu không Let's Encrypt gọi thẳng vào IP và bị ufw chặn.
 
 ## Kiểm tra sau khi deploy
 
--   [ ] `https://cloudgram.datvan.com` → màn hình đăng nhập, không phải trang
-        trắng. Trang trắng kéo dài thường là sai `VITE_API_ID`.
+-   [ ] `https://cloudgram.datvan.com` → màn hình đăng nhập. **Vài giây đầu
+        trắng là bình thường**: app đợi GramJS nối xong tới Telegram rồi mới
+        vẽ. Trắng mãi không hết mới là dấu hiệu sai `VITE_API_ID`.
 -   [ ] Console (F12) không có lỗi kết nối MTProto.
 -   [ ] Đăng nhập được bằng số điện thoại.
 -   [ ] Tạo một folder, vào trong nó, bấm **F5** → vẫn đúng folder đó, không 404. Đây là bài test cho `try_files`.
@@ -215,8 +216,8 @@ Trước khi chuyển sang VPS, app từng được deploy bằng Cloudflare Pag
 npm run deploy:pages
 ```
 
-Bản đó cũng được build lúc chưa có khoá Telegram nên trắng y hệt bản đang
-chạy, không dùng làm dự phòng được cho tới khi deploy lại. Muốn dọn thì:
+Giữ lại làm bản dự phòng: nó phục vụ đúng bundle đã deploy lên VPS, kèm cùng
+`api_id`/`api_hash`, nên mở lên cũng ra màn hình đăng nhập. Muốn dọn thì:
 
 ```bash
 npx wrangler pages project delete cloudgram
