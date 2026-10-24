@@ -92,10 +92,18 @@ các lệnh sau, để wrangler không dừng lại hỏi chọn account.
 ## Bước 3 — Build và deploy
 
 ```bash
-npx wrangler pages project create cloudgram --production-branch main
+npx wrangler pages project create cloudgram --production-branch main --force
 ```
 
-Chạy một lần duy nhất. Sau đó:
+Chạy một lần duy nhất — và project `cloudgram` đã được tạo rồi, đây chỉ là ghi
+lại cho lần sau.
+
+`--force` ở đây không phá gì cả. Wrangler mặc định đẩy project mới sang nền
+Workers, mà nền đó đòi Vite ≥ 6 còn repo này đang dùng Vite 4, nên nó dừng lại.
+Cờ này bảo nó tạo thẳng trên Cloudflare Pages như cũ. Chỉ cần đúng một lần lúc
+tạo; các lệnh sau không dùng tới nó nữa.
+
+Sau đó:
 
 ```bash
 npm run deploy
@@ -106,7 +114,11 @@ cloudgram --branch main`. Cờ `--branch main` là bắt buộc: wrangler đoán
 từ git, và bất kỳ branch nào khác `main` sẽ thành **preview deployment** —
 build xanh, có URL riêng, nhưng domain thật không trỏ vào đó.
 
-Output phải ghi là deploy lên **Production**, kèm URL `cloudgram.pages.dev`.
+Output phải ghi là deploy lên **Production**. URL thử nghiệm là
+https://cloudgram-cew.pages.dev — tên `cloudgram.pages.dev` đã có người khác
+lấy, nên Cloudflare thêm hậu tố; tên _project_ thì vẫn là `cloudgram`, đó mới là
+cái `--project-name` cần.
+
 Mở thử URL đó: phải ra màn hình đăng nhập, không phải trang trắng. Trang trắng
 nghĩa là `.env` sai hoặc chưa điền.
 
