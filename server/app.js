@@ -26,6 +26,8 @@ import {
 } from "node:crypto";
 import { promisify } from "node:util";
 
+import { Shares } from "./shares.js";
+
 const scryptAsync = promisify(scrypt);
 
 export const LIMITS = {
@@ -151,7 +153,12 @@ class RateLimiter {
 }
 
 export class CloudGramApi {
-    constructor({ db, pepper, now = () => Date.now() }) {
+    constructor({
+        db,
+        pepper,
+        now = () => Date.now(),
+        shareQuota = 20 * 1024 * 1024 * 1024,
+    }) {
         if (!pepper || pepper.length < 32)
             throw new Error("CLOUDGRAM_PEPPER must be set (32+ chars)");
         this.db = db;
@@ -162,6 +169,12 @@ export class CloudGramApi {
         this.loginByUser = new RateLimiter(20, 15 * 60 * 1000);
         this.preloginByIp = new RateLimiter(60, 15 * 60 * 1000);
         this.setupByIp = new RateLimiter(20, 15 * 60 * 1000);
+        this.shares = new Shares({
+            db,
+            now,
+            quota: shareQuota,
+            authenticate: (req, res) => this.authenticate(req, res),
+        });
     }
 
     // ----- accounts (CLI side) -------------------------------------------
@@ -204,6 +217,7 @@ export class CloudGramApi {
         const user = this.db.data.users[name];
         if (!user) throw new Error(`no user ${name}`);
         await this.db.deleteTree(user.id);
+        await this.shares.dropOwner(name);
         delete this.db.data.users[name];
         this.#dropSessions(name);
         await this.db.save();
@@ -574,7 +588,8 @@ export class CloudGramApi {
         return value;
     }
 
-    sweep() {
+    async sweep() {
+        await this.shares.sweep();
         this.loginByIp.sweep();
         this.loginByUser.sweep();
         this.preloginByIp.sweep();

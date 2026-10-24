@@ -4,9 +4,11 @@
  * Kept on node:http with no framework, so the service has no dependencies to
  * install or audit on the VPS.
  */
+import { createReadStream } from "node:fs";
 import { createServer } from "node:http";
 
 import { HttpError, LIMITS } from "./app.js";
+import { FileReply, SHARE_LIMITS } from "./shares.js";
 
 const ROUTES = {
     "POST /api/auth/prelogin": "prelogin",
@@ -24,7 +26,64 @@ const ROUTES = {
     "PUT /api/vault/tree": "putTree",
     "POST /api/lease": "lease",
     "POST /api/lease/release": "release",
+    "POST /api/shares": "shares.create",
+    "GET /api/shares": "shares.list",
 };
+
+// routes with ids in the path; `raw` takes the body as bytes, not JSON
+const PATTERNS = [
+    {
+        method: "PUT",
+        re: /^\/api\/shares\/([^/]+)\/chunks\/(\d+)$/,
+        keys: ["id", "index"],
+        handler: "shares.putChunk",
+        raw: true,
+    },
+    {
+        method: "POST",
+        re: /^\/api\/shares\/([^/]+)\/complete$/,
+        keys: ["id"],
+        handler: "shares.complete",
+    },
+    {
+        method: "DELETE",
+        re: /^\/api\/shares\/([^/]+)$/,
+        keys: ["id"],
+        handler: "shares.remove",
+    },
+    // public: anyone holding a link
+    {
+        method: "GET",
+        re: /^\/api\/s\/([^/]+)$/,
+        keys: ["id"],
+        handler: "shares.publicMeta",
+    },
+    {
+        method: "GET",
+        re: /^\/api\/s\/([^/]+)\/(\d+)$/,
+        keys: ["id", "index"],
+        handler: "shares.publicChunk",
+    },
+];
+
+function route(method, pathname) {
+    const exact = ROUTES[`${method} ${pathname}`];
+    if (exact) return { handler: exact, params: {} };
+    for (const pattern of PATTERNS) {
+        if (pattern.method !== method) continue;
+        const match = pattern.re.exec(pathname);
+        if (!match) continue;
+        const params = {};
+        pattern.keys.forEach((key, i) => (params[key] = match[i + 1]));
+        return { handler: pattern.handler, params, raw: pattern.raw };
+    }
+    return null;
+}
+
+function resolve(api, handler) {
+    const [first, second] = handler.split(".");
+    return second ? api[first][second].bind(api[first]) : api[first].bind(api);
+}
 
 function parseCookies(header) {
     const cookies = {};
@@ -38,17 +97,22 @@ function parseCookies(header) {
     return cookies;
 }
 
-async function readJson(req) {
+async function readBytes(req, limit) {
     const chunks = [];
     let size = 0;
     for await (const chunk of req) {
         size += chunk.length;
-        if (size > LIMITS.body) throw new HttpError(413, "too_large");
+        if (size > limit) throw new HttpError(413, "too_large");
         chunks.push(chunk);
     }
-    if (!size) return {};
+    return Buffer.concat(chunks);
+}
+
+async function readJson(req) {
+    const bytes = await readBytes(req, LIMITS.body);
+    if (!bytes.length) return {};
     try {
-        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const body = JSON.parse(bytes.toString("utf8"));
         if (body === null || typeof body !== "object" || Array.isArray(body))
             throw new Error();
         return body;
@@ -64,7 +128,7 @@ export function createApiServer(
     return createServer(async (req, res) => {
         const url = new URL(req.url, "http://localhost");
         const method = req.method === "HEAD" ? "GET" : req.method;
-        const handler = ROUTES[`${method} ${url.pathname}`];
+        const found = route(method, url.pathname);
 
         const headers = {
             "Content-Type": "application/json; charset=utf-8",
@@ -97,16 +161,20 @@ export function createApiServer(
         };
 
         try {
-            if (!handler) throw new HttpError(404, "not_found");
+            if (!found) throw new HttpError(404, "not_found");
 
             if (method !== "GET") {
                 // SameSite=Strict already keeps the cookie off cross-site
                 // requests; these two make a forged form post fail outright.
-                if (
-                    !String(req.headers["content-type"] ?? "").startsWith(
-                        "application/json",
-                    )
-                ) {
+                const type = String(req.headers["content-type"] ?? "");
+                if (found.raw) {
+                    // a form can post bytes too, so binary uploads must also
+                    // say where they come from
+                    if (!type.startsWith("application/octet-stream"))
+                        throw new HttpError(415, "bytes_required");
+                    if (origin && req.headers.origin !== origin)
+                        throw new HttpError(403, "bad_origin");
+                } else if (!type.startsWith("application/json")) {
                     throw new HttpError(415, "json_required");
                 }
                 if (
@@ -128,9 +196,27 @@ export function createApiServer(
                         req.socket.remoteAddress ??
                         "unknown",
                 ),
-                body: method === "GET" ? {} : await readJson(req),
+                params: found.params,
+                body: method === "GET" || found.raw ? {} : await readJson(req),
+                raw: found.raw
+                    ? await readBytes(req, SHARE_LIMITS.chunkBytes)
+                    : undefined,
             };
-            send(200, await api[handler](request, reply));
+            const result = await resolve(api, found.handler)(request, reply);
+            if (result instanceof FileReply) {
+                res.writeHead(200, {
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": String(result.size),
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                });
+                if (req.method === "HEAD") return res.end();
+                const stream = createReadStream(result.path);
+                stream.on("error", () => res.destroy());
+                stream.pipe(res);
+                return;
+            }
+            send(200, result);
         } catch (error) {
             if (error instanceof HttpError) {
                 if (error.extra?.retryAfter)

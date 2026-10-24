@@ -21,6 +21,7 @@ import RestoreFromTrashOutlinedIcon from "@mui/icons-material/RestoreFromTrashOu
 import DeleteForeverOutlinedIcon from "@mui/icons-material/DeleteForeverOutlined";
 import ReplayIcon from "@mui/icons-material/Replay";
 import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
+import LinkIcon from "@mui/icons-material/Link";
 
 import { previewKind } from "./fileTypes";
 
@@ -133,6 +134,15 @@ export default function ItemMenu({
                               }
                               disabled={!downloadable.length}
                               onClick={act("download")}
+                          />
+                      ),
+                      single?.type === "file" && (
+                          <Item
+                              key="share"
+                              icon={icon(LinkIcon)}
+                              label={single.share ? "Link chia sẻ" : "Chia sẻ"}
+                              disabled={single.file_id == null}
+                              onClick={act("share")}
                           />
                       ),
                       canRetry && (

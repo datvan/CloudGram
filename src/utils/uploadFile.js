@@ -8,6 +8,7 @@ import { fitsAsPhoto, makeThumb, probeVideo } from "./thumbnails";
 
 // what Telegram itself plays inline; other containers go up as files
 const STREAMABLE = ["video/mp4", "video/quicktime", "video/x-m4v"];
+const UPLOAD_WORKERS = 6;
 
 /**
  * How to send a file: as a photo or a playable video like the Telegram apps
@@ -88,7 +89,9 @@ export default async function uploadFile(id, file, { asMedia = false } = {}) {
 
     const message = await getClient().sendFile("me", {
         file: toUpload,
-        workers: 1,
+        // parts in flight at once; one at a time caps the speed at one part
+        // per round trip to Telegram (~0.5-1 MB/s) whatever the bandwidth
+        workers: UPLOAD_WORKERS,
         progressCallback,
         ...options,
     });

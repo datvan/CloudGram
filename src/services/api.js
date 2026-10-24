@@ -14,6 +14,8 @@ export class ApiError extends Error {
 }
 
 async function request(method, path, body) {
+    // the server takes only JSON on writes, a bodiless DELETE included
+    if (method !== "GET") body ??= {};
     let res;
     try {
         res = await fetch(`/api${path}`, {
@@ -25,6 +27,10 @@ async function request(method, path, body) {
     } catch {
         throw new ApiError(0, "offline");
     }
+    return parse(res);
+}
+
+async function parse(res) {
     let data = {};
     try {
         data = await res.json();
@@ -58,7 +64,38 @@ export const api = {
     lease: (browserId, takeover) =>
         request("POST", "/lease", { browserId, takeover }),
     release: (browserId) => request("POST", "/lease/release", { browserId }),
+    createShare: (body) => request("POST", "/shares", body),
+    completeShare: (id) => request("POST", `/shares/${id}/complete`),
+    deleteShare: (id) => request("DELETE", `/shares/${id}`),
+    listShares: () => request("GET", "/shares"),
+    publicShare: (id) => request("GET", `/s/${encodeURIComponent(id)}`),
 };
+
+export async function putShareChunk(id, index, bytes) {
+    let res;
+    try {
+        res = await fetch(`/api/shares/${id}/chunks/${index}`, {
+            method: "PUT",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: bytes,
+        });
+    } catch {
+        throw new ApiError(0, "offline");
+    }
+    return parse(res);
+}
+
+export async function getShareChunk(id, index) {
+    let res;
+    try {
+        res = await fetch(`/api/s/${encodeURIComponent(id)}/${index}`);
+    } catch {
+        throw new ApiError(0, "offline");
+    }
+    if (!res.ok) return parse(res);
+    return new Uint8Array(await res.arrayBuffer());
+}
 
 /** Fire-and-forget release while the page unloads, when fetch may be cut off. */
 export function releaseOnUnload(browserId) {
@@ -76,6 +113,11 @@ const MESSAGES = {
     offline: "Không kết nối được máy chủ. Kiểm tra mạng.",
     server_down: "Máy chủ CloudGram đang không chạy.",
     not_signed_in: "Phiên đăng nhập đã hết hạn.",
+    share_not_found: "Link không tồn tại, đã bị xoá hoặc đã hết hạn.",
+    share_quota: "Đã dùng hết dung lượng dành cho link chia sẻ.",
+    too_many_shares: "Đã có quá nhiều link chia sẻ.",
+    bad_size: "Tệp quá lớn để chia sẻ (tối đa 2 GB).",
+    disk_full: "Máy chủ đã gần đầy ổ đĩa.",
 };
 
 export function describeError(error) {

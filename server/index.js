@@ -5,6 +5,7 @@
  *     CLOUDGRAM_PEPPER   random secret, 32+ chars; never in this repo
  *     CLOUDGRAM_DATA     data directory (default /var/lib/cloudgram-api)
  *     CLOUDGRAM_ORIGIN   expected Origin header (default https://cloudgram.datvan.com)
+ *     CLOUDGRAM_SHARE_QUOTA_GB  disk each account may use for share links (default 20)
  *     PORT               loopback port (default 4322)
  */
 import { CloudGramApi } from "./app.js";
@@ -15,14 +16,19 @@ const port = Number(process.env.PORT ?? 4322);
 const db = await new Db(
     process.env.CLOUDGRAM_DATA ?? "/var/lib/cloudgram-api",
 ).open();
-const api = new CloudGramApi({ db, pepper: process.env.CLOUDGRAM_PEPPER });
+const api = new CloudGramApi({
+    db,
+    pepper: process.env.CLOUDGRAM_PEPPER,
+    shareQuota: Number(process.env.CLOUDGRAM_SHARE_QUOTA_GB ?? 20) * 1024 ** 3,
+});
 
 const server = createApiServer(api, {
     origin: process.env.CLOUDGRAM_ORIGIN ?? "https://cloudgram.datvan.com",
     secureCookies: process.env.CLOUDGRAM_INSECURE_COOKIES !== "1",
 });
 
-setInterval(() => api.sweep(), 60_000).unref();
+// also deletes expired share links
+setInterval(() => api.sweep().catch(console.error), 60_000).unref();
 
 // every deploy and every cloudgram-admin call restarts the service; let the
 // last queued write land before exiting

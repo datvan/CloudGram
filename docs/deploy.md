@@ -136,6 +136,14 @@ nó vô dụng nếu thiếu mật khẩu người dùng. Pepper trong `/etc/clo
 chỉ dùng để sinh salt giả cho tên không tồn tại (để không ai dò được tên nào
 có tài khoản); mất hay đổi nó thì đăng nhập vẫn chạy, nhưng nên giữ cố định.
 
+**Link chia sẻ** khác với phần còn lại: tệp được chép, đã mã hoá, lên VPS ở
+`/var/lib/cloudgram-api/shares/<id>/`, vì người nhận không có Telegram. Khoá
+giải mã chỉ nằm sau dấu `#` của link, nên máy chủ không đọc được tệp. Link hết
+hạn hoặc bị xoá thì bản sao bị xoá trong vòng một phút. Mỗi tệp tối đa 2 GB,
+mỗi tài khoản tối đa 500 link và 20 GB (đổi bằng `CLOUDGRAM_SHARE_QUOTA_GB` trong
+`/etc/cloudgram-api.env`); máy chủ luôn chừa lại 1 GB ổ trống. Chưa chia sẻ được
+cả thư mục.
+
 **Một máy dùng Telegram tại một thời điểm.** Hai trình duyệt cùng dùng một phiên
 Telegram thì Telegram huỷ phiên (`AUTH_KEY_DUPLICATED`), nên dịch vụ cấp "lượt"
 cho từng trình duyệt. Mở ở máy thứ hai thì app hỏi có chuyển sang máy này không;

@@ -145,6 +145,15 @@ directory is enough; it is useless without the users' passwords. The pepper in
 not exist (so nobody can probe which names have accounts); losing or changing
 it does not break sign-in, but it should stay fixed.
 
+**Share links** are the exception: the file is copied, encrypted, to the VPS
+under `/var/lib/cloudgram-api/shares/<id>/`, because the recipient has no
+Telegram. The decryption key lives only after the `#` in the link, so the
+server cannot read the file. When a link expires or is removed, its copy is
+deleted within a minute. Each file is capped at 2 GB, each account at 500 links
+and 20 GB (change it with `CLOUDGRAM_SHARE_QUOTA_GB` in
+`/etc/cloudgram-api.env`); the server always keeps 1 GB of disk free. Whole
+folders cannot be shared yet.
+
 **One machine uses Telegram at a time.** If two browsers use the same Telegram
 session, Telegram kills it (`AUTH_KEY_DUPLICATED`), so the service hands out a
 "lease" to one browser at a time. Opening the app on a second machine asks
