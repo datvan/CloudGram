@@ -135,7 +135,7 @@ export default function TransferPanel() {
                                 />
                             )}
                             {entry.type === "QUEUED" && (
-                                <Tooltip title="Đang chờ">
+                                <Tooltip title={entry.message ?? "Đang chờ"}>
                                     <ScheduleIcon
                                         color="action"
                                         fontSize="small"

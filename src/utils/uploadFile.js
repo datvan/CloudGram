@@ -1,4 +1,4 @@
-import { Api } from "telegram";
+import { Api, errors } from "telegram";
 
 import { getClient } from "../services/telegram";
 import { Store } from "../redux/store";
@@ -68,21 +68,37 @@ function largestPhotoSize(photo) {
  * finished while the record had no file_id yet.
  *
  * The bytes go up through transfer.js, which reads the file part by part,
- * and GramJS only gets the finished InputFile to send.
+ * and GramJS only gets the finished InputFile to send. `resume` is handed on
+ * to uploadParts, so a second attempt skips the parts already sent.
+ *
+ * A send that fails without an answer from Telegram may still have gone
+ * through, so the error is marked `maybeSent` and the caller should not send
+ * again on its own.
  */
-export default async function uploadFile(id, file, { asMedia = false } = {}) {
+export default async function uploadFile(
+    id,
+    file,
+    { asMedia = false, resume } = {},
+) {
     const { kind, options } = await sendOptions(file, asMedia);
     const client = getClient();
 
     const inputFile = await uploadParts(client, file, {
+        resume,
         onProgress: (fraction) =>
             Store.dispatch(uploadProgress(id, fraction * 100)),
     });
 
-    const message = await client.sendFile("me", {
-        file: inputFile,
-        ...options,
-    });
+    let message;
+    try {
+        message = await client.sendFile("me", {
+            file: inputFile,
+            ...options,
+        });
+    } catch (error) {
+        if (!(error instanceof errors.RPCError)) error.maybeSent = true;
+        throw error;
+    }
 
     const changes = { sentAs: kind };
     if (kind === "photo" && message.media?.photo) {

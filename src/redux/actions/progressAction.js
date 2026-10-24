@@ -7,6 +7,16 @@ export function queuedProgress(id, name) {
     };
 }
 
+// back in line after a failed attempt; `message` says when it goes again
+export function retryingProgress(id, message) {
+    return {
+        id: id,
+        message: message,
+        percentage: 0,
+        type: "QUEUED",
+    };
+}
+
 export function uploadProgress(id, percentage) {
     return {
         id: id,

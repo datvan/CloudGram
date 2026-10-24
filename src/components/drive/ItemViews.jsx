@@ -40,7 +40,7 @@ function TransferBadge({ id, pending }) {
     }
     if (progress?.type === "QUEUED") {
         return (
-            <Tooltip title="Đang chờ tải lên">
+            <Tooltip title={progress.message ?? "Đang chờ tải lên"}>
                 <ScheduleIcon color="action" sx={{ fontSize: 18 }} />
             </Tooltip>
         );
