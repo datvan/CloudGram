@@ -12,10 +12,30 @@ import {
     ErrorScreen,
     LeaseScreen,
 } from "./pages/auth/StatusScreens";
+import SharePage from "./pages/share/SharePage";
 import { boot, logout } from "./services/account";
 
+const SHARE_PATH = /^\/s\/[^/]+\/?$/;
+
+/**
+ * A share link opens without signing in or touching Telegram; everything else
+ * goes through the account flow.
+ */
+export default function App(props) {
+    return SHARE_PATH.test(window.location.pathname) ? (
+        <SharePage />
+    ) : (
+        <DriveRoot {...props} />
+    );
+}
+
+App.propTypes = {
+    mode: PropTypes.string,
+    onToggleMode: PropTypes.func,
+};
+
 /** Which screen the sign-in phase calls for; services/account.js drives it. */
-export default function App({ mode, onToggleMode }) {
+function DriveRoot({ mode, onToggleMode }) {
     const { phase, username, setupToken } = useSelector((state) => state.auth);
 
     useEffect(() => {
@@ -60,7 +80,7 @@ export default function App({ mode, onToggleMode }) {
     );
 }
 
-App.propTypes = {
+DriveRoot.propTypes = {
     mode: PropTypes.string,
     onToggleMode: PropTypes.func,
 };

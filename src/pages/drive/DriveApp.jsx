@@ -52,7 +52,9 @@ import { ItemGrid, ItemList } from "../../components/drive/ItemViews";
 import ItemMenu from "../../components/drive/ItemMenu";
 import DetailsPanel from "../../components/drive/DetailsPanel";
 import PreviewDialog from "../../components/drive/PreviewDialog";
+import ShareDialog from "../../components/drive/ShareDialog";
 import TransferPanel from "../../components/drive/TransferPanel";
+import useMarquee from "../../components/drive/useMarquee";
 import {
     ConfirmDialog,
     MoveDialog,
@@ -144,6 +146,7 @@ export default function DriveApp({ mode, onToggleMode }) {
     const [sort, setSort] = useState({ key: "name", dir: "asc" });
     const [kindFilter, setKindFilter] = useState(null);
     const [selected, setSelected] = useState(() => new Set());
+    const marquee = useMarquee(selected, setSelected);
     const [anchorIndex, setAnchorIndex] = useState(null);
     const [menu, setMenu] = useState(null);
     const [newMenu, setNewMenu] = useState(null);
@@ -370,6 +373,9 @@ export default function DriveApp({ mode, onToggleMode }) {
                 break;
             case "retry":
                 ids.forEach(retryUpload);
+                break;
+            case "share":
+                if (single) setDialog({ type: "share", id: single.id });
                 break;
             case "rename":
                 if (single) setDialog({ type: "rename", item: single });
@@ -988,13 +994,29 @@ export default function DriveApp({ mode, onToggleMode }) {
 
                     {/* the items */}
                     <Box
+                        ref={marquee.ref}
+                        onMouseDown={marquee.onMouseDown}
                         sx={{
+                            position: "relative",
                             flex: 1,
                             minHeight: 0,
                             overflow: "auto",
                             px: { xs: 1, md: 2 },
                         }}
                     >
+                        {marquee.box && (
+                            <Box
+                                sx={{
+                                    position: "absolute",
+                                    ...marquee.box,
+                                    border: 1,
+                                    borderColor: "primary.main",
+                                    bgcolor: "rgba(11,87,208,.12)",
+                                    pointerEvents: "none",
+                                    zIndex: 2,
+                                }}
+                            />
+                        )}
                         {items.length ? (
                             layout === "list" ? (
                                 <ItemList {...listProps} />
@@ -1274,6 +1296,12 @@ export default function DriveApp({ mode, onToggleMode }) {
                         text: "Đã đổi mật khẩu.",
                     });
                 }}
+            />
+            <ShareDialog
+                open={dialog?.type === "share"}
+                id={dialog?.id}
+                onClose={() => setDialog(null)}
+                onNotice={(text) => setNotice({ severity: "success", text })}
             />
             <UploadModeDialog
                 open={dialog?.type === "uploadMode"}

@@ -106,6 +106,7 @@ function useDropTarget(item, onDropOnFolder) {
 
 function itemHandlers(item, index, props) {
     return {
+        "data-id": item.id, // found by the drag-select box in DriveApp
         onClick: (e) => {
             e.stopPropagation();
             props.onSelect(e, item, index);

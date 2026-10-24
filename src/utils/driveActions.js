@@ -12,6 +12,7 @@ import downloadFile from "./downloadFile";
 import { collectSubtree, findFolder, messageIdsOf, recordIdsOf } from "./tree";
 import { cancelUploads, enqueueUpload } from "./uploadQueue";
 import { createFolder, getSnapshot, removeRecords } from "../services/drive";
+import { dropShares } from "../services/shares";
 import { getClient } from "../services/telegram";
 
 /** Upload loose files, or a picked/dropped folder, under `parentID`. */
@@ -140,6 +141,8 @@ export async function deleteForever(ids) {
     }
 
     cancelUploads([...recordIds]);
+    // a file deleted for good must not stay downloadable through its link
+    await dropShares(records.filter((r) => recordIds.has(r.id)));
     if (messageIds.size) {
         await getClient().deleteMessages("me", [...messageIds], {
             revoke: true,
