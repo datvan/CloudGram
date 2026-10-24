@@ -9,7 +9,8 @@
         "lint": "eslint src --ext js,jsx --report-unused-disable-directives --max-warnings 0",
         "prettier": "prettier . --check",
         "preview": "vite preview",
-        "deploy": "npm run build && wrangler pages deploy dist --project-name cloudgram --branch main"
+        "deploy": "npm run build && bash deploy/vps-deploy.sh",
+        "deploy:pages": "npm run build && wrangler pages deploy dist --project-name cloudgram --branch main"
     },
     "dependencies": {
         "@emotion/react": "^11.11.1",
