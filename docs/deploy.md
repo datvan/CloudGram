@@ -1,5 +1,7 @@
 # Deploy CloudGram lên cloudgram.example.com
 
+[English](deploy.en.md) · **Tiếng Việt**
+
 Đang chạy tại https://cloudgram.example.com, phục vụ bởi nginx trên VPS riêng,
 đứng sau proxy Cloudflare.
 
