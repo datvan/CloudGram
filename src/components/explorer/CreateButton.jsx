@@ -4,9 +4,11 @@ import { useState } from "react";
 import { Box, SpeedDial, SpeedDialIcon, SpeedDialAction } from "@mui/material";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
+import DriveFolderUploadIcon from "@mui/icons-material/DriveFolderUpload";
 
 import CreateFolder from "./CreateFolder";
 import UploadFile from "./UploadFile";
+import UploadFolder from "./UploadFolder";
 
 export default function CreateButton(props) {
     const { parentID, fetchData } = props;
@@ -17,12 +19,23 @@ export default function CreateButton(props) {
 
     const [openCreateFolder, setOpenCreateFolder] = useState(false);
     const [openUploadFile, setOpenUploadFile] = useState(false);
+    const [openUploadFolder, setOpenUploadFolder] = useState(false);
 
     const onFolderClick = () => setOpenCreateFolder(true);
     const onFileClick = () => setOpenUploadFile(true);
+    const onFolderUploadClick = () => setOpenUploadFolder(true);
 
     const actions = [
-        { icon: <UploadFileIcon />, name: "Upload File", onClick: onFileClick },
+        {
+            icon: <UploadFileIcon />,
+            name: "Upload Files",
+            onClick: onFileClick,
+        },
+        {
+            icon: <DriveFolderUploadIcon />,
+            name: "Upload Folder",
+            onClick: onFolderUploadClick,
+        },
         {
             icon: <FolderOpenIcon />,
             name: "New Folder",
@@ -60,6 +73,12 @@ export default function CreateButton(props) {
                 fetchData={fetchData}
                 open={openUploadFile}
                 setOpen={setOpenUploadFile}
+            />
+            <UploadFolder
+                parentID={parentID}
+                fetchData={fetchData}
+                open={openUploadFolder}
+                setOpen={setOpenUploadFolder}
             />
         </Box>
     );
