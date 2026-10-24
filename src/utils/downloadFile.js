@@ -5,7 +5,7 @@ import {
 } from "../redux/actions/progressAction";
 import { Store } from "../redux/store";
 
-export default async function downloadFile(id, file_id) {
+export default async function downloadFile(id, file_id, name) {
     const message = await client.getMessages("me", { ids: file_id });
     const media = message[0].media;
 
@@ -27,7 +27,7 @@ export default async function downloadFile(id, file_id) {
         var url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.download = name;
+        link.download = name ?? "download";
         link.click();
         URL.revokeObjectURL(url);
         link.remove();

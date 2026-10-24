@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useIndexedDB } from "react-indexed-db-hook";
 import { useParams } from "react-router-dom";
 
@@ -22,17 +22,25 @@ export default function Explorer() {
 
     const [data, setData] = useState([]);
 
+    // "/" and "/folder/:parentID" share one <Explorer />, so navigating between
+    // folders does not remount it. Async callers (uploads, deletes) keep a
+    // closure over the fetchData of the render they started in; reading the
+    // folder from a ref keeps them from repainting the grid with a stale folder.
+    const parentIDRef = useRef(parentID);
+    parentIDRef.current = parentID;
+
     useEffect(() => {
         fetchData();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [parentID]);
 
     function fetchData() {
+        const currentParent = parentIDRef.current;
         let _data = [];
         openCursor((e) => {
             var cursor = e.target.result;
             if (cursor) {
-                if (cursor.value.parent === parentID)
+                if (cursor.value.parent === currentParent)
                     _data = [..._data, cursor.value];
                 cursor.continue();
             } else {
@@ -41,15 +49,12 @@ export default function Explorer() {
         });
     }
 
-    function deleteItem(id) {
-        console.log("delete", id);
-        deleteRecord(id)
-            .then((e) => {
-                console.log(e);
-            })
-            .catch((e) => {
-                console.log(e);
-            });
+    async function deleteItem(id) {
+        try {
+            await deleteRecord(id);
+        } catch (e) {
+            console.log(e);
+        }
         fetchData();
     }
 

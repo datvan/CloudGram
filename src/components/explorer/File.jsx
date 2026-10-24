@@ -31,14 +31,13 @@ function File(props) {
      * @todo: file upload errors
      */
     function handleDownloadFile() {
-        console.log(id, file_id);
-        downloadFile(id, file_id);
+        downloadFile(id, file_id, name);
         handleClose();
     }
 
     async function handleDeleteFile() {
-        await client.deleteMessages("me", [file_id], true);
-        deleteItem(id);
+        await client.deleteMessages("me", [file_id], { revoke: true });
+        await deleteItem(id);
         handleClose();
     }
 
