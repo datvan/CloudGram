@@ -123,6 +123,41 @@ Khác với `qase-review.datvan.com`, site này **không** dùng `proxy_pass`.
 đó; CloudGram là web tĩnh, dựng thêm một tiến trình chỉ để nginx gọi vào là
 thừa.
 
+**Đăng nhập SSH chỉ bằng khoá.** Từ 2026-10-24 máy chủ không nhận mật khẩu nữa.
+Ba dòng sau nằm trong `/etc/ssh/sshd_config.d/00-hardening.conf`:
+
+```
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+```
+
+**Tên file bắt đầu bằng `00` là cố ý.** sshd lấy giá trị đọc được **đầu tiên**,
+mà thư mục đó có sẵn `50-cloud-init.conf` chứa `PasswordAuthentication yes`.
+`00` đọc trước `50` nên thắng. Thêm vào cuối `/etc/ssh/sshd_config` thì vô tác
+dụng, vì dòng `Include` nằm ở đầu file, đã nạp cả thư mục trước khi đọc tới
+cuối.
+
+`prohibit-password` chứ không phải `no`: root là tài khoản duy nhất có shell
+thật trên máy, đặt `no` là tự khoá mình ra ngoài.
+
+Hệ quả vận hành: **không còn đường dự phòng bằng mật khẩu.** Muốn vào từ một
+máy khác thì phải `ssh-copy-id` từ máy đang vào được **trước**. Mất hết khoá thì
+chỉ còn console VNC của nhà cung cấp VPS.
+
+Kiểm tra bằng cách hỏi thẳng máy chủ xem nó chào những cách đăng nhập nào:
+
+```bash
+ssh -v -o BatchMode=yes -o PubkeyAuthentication=no <user>@<ip-vps> 2>&1 | grep -i "that can continue"
+```
+
+Đúng thì chỉ in `publickey`. Còn thấy `password` nghĩa là cấu hình chưa có hiệu
+lực — thường do quên `systemctl reload ssh`. (`BatchMode=yes` có mặt chính vì
+trường hợp hỏng đó: không có nó, lệnh in ra dòng cần xem rồi đứng chờ bạn gõ
+mật khẩu.) Đừng nhìn PID của sshd để đoán:
+`SIGHUP` làm nó `exec` lại chính nó, PID và giờ khởi động giữ nguyên dù cấu hình
+đã đổi.
+
 ---
 
 ## Dựng lại từ đầu
@@ -180,7 +215,8 @@ Trước khi chuyển sang VPS, app từng được deploy bằng Cloudflare Pag
 npm run deploy:pages
 ```
 
-Giữ lại làm bản dự phòng. Muốn dọn thì:
+Bản đó cũng được build lúc chưa có khoá Telegram nên trắng y hệt bản đang
+chạy, không dùng làm dự phòng được cho tới khi deploy lại. Muốn dọn thì:
 
 ```bash
 npx wrangler pages project delete cloudgram
