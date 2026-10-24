@@ -1,14 +1,13 @@
 import { Api } from "telegram";
-import { CustomFile } from "telegram/client/uploads";
 
 import { getClient } from "../services/telegram";
 import { Store } from "../redux/store";
 import { uploadProgress } from "../redux/actions/progressAction";
 import { fitsAsPhoto, makeThumb, probeVideo } from "./thumbnails";
+import { uploadParts } from "./transfer";
 
 // what Telegram itself plays inline; other containers go up as files
 const STREAMABLE = ["video/mp4", "video/quicktime", "video/x-m4v"];
-const UPLOAD_WORKERS = 6;
 
 /**
  * How to send a file: as a photo or a playable video like the Telegram apps
@@ -68,31 +67,20 @@ function largestPhotoSize(photo) {
  * its record, and clearing the progress entry here would make the upload look
  * finished while the record had no file_id yet.
  *
- * `file.arrayBuffer()` is passed unresolved on purpose; GramJS awaits it
- * (uploads.ts: `Buffer.from(await fileToBuffer(file))`). It does buffer the
- * whole file, which is why uploadQueue runs only a couple at a time.
+ * The bytes go up through transfer.js, which reads the file part by part,
+ * and GramJS only gets the finished InputFile to send.
  */
 export default async function uploadFile(id, file, { asMedia = false } = {}) {
     const { kind, options } = await sendOptions(file, asMedia);
+    const client = getClient();
 
-    const toUpload = new CustomFile(
-        file.name,
-        file.size,
-        "",
-        file.arrayBuffer(),
-    );
+    const inputFile = await uploadParts(client, file, {
+        onProgress: (fraction) =>
+            Store.dispatch(uploadProgress(id, fraction * 100)),
+    });
 
-    function progressCallback(progress) {
-        let _progress = progress * 100;
-        Store.dispatch(uploadProgress(id, _progress));
-    }
-
-    const message = await getClient().sendFile("me", {
-        file: toUpload,
-        // parts in flight at once; one at a time caps the speed at one part
-        // per round trip to Telegram (~0.5-1 MB/s) whatever the bandwidth
-        workers: UPLOAD_WORKERS,
-        progressCallback,
+    const message = await client.sendFile("me", {
+        file: inputFile,
         ...options,
     });
 

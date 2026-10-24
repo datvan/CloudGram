@@ -1,4 +1,4 @@
-import { Api, errors, helpers } from "telegram";
+import { Api } from "telegram";
 
 import { getClient } from "../services/telegram";
 import {
@@ -7,13 +7,7 @@ import {
     errorProgress,
 } from "../redux/actions/progressAction";
 import { Store } from "../redux/store";
-
-// Telegram's largest request; offsets must be multiples of it
-const PART = 512 * 1024;
-// requests in flight at once. GramJS's own downloadMedia asks for one 128 KB
-// part and waits for it before the next, which caps a download at one part
-// per round trip (~0.5-1 MB/s) whatever the bandwidth.
-const PARALLEL = 8;
+import { downloadParts } from "./transfer";
 
 /** The full-size copy of a photo: its location type and byte size. */
 function largestPhotoSize(photo) {
@@ -33,7 +27,7 @@ function largestPhotoSize(photo) {
 }
 
 /** Where a message's file lives on Telegram, or null for anything else. */
-function locate(media) {
+export function locate(media) {
     const doc = media.document;
     if (doc) {
         return {
@@ -68,76 +62,6 @@ function locate(media) {
 }
 
 /**
- * Fetch a file as PARALLEL concurrent part requests over the connection to
- * the data center that holds it. Rejects on anything unexpected, so the
- * caller can fall back to GramJS's slow but well-trodden path.
- */
-async function downloadParallel({ location, dcId, size }, onProgress) {
-    const client = getClient();
-    const out = new Uint8Array(size);
-    const parts = Math.ceil(size / PART);
-    let next = 0;
-    let done = 0;
-
-    async function fetchPart(index) {
-        const offset = index * PART;
-        for (;;) {
-            try {
-                const sender = await client.getSender(dcId);
-                const result = await client.invoke(
-                    new Api.upload.GetFile({
-                        location,
-                        offset: helpers.returnBigInt(offset),
-                        limit: PART,
-                        precise: false,
-                        cdnSupported: false,
-                    }),
-                    sender,
-                );
-                if (!(result instanceof Api.upload.File)) {
-                    throw new Error("Unexpected file redirect");
-                }
-                return result.bytes;
-            } catch (error) {
-                // the file lives on another data center; every worker follows
-                if (error instanceof errors.FileMigrateError) {
-                    dcId = error.newDc;
-                    continue;
-                }
-                throw error;
-            }
-        }
-    }
-
-    let failed = false;
-    async function worker() {
-        // once one part fails the rest stop, so the fallback is not left
-        // competing with requests whose bytes nobody will read
-        while (next < parts && !failed) {
-            const index = next++;
-            try {
-                const bytes = await fetchPart(index);
-                const expected = Math.min(PART, size - index * PART);
-                if (bytes.length !== expected) {
-                    throw new Error(`Part ${index} came back short`);
-                }
-                out.set(bytes, index * PART);
-                done += bytes.length;
-                onProgress(done);
-            } catch (error) {
-                failed = true;
-                throw error;
-            }
-        }
-    }
-
-    await Promise.all(
-        Array.from({ length: Math.min(PARALLEL, parts) }, worker),
-    );
-    return out;
-}
-
-/**
  * Pull a file's bytes out of Saved Messages, reporting progress under `id`.
  *
  * The whole file is held in memory, so this is only fit for what a tab can
@@ -162,7 +86,9 @@ export async function fetchFile(id, file_id) {
         let bytes;
         try {
             if (!file) throw new Error("Unknown media");
-            bytes = await downloadParallel(file, report);
+            bytes = await downloadParts(getClient(), file, {
+                onProgress: report,
+            });
         } catch (error) {
             console.log("Parallel download failed, retrying slowly", error);
             bytes = await getClient().downloadMedia(media, {
