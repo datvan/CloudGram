@@ -26,7 +26,7 @@ This project started as a fork of [MQ-xz/CloudGram](https://github.com/MQ-xz/Clo
 
 **Self-hosting**
 
--   nginx, systemd and deploy scripts for a single VPS live in `deploy/`; [docs/deploy.md](docs/deploy.md) walks through it.
+-   nginx, systemd and deploy scripts for a single VPS live in `deploy/`; the deploy guide walks through it ([English](docs/deploy.en.md) · [Tiếng Việt](docs/deploy.md)).
 
 ## How it works
 
