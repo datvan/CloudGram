@@ -55,7 +55,7 @@ const mbps = (bytes, ms) => Math.round((bytes / MB / (ms / 1000)) * 10) / 10;
 async function upload(name, file) {
     const client = getClient();
     const variant = UPLOADS[name];
-    const stats = { waits: [], reconnects: 0 };
+    const stats = { waits: [], reconnects: 0, retries: 0 };
     const t0 = performance.now();
     const inputFile = variant.gramjs
         ? await client.uploadFile({
@@ -74,7 +74,7 @@ async function upload(name, file) {
 
 async function download(name, message) {
     const client = getClient();
-    const stats = { waits: [], reconnects: 0 };
+    const stats = { waits: [], reconnects: 0, retries: 0 };
     const where = locate(message.media);
     const t0 = performance.now();
     const bytes = await downloadParts(client, where, {

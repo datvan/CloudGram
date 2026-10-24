@@ -5,7 +5,9 @@ import {
     completedProgress,
     errorProgress,
     queuedProgress,
+    retryingProgress,
 } from "../redux/actions/progressAction";
+import { isFinal } from "./transfer";
 import uploadFile from "./uploadFile";
 
 /**
@@ -16,7 +18,10 @@ import uploadFile from "./uploadFile";
  * between one file's last part and the next file's first.
  */
 const MAX_CONCURRENT = 2;
-const MAX_FLOOD_RETRIES = 2;
+// pauses before each automatic retry of a whole file, in seconds; once they
+// run out the file waits for Retry. Each part has already been tried several
+// times by then (transfer.js), so these are for longer outages.
+const RETRY_DELAYS = [5, 20, 60];
 
 const waiting = [];
 const cancelled = new Set();
@@ -70,6 +75,7 @@ export function retryUpload(id) {
     const job = failed.get(id);
     if (!job) return;
     failed.delete(id);
+    job.attempts = 0;
     // no name here: the reducer keeps the one the entry was created with
     Store.dispatch(queuedProgress(id));
     waiting.push(job);
@@ -91,30 +97,59 @@ function pump() {
     }
 }
 
+// Telegram keeps uploaded parts only for a while; lost ones have to go again
+const partsLost = (error) =>
+    /^FILE_PART_\d+_MISSING$/.test(error?.errorMessage ?? "");
+
+/**
+ * How long to wait before trying a failed upload again, or 0 when it should
+ * wait for the user instead: Telegram refused the file itself, the message may
+ * already be in Saved Messages, or the retries are used up.
+ */
+function retryDelay(job, error) {
+    if (error?.maybeSent || job.attempts >= RETRY_DELAYS.length) return 0;
+    // GramJS sleeps through short floods itself and rethrows long ones
+    if (error?.seconds) return error.seconds;
+    if (isFinal(error) && !partsLost(error)) return 0;
+    return RETRY_DELAYS[job.attempts];
+}
+
 async function run(job) {
     const { id, file, asMedia } = job;
+    // kept on the job, through Retry too, so no attempt resends a part
+    // Telegram already has
+    job.resume ??= {};
+    job.attempts ??= 0;
 
     let result;
-    for (let attempt = 0; ; attempt += 1) {
-        try {
-            // the file is read here, inside the worker, not when it was queued
-            result = await uploadFile(id, file, { asMedia });
-            break;
-        } catch (error) {
-            // GramJS sleeps through short floods itself and rethrows long ones
-            const seconds = error?.seconds;
-            if (seconds && attempt < MAX_FLOOD_RETRIES) {
-                Store.dispatch(errorProgress(id, `Flood wait ${seconds}s`));
-                await new Promise((wake) => setTimeout(wake, seconds * 1000));
-                continue;
-            }
-            console.log(error);
+    try {
+        // the file is read here, inside the worker, not when it was queued
+        result = await uploadFile(id, file, { asMedia, resume: job.resume });
+    } catch (error) {
+        console.log(error);
+        if (partsLost(error)) job.resume = {};
+        const seconds = retryDelay(job, error);
+        if (!seconds) {
             failed.set(id, job);
             Store.dispatch(
                 errorProgress(id, error?.message ?? "Upload failed"),
             );
             return;
         }
+        // the slot goes to the next file meanwhile; this one rejoins the
+        // back of the line when the pause is over
+        job.attempts += 1;
+        Store.dispatch(
+            retryingProgress(
+                id,
+                `Lỗi, tự thử lại sau ${seconds} giây (lần ${job.attempts}/${RETRY_DELAYS.length})`,
+            ),
+        );
+        setTimeout(() => {
+            waiting.push(job);
+            pump();
+        }, seconds * 1000);
+        return;
     }
 
     // Deliberately outside the loop above: the file is on Telegram by now, so
