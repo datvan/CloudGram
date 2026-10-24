@@ -21,7 +21,7 @@ import client from "../../services/telegram";
 import ProgressCircle from "../ProgressCircle";
 import downloadFile from "../../utils/downloadFile";
 import getFileIcon from "../../utils/getFileIcon";
-import { cancelUploads } from "../../utils/uploadQueue";
+import { cancelUploads, retryUpload } from "../../utils/uploadQueue";
 
 // eslint-disable-next-line react-refresh/only-export-components
 function File(props) {
@@ -32,9 +32,18 @@ function File(props) {
     // with it. Such a record can still be deleted, just not downloaded.
     const isPending = file_id === undefined || file_id === null;
 
+    // A download failure also shows up as ERROR, so isPending is what tells the
+    // two apart: only an upload that never landed can be sent again.
+    const canRetry = isPending && activeProgress?.type === "ERROR";
+
     function handleDownloadFile() {
         downloadFile(id, file_id, name);
         handleClose();
+    }
+
+    function handleRetry() {
+        handleClose();
+        retryUpload(id);
     }
 
     async function handleDeleteFile() {
@@ -124,6 +133,7 @@ function File(props) {
                 <MenuItem onClick={handleDownloadFile} disabled={isPending}>
                     Download
                 </MenuItem>
+                {canRetry && <MenuItem onClick={handleRetry}>Retry</MenuItem>}
                 <MenuItem onClick={handleDeleteFile}>delete</MenuItem>
             </Menu>
         </Grid>
