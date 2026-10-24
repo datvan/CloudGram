@@ -22,6 +22,8 @@ const MAX_FLOOD_RETRIES = 2;
 
 const waiting = [];
 const cancelled = new Set();
+/** Jobs that gave up, kept whole so Retry can put them back on the queue. */
+const failed = new Map();
 let running = 0;
 
 /**
@@ -48,7 +50,30 @@ export async function enqueueUpload({ ops, file, parentID, name, onChange }) {
  * checked again once it lands.
  */
 export function cancelUploads(ids) {
-    for (const id of ids) cancelled.add(id);
+    for (const id of ids) {
+        cancelled.add(id);
+        failed.delete(id);
+    }
+}
+
+/**
+ * Send a failed upload back to the queue.
+ *
+ * Without this the only way to recover three bad files out of a folder of five
+ * hundred would be to upload the folder again, and since folders merge but
+ * files never deduplicate, that would duplicate every file that did work.
+ *
+ * Only jobs still held in memory can be retried; a reload takes the File object
+ * with it, and the progress entry that surfaces this in the UI goes too.
+ */
+export function retryUpload(id) {
+    const job = failed.get(id);
+    if (!job) return;
+    failed.delete(id);
+    // no name here: the reducer keeps the one the entry was created with
+    Store.dispatch(queuedProgress(id));
+    waiting.push(job);
+    pump();
 }
 
 function pump() {
@@ -69,12 +94,12 @@ function pump() {
 async function run(job) {
     const { id, file, onChange } = job;
 
+    let result;
     for (let attempt = 0; ; attempt += 1) {
         try {
             // the file is read here, inside the worker, not when it was queued
-            const result = await uploadFile(id, file);
-            await settle(job, result);
-            return;
+            result = await uploadFile(id, file);
+            break;
         } catch (error) {
             // GramJS sleeps through short floods itself and rethrows long ones
             const seconds = error?.seconds;
@@ -84,12 +109,26 @@ async function run(job) {
                 continue;
             }
             console.log(error);
+            failed.set(id, job);
             Store.dispatch(
                 errorProgress(id, error?.message ?? "Upload failed"),
             );
             if (onChange) onChange();
             return;
         }
+    }
+
+    // Deliberately outside the loop above: the file is on Telegram by now, so
+    // retrying from here would send a second copy and orphan the first. A
+    // failure here is also not offered as a retry, for the same reason.
+    try {
+        await settle(job, result);
+    } catch (error) {
+        console.log(error);
+        Store.dispatch(
+            errorProgress(id, error?.message ?? "Could not save the file id"),
+        );
+        if (onChange) onChange();
     }
 }
 

@@ -106,7 +106,7 @@ BFS/DFS theo `parent`. Chỉ cần con cháu, mà con cháu luôn có `parent` �
 
 1. User bấm menu trên card folder → `collectSubtree` → đếm `n folder, m file`.
 2. **Dialog xác nhận** nêu rõ số lượng và cảnh báo _xóa khỏi Saved Messages là không hoàn tác được_.
-3. Hủy mọi upload job đang chạy/đang chờ trong cây con (xem Phase 3 — `cancelSubtree`). Không chặn thao tác xóa, mà hủy job.
+3. Hủy mọi upload job đang chạy/đang chờ trong cây con (`cancelUploads(recordIds)` của Phase 3). Không chặn thao tác xóa, mà hủy job.
 4. Tính **hai tập id khác nhau, đừng lẫn**:
     - `messageIds = files.filter(f => f.file_id != null).map(f => f.file_id)` → **message id Telegram**. Bỏ file upload lỗi/đang dở vì chúng chưa có message nào trên Telegram.
     - `recordIds = [...folders.map(f => f.id), ...files.map(f => f.id)]` → **id record IndexedDB**, gồm _cả_ file chưa có `file_id` (nếu bỏ sót, chúng thành record mồ côi dưới một parent đã biến mất).
@@ -121,7 +121,7 @@ BFS/DFS theo `parent`. Chỉ cần con cháu, mà con cháu luôn có `parent` �
 
     > **Phase 2 phải tự an toàn, không đợi Phase 3.** Nếu Phase 2 lên trước, thêm thẳng bước kiểm tra `getById` vào đường upload đơn lẻ hiện tại (`UploadFile.jsx:44`). Hàng đợi ở Phase 3 sau đó dùng lại đúng bước kiểm tra này.
 
--   Đang đứng _trong_ folder bị xóa → `navigate` về parent và cắt `workDir`.
+-   ~~Đang đứng _trong_ folder bị xóa → `navigate` về parent.~~ Không cần: menu xóa chỉ nằm trên card folder, mà card đó chỉ hiện khi ta đang ở folder **cha**. Không có đường nào trong UI để xóa chính folder mình đang đứng.
 -   Folder rỗng → vẫn xóa bình thường, không gọi `deleteMessages` với mảng rỗng.
 
 ### UI
@@ -139,7 +139,7 @@ BFS/DFS theo `parent`. Chỉ cần con cháu, mà con cháu luôn có `parent` �
 -   Worker pool **concurrency 1–2**. Lý do: mỗi file bị nạp nguyên vào RAM (`uploads.ts:109`), chọn 10 file 500MB mà chạy song song là tab chết.
 -   **Đọc file lazy _bên trong_ worker**, không chuẩn bị buffer trước cho cả hàng đợi.
 -   **Gửi từng file một, không dùng album** — để mỗi file có message id riêng làm `file_id`.
--   API: `enqueue(job)` · `cancel(id)` · `cancelSubtree(folderId)` (cho Phase 2).
+-   API thực tế: `enqueueUpload({ops, file, parentID, name, onChange})` · `cancelUploads(ids)` (Phase 2 dùng) · `retryUpload(id)`.
 -   Xử lý `FLOOD_WAIT_x`: bắt lỗi, chờ `x` giây, retry (tối đa 2–3 lần), rồi mới đánh `error`.
 
 ### Thay đổi UI/state
@@ -199,7 +199,7 @@ Hoàn toàn thuần, không chạm DB → dễ test sau.
 | 4      | `feat/multi-file-upload` (Phase 3) | Phase 1   |
 | 5      | `feat/folder-upload` (Phase 4)     | Phase 3   |
 
-Phase 2 và 3 độc lập nhau về code, nhưng điểm chạm là `cancelSubtree` → thống nhất interface hàng đợi trước khi tách nhánh.
+Phase 2 và 3 rốt cuộc nằm chung một commit: đường xóa phải gọi `cancelUploads` của hàng đợi, nên tách ra thì không commit nào build được.
 
 ---
 
@@ -220,7 +220,7 @@ Checklist thủ công:
 -   [ ] Folder rỗng → biến mất, không gọi API Telegram
 -   [ ] Folder lồng 3 cấp có file → cả cây biến mất; mở Saved Messages xác nhận file đã mất
 -   [ ] Bấm nút menu không bị navigate vào folder
--   [ ] Đang đứng trong folder đó khi xóa → về đúng parent
+-   [ ] Xóa folder trong lúc file trong đó đang upload → không sót record mồ côi, và message vừa lên cũng bị gỡ
 -   [ ] Tắt mạng rồi xóa → báo lỗi, metadata còn nguyên, retry được
 -   [ ] Xóa folder trong lúc file đang upload vào đó → không sót record mồ côi
 

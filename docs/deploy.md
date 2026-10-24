@@ -64,7 +64,7 @@ VITE_API_HASH='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
     | Mục                    | Giá trị         |
     | ---------------------- | --------------- |
     | Production branch      | `main`          |
-    | Framework preset       | `Vite`          |
+    | Framework preset       | `React (Vite)`  |
     | Build command          | `npm run build` |
     | Build output directory | `dist`          |
 
@@ -98,10 +98,16 @@ Bản ghi A của `datvan.com` (`27.74.11.37`) không bị đụng tới — sub
 
 ## Những thứ đã chuẩn bị sẵn trong repo
 
--   **`public/_redirects`** — `/*  /index.html  200`. Không có file này thì mở
-    thẳng `https://cloudgram.datvan.com/folder/<id>` hoặc bấm F5 khi đang ở trong
-    một folder sẽ ra 404, vì host tĩnh đi tìm file theo đúng đường dẫn đó. Đây là
-    rewrite chuẩn cho SPA và Cloudflare Pages đọc đúng định dạng này.
+-   **`public/_redirects`** — `/*  /index.html  200`. App dùng client-side
+    routing, nên `https://cloudgram.datvan.com/folder/<id>` là đường dẫn chỉ tồn
+    tại trong trình duyệt, không có file nào tương ứng trên đĩa. Dòng này bảo
+    host trả `index.html` cho mọi đường dẫn và để router tự xử lý.
+
+    Docs của Cloudflare xác nhận dạng rewrite `200` này được hỗ trợ, nhưng
+    **không** nói Pages có tự fallback về `index.html` khi thiếu file hay không.
+    Có thể Pages vốn đã làm vậy và file này thành thừa — vô hại. Bài test F5
+    bên dưới mới là câu trả lời thật.
+
 -   **WebSocket bảo mật** — GramJS tự đặt `useWSS` theo `window.location.protocol`
     (`telegramBaseClient.js`), nên trên HTTPS nó dùng `wss://` mà không cần chỉnh
     gì. Không có lỗi mixed content.

@@ -8,6 +8,7 @@ import Folder from "../../components/explorer/Folder";
 import File from "../../components/explorer/File";
 import WorkingDir from "../../components/explorer/WorkingDir";
 import CreateButton from "../../components/explorer/CreateButton";
+import TransferStatus from "../../components/explorer/TransferStatus";
 import ConfirmDialog from "../../components/ConfirmDialog";
 import client from "../../services/telegram";
 import { collectSubtree, messageIdsOf, recordIdsOf } from "../../utils/tree";
@@ -86,6 +87,7 @@ export default function Explorer() {
 
     async function confirmDeleteFolder() {
         setDeleting(true);
+        let stage = "telegram";
         try {
             // Counted again rather than reusing the snapshot behind the dialog:
             // a folder upload may have added records to this subtree meanwhile.
@@ -101,6 +103,7 @@ export default function Explorer() {
             if (messageIds.length) {
                 await client.deleteMessages("me", messageIds, { revoke: true });
             }
+            stage = "records";
             for (const recordId of recordIds) {
                 await deleteRecord(recordId);
             }
@@ -114,7 +117,14 @@ export default function Explorer() {
             console.log(e);
             setNotice({
                 severity: "error",
-                text: `Delete failed: ${e?.message ?? e}. Nothing was removed.`,
+                text:
+                    stage === "telegram"
+                        ? `Delete failed: ${
+                              e?.message ?? e
+                          }. Nothing was removed.`
+                        : `The files are gone from Telegram but some entries are still listed: ${
+                              e?.message ?? e
+                          }. Delete the folder again to clear them.`,
             });
         }
         setDeleting(false);
@@ -169,6 +179,7 @@ export default function Explorer() {
                 )}
             </Grid>
             <CreateButton parentID={parentID} fetchData={fetchData} />
+            <TransferStatus />
             <ConfirmDialog
                 open={Boolean(pendingDelete)}
                 title={`Delete "${pendingDelete?.name ?? ""}"?`}
