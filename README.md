@@ -11,7 +11,10 @@ This project started as a fork of [MQ-xz/CloudGram](https://github.com/MQ-xz/Clo
 -   My Drive, Recent, Starred and Trash, with breadcrumbs, search and light/dark themes.
 -   Grid and list views; the grid shows thumbnails for pictures and videos.
 -   Upload files or whole folders by picker or drag and drop, through a bounded queue with progress and retry.
+-   Select by clicking, Ctrl/Shift-clicking or dragging a box over files and folders, like Google Drive.
 -   Rename, move (dialog or drag onto a folder), star, trash, restore and delete forever, single or in bulk.
+-   Import Dropbox shared links, several at once: a shared folder is recreated with its full structure, streamed straight from Dropbox into Telegram.
+-   Public share links for single files, lasting forever or a chosen number of days. The file is copied to the server encrypted, and the key lives only in the link.
 -   Preview pane for images, video, audio, PDF and text, plus a details panel.
 
 **Pictures and videos like the Telegram apps**

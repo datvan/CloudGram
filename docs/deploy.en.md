@@ -154,6 +154,12 @@ and 20 GB (change it with `CLOUDGRAM_SHARE_QUOTA_GB` in
 `/etc/cloudgram-api.env`); the server always keeps 1 GB of disk free. Whole
 folders cannot be shared yet.
 
+**Dropbox import** is the opposite and stores nothing on the VPS: the server
+only asks Dropbox where a shared link redirects (`POST /api/dropbox/resolve`,
+which accepts `dropbox.com` links only), and the browser downloads the ZIP
+straight from Dropbox and sends each file to Telegram. Dropbox will not zip a
+folder over 20 GB or 10,000 files; split such a folder into smaller links.
+
 **One machine uses Telegram at a time.** If two browsers use the same Telegram
 session, Telegram kills it (`AUTH_KEY_DUPLICATED`), so the service hands out a
 "lease" to one browser at a time. Opening the app on a second machine asks

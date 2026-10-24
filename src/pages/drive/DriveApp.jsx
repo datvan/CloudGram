@@ -53,6 +53,7 @@ import ItemMenu from "../../components/drive/ItemMenu";
 import DetailsPanel from "../../components/drive/DetailsPanel";
 import PreviewDialog from "../../components/drive/PreviewDialog";
 import ShareDialog from "../../components/drive/ShareDialog";
+import DropboxDialog from "../../components/drive/DropboxDialog";
 import TransferPanel from "../../components/drive/TransferPanel";
 import useMarquee from "../../components/drive/useMarquee";
 import {
@@ -71,6 +72,7 @@ import {
 import * as drive from "../../services/drive";
 import { logout, logoutOthers, unlinkTelegram } from "../../services/account";
 import { describeError } from "../../services/api";
+import { importsBusy } from "../../services/dropboxImport";
 import {
     countForever,
     deleteForever,
@@ -268,7 +270,7 @@ export default function DriveApp({ mode, onToggleMode }) {
             const uploading = activeProgress.some(
                 (p) => p.type === "UPLOADING" || p.type === "QUEUED",
             );
-            if (drive.getSnapshot().dirty || uploading) {
+            if (drive.getSnapshot().dirty || uploading || importsBusy()) {
                 event.preventDefault();
                 event.returnValue = "";
             }
@@ -609,11 +611,21 @@ export default function DriveApp({ mode, onToggleMode }) {
                       ? byId.get(item.parent)?.name ?? "—"
                       : "Drive của tôi";
 
+    const openDropbox = () =>
+        setDialog({
+            type: "dropbox",
+            target: uploadTarget,
+            targetName: currentFolder
+                ? `“${currentFolder.name}”`
+                : "Drive của tôi",
+        });
+
     const sidebar = (
         <Sidebar
             onNewFolder={() => setDialog({ type: "newFolder" })}
             onUploadFiles={() => fileInput.current?.click()}
             onUploadFolder={() => folderInput.current?.click()}
+            onImportDropbox={openDropbox}
             onNavigate={() => setNavOpen(false)}
             onDropOn={onDropOnFolder}
         />
@@ -1177,6 +1189,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                 onNewFolder={() => setDialog({ type: "newFolder" })}
                 onUploadFiles={() => fileInput.current?.click()}
                 onUploadFolder={() => folderInput.current?.click()}
+                onImportDropbox={openDropbox}
             />
 
             <Menu
@@ -1302,6 +1315,12 @@ export default function DriveApp({ mode, onToggleMode }) {
                 id={dialog?.id}
                 onClose={() => setDialog(null)}
                 onNotice={(text) => setNotice({ severity: "success", text })}
+            />
+            <DropboxDialog
+                open={dialog?.type === "dropbox"}
+                target={dialog?.target ?? null}
+                targetName={dialog?.targetName}
+                onClose={() => setDialog(null)}
             />
             <UploadModeDialog
                 open={dialog?.type === "uploadMode"}

@@ -45,7 +45,7 @@ export class FileReply {
 }
 
 /** Fixed-window counter per key, like the login limiter. */
-class Window {
+export class Window {
     constructor(limit, windowMs) {
         this.limit = limit;
         this.windowMs = windowMs;
