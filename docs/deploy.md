@@ -1,7 +1,10 @@
 # Deploy CloudGram lên cloudgram.datvan.com
 
-Đang chạy tại https://cloudgram.datvan.com, phục vụ bởi nginx trên VPS
-`163.61.182.248`, đứng sau proxy Cloudflare.
+Đang chạy tại https://cloudgram.datvan.com, phục vụ bởi nginx trên VPS riêng,
+đứng sau proxy Cloudflare.
+
+> Repo này công khai, nên IP máy chủ không được viết ở đây. Nó nằm trong `.env`
+> (đã gitignore) dưới tên `DEPLOY_HOST`.
 
 Repo: https://github.com/datvan/CloudGram
 
@@ -54,6 +57,15 @@ VITE_API_HASH='xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
 
 ## Bước 2 — Deploy
 
+Thêm máy đích vào `.env`, cùng chỗ với khoá Telegram:
+
+```
+DEPLOY_HOST=root@<ip-vps>
+```
+
+Tiền tố không phải `VITE_` nên Vite không nhúng nó vào bundle gửi cho trình
+duyệt. Rồi:
+
 ```bash
 npm run deploy
 ```
@@ -75,13 +87,17 @@ Cuối script có sẵn hai lệnh kiểm tra `/` và `/folder/x`.
 Phần này ghi lại những thứ mất công tìm ra, để lần sau khỏi dò lại.
 
 **Mọi traffic web phải đi qua Cloudflare.** `ufw` trên VPS chỉ mở 80/443 cho 22
-dải IP của Cloudflare (15 IPv4 + 7 IPv6), chặn mọi nguồn khác. Gọi thẳng vào
-`163.61.182.248` từ ngoài sẽ timeout, kể cả cổng 443.
+dải IP của Cloudflare (15 IPv4 + 7 IPv6), chặn mọi nguồn khác. Gọi thẳng vào IP
+máy chủ từ ngoài sẽ timeout, kể cả cổng 443.
 
 Hệ quả thực tế: **bản ghi DNS bắt buộc phải để Proxied (đám mây cam).** Để
 `DNS only` thì trang không chạy — không phải vấn đề bảo mật mà là không có
-đường vào. Ngược lại, thiết kế này tốt: IP gốc không lộ, DDoS bị Cloudflare
-hứng, và mọi luật WAF hay rate limit đặt ở Cloudflare đều không bị đi vòng.
+đường vào.
+
+Thiết kế này tốt: DDoS bị Cloudflare hứng, và mọi luật WAF hay rate limit đặt ở
+Cloudflare đều không bị đi vòng. Nó cũng giữ kín IP gốc — nhưng chỉ chừng nào
+IP đó không bị viết ra chỗ khác, nên đừng đưa nó vào repo, issue hay ảnh chụp
+màn hình.
 
 **SSL mode của zone là Full (strict).** Biết được vì khi origin chưa có chứng
 chỉ cho hostname, Cloudflare trả `526` chứ không phải phục vụ tạm.
@@ -113,11 +129,17 @@ thừa.
 
 Nếu phải làm lại trên máy khác:
 
+Dùng [cloudgram.bootstrap.conf](../deploy/nginx/cloudgram.bootstrap.conf) chứ
+không phải `cloudgram.conf`. Bản bootstrap chỉ nghe cổng 80 và không nhắc tới
+chứng chỉ nào — đúng thứ cần có **trước** khi certbot chạy. Bản `cloudgram.conf`
+là ảnh chụp cấu hình sau khi certbot đã sửa; đem nó đi dựng lại từ đầu thì nginx
+không khởi động được, vì nó trỏ tới file chứng chỉ chưa tồn tại.
+
 ```bash
 # trên VPS
 mkdir -p /var/www/cloudgram
-# chép deploy/nginx/cloudgram.conf vào /etc/nginx/sites-available/
-# (bỏ các dòng "managed by Certbot" — certbot sẽ tự thêm lại)
+# chép deploy/nginx/cloudgram.bootstrap.conf vào
+#   /etc/nginx/sites-available/cloudgram.conf
 ln -s /etc/nginx/sites-available/cloudgram.conf /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
 ```
