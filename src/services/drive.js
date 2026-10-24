@@ -342,8 +342,9 @@ export const fileOps = {
     getByID: async (id) => getRecord(id),
     // the message id is the only link to bytes already on Telegram, so it goes
     // out right away rather than waiting for the debounce
-    setFileId: async (id, file_id) => {
-        update(id, { file_id }, { immediate: true });
+    // `extra` carries what the way the file was sent changed (see uploadFile)
+    setFileId: async (id, file_id, extra = {}) => {
+        update(id, { ...extra, file_id }, { immediate: true });
         // a failed push stays dirty and retries; the tab warns before closing
         await flush().catch(() => {});
     },

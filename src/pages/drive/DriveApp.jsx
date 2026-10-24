@@ -58,6 +58,7 @@ import {
     MoveDialog,
     NameDialog,
     PasswordDialog,
+    UploadModeDialog,
 } from "../../components/drive/Dialogs";
 import {
     DRAG_TYPE,
@@ -452,10 +453,31 @@ export default function DriveApp({ mode, onToggleMode }) {
 
     // ----- uploads ---------------------------------------------------------------------------
 
+    // what Telegram would send as a photo or a playable video
+    const isMedia = (entry) =>
+        /^image\/(jpeg|png)$|^video\/(mp4|quicktime|x-m4v)$/.test(
+            (entry instanceof File ? entry : entry.file).type,
+        );
+
     function startUpload(entries) {
         if (!entries.length) return;
-        const count = uploadEntries(entries, uploadTarget);
-        if (view.kind !== "folder") {
+        const mediaCount = entries.filter(isMedia).length;
+        if (mediaCount) {
+            // the target is fixed now; the user may browse away meanwhile
+            setDialog({
+                type: "uploadMode",
+                entries,
+                target: uploadTarget,
+                mediaCount,
+            });
+            return;
+        }
+        sendUpload(entries, uploadTarget, false);
+    }
+
+    function sendUpload(entries, target, asMedia) {
+        const count = uploadEntries(entries, target, { asMedia });
+        if (!target) {
             setNotice({
                 severity: "info",
                 text: `Đang tải ${count} tệp lên Drive của tôi.`,
@@ -1251,6 +1273,16 @@ export default function DriveApp({ mode, onToggleMode }) {
                         severity: "success",
                         text: "Đã đổi mật khẩu.",
                     });
+                }}
+            />
+            <UploadModeDialog
+                open={dialog?.type === "uploadMode"}
+                total={dialog?.entries?.length ?? 0}
+                mediaCount={dialog?.mediaCount ?? 0}
+                onClose={() => setDialog(null)}
+                onStart={(asMedia) => {
+                    sendUpload(dialog.entries, dialog.target, asMedia);
+                    setDialog(null);
                 }}
             />
 

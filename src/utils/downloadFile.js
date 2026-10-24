@@ -23,9 +23,15 @@ export async function fetchFile(id, file_id) {
             throw new Error("File missing on Telegram");
         }
 
-        const fileSize = Number(
-            media.document.size.value ?? media.document.size,
+        // a file sent as a photo has no document, only scaled copies; GramJS
+        // downloads the largest, which is the photo itself
+        const photoSizes = (media.photo?.sizes ?? []).map((s) =>
+            "sizes" in s ? Math.max(...s.sizes) : s.size ?? 0,
         );
+        const fileSize = media.document
+            ? Number(media.document.size.value ?? media.document.size)
+            : Math.max(1, ...photoSizes);
+        const mimeType = media.document?.mimeType ?? "image/jpeg";
 
         const progressCallback = (downloaded) => {
             const _downloaded = Number(downloaded.value ?? downloaded);
@@ -38,7 +44,7 @@ export async function fetchFile(id, file_id) {
             progressCallback,
         });
         Store.dispatch(completedProgress(id));
-        return new Blob([bytes], { type: media.document.mimeType });
+        return new Blob([bytes], { type: mimeType });
     } catch (e) {
         // without this the spinner would sit at its last percentage forever
         console.log(e);

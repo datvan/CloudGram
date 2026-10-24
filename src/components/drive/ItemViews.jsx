@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { useSelector } from "react-redux";
 
@@ -24,6 +24,7 @@ import ScheduleIcon from "@mui/icons-material/Schedule";
 import { FileIcon } from "./FileIcon";
 import { DRAG_TYPE, kindOf } from "./fileTypes";
 import { formatDate, formatSize } from "../../utils/format";
+import { useThumbnail } from "../../utils/thumbnails";
 
 /** Upload/download state shown next to a name, or nothing when idle. */
 function TransferBadge({ id, pending }) {
@@ -365,9 +366,33 @@ function FolderCard({ item, index, selected, props }) {
 
 FolderCard.propTypes = ListRow.propTypes;
 
+/** True once the element has come near the viewport; stays true after. */
+function useSeen() {
+    const ref = useRef(null);
+    const [seen, setSeen] = useState(false);
+    useEffect(() => {
+        if (seen || !ref.current) return undefined;
+        const observer = new IntersectionObserver(
+            (entries) => entries.some((e) => e.isIntersecting) && setSeen(true),
+            { rootMargin: "200px" },
+        );
+        observer.observe(ref.current);
+        return () => observer.disconnect();
+    }, [seen]);
+    return [ref, seen];
+}
+
 function FileCard({ item, index, selected, props }) {
+    const [ref, seen] = useSeen();
+    const kind = kindOf(item);
+    const thumb = useThumbnail(
+        item,
+        kind === "image" || kind === "video",
+        seen,
+    );
     return (
         <Box
+            ref={ref}
             {...itemHandlers(item, index, props)}
             sx={{
                 borderRadius: 3,
@@ -417,12 +442,24 @@ function FileCard({ item, index, selected, props }) {
                     display: "grid",
                     placeItems: "center",
                     position: "relative",
+                    overflow: "hidden",
                 }}
             >
-                <FileIcon
-                    record={item}
-                    size={kindOf(item) === "other" ? 56 : 64}
-                />
+                {thumb ? (
+                    <Box
+                        component="img"
+                        src={thumb}
+                        alt=""
+                        draggable={false}
+                        sx={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "cover",
+                        }}
+                    />
+                ) : (
+                    <FileIcon record={item} size={kind === "other" ? 56 : 64} />
+                )}
                 <Stack
                     direction="row"
                     spacing={0.5}
