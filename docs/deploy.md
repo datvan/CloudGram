@@ -146,10 +146,13 @@ Bản ghi A của `datvan.com` (`27.74.11.37`) không bị đụng tới — sub
     tại trong trình duyệt, không có file nào tương ứng trên đĩa. Dòng này bảo
     host trả `index.html` cho mọi đường dẫn và để router tự xử lý.
 
-    Docs của Cloudflare xác nhận dạng rewrite `200` này được hỗ trợ, nhưng
-    **không** nói Pages có tự fallback về `index.html` khi thiếu file hay không.
-    Có thể Pages vốn đã làm vậy và file này thành thừa — vô hại. Bài test F5
-    bên dưới mới là câu trả lời thật.
+    Đã kiểm chứng trên bản deploy thật ngày 2026-10-24: `/` và `/folder/x` đều
+    trả `200` kèm đúng nội dung `index.html`. Một đường dẫn chắc chắn không tồn
+    tại như `/khong-ton-tai.txt` cũng trả `200` HTML — nghĩa là luật catch-all
+    này thực sự đang chạy, chứ không phải Pages tự xử lý giúp.
+
+    Hệ quả phụ: file tĩnh thiếu sẽ trả `200` kèm HTML thay vì `404`. Với SPA thì
+    đây là đánh đổi bình thường và không ảnh hưởng gì tới app này.
 
 -   **WebSocket bảo mật** — GramJS tự đặt `useWSS` theo `window.location.protocol`
     (`telegramBaseClient.js`), nên trên HTTPS nó dùng `wss://` mà không cần chỉnh
