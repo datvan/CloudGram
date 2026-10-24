@@ -2,11 +2,19 @@ import { CustomFile } from "telegram/client/uploads";
 
 import client from "../services/telegram";
 import { Store } from "../redux/store";
-import {
-    completedProgress,
-    uploadProgress,
-} from "../redux/actions/progressAction";
+import { uploadProgress } from "../redux/actions/progressAction";
 
+/**
+ * Send one file to Saved Messages.
+ *
+ * Completion is left to the caller: the file still has to be written back to
+ * its record, and clearing the progress entry here would make the upload look
+ * finished while the record had no file_id yet.
+ *
+ * `file.arrayBuffer()` is passed unresolved on purpose; GramJS awaits it
+ * (uploads.ts: `Buffer.from(await fileToBuffer(file))`). It does buffer the
+ * whole file, which is why uploadQueue runs only a couple at a time.
+ */
 export default async function uploadFile(id, file) {
     const toUpload = new CustomFile(
         file.name,
@@ -27,7 +35,5 @@ export default async function uploadFile(id, file) {
         progressCallback,
     });
 
-    console.log(result); // prints the result
-    Store.dispatch(completedProgress(id));
     return result;
 }

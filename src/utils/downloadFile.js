@@ -2,16 +2,22 @@ import client from "../services/telegram";
 import {
     completedProgress,
     downloadProgress,
+    errorProgress,
 } from "../redux/actions/progressAction";
 import { Store } from "../redux/store";
 
 export default async function downloadFile(id, file_id, name) {
-    const message = await client.getMessages("me", { ids: file_id });
-    const media = message[0].media;
+    Store.dispatch(downloadProgress(id, 0));
+    try {
+        const message = await client.getMessages("me", { ids: file_id });
+        const media = message[0]?.media;
 
-    if (media) {
-        // for progress loading
-        Store.dispatch(downloadProgress(id, 0));
+        if (!media) {
+            // the record points at a message that is no longer there
+            Store.dispatch(errorProgress(id, "File missing on Telegram"));
+            return;
+        }
+
         const fileSize = Number(media.document.size.value);
 
         const progressCallback = (downloaded) => {
@@ -34,5 +40,9 @@ export default async function downloadFile(id, file_id, name) {
 
         //update completed
         Store.dispatch(completedProgress(id));
+    } catch (e) {
+        // without this the spinner would sit at its last percentage forever
+        console.log(e);
+        Store.dispatch(errorProgress(id, e?.message ?? "Download failed"));
     }
 }

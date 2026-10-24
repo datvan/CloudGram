@@ -10,6 +10,7 @@ import {
     IconButton,
     Menu,
     MenuItem,
+    Stack,
     Typography,
 } from "@mui/material";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
@@ -20,25 +21,32 @@ import client from "../../services/telegram";
 import ProgressCircle from "../ProgressCircle";
 import downloadFile from "../../utils/downloadFile";
 import getFileIcon from "../../utils/getFileIcon";
+import { cancelUploads } from "../../utils/uploadQueue";
 
 // eslint-disable-next-line react-refresh/only-export-components
 function File(props) {
     const { id, name, file_id, deleteItem, activeProgress } = props;
-    /**
-     *
-     * @todo: file error
-     * @todo: file download errors
-     * @todo: file upload errors
-     */
+
+    // No file_id means nothing reached Telegram yet: the upload is queued, in
+    // flight, failed, or was cut short by a reload that took the File object
+    // with it. Such a record can still be deleted, just not downloaded.
+    const isPending = file_id === undefined || file_id === null;
+
     function handleDownloadFile() {
         downloadFile(id, file_id, name);
         handleClose();
     }
 
     async function handleDeleteFile() {
-        await client.deleteMessages("me", [file_id], { revoke: true });
-        await deleteItem(id);
         handleClose();
+        if (isPending) {
+            // deleteMessages would throw on an undefined id and strand the
+            // record, so drop the job and keep to IndexedDB
+            cancelUploads([id]);
+        } else {
+            await client.deleteMessages("me", [file_id], { revoke: true });
+        }
+        await deleteItem(id);
     }
 
     const [anchorEl, setAnchorEl] = useState(null);
@@ -62,40 +70,62 @@ function File(props) {
                         </IconButton>
                     }
                     title={
-                        /**
-                         *
-                         * @todo: update the ui
-                         */
                         <>
                             {activeProgress && (
-                                <>
-                                    {activeProgress.type == "DOWNLOADING" ? (
-                                        <FileDownloadIcon />
+                                <Stack
+                                    direction="row"
+                                    alignItems="center"
+                                    spacing={1}
+                                >
+                                    {activeProgress.type === "DOWNLOADING" ? (
+                                        <FileDownloadIcon fontSize="small" />
                                     ) : (
-                                        <FileUploadIcon />
+                                        <FileUploadIcon fontSize="small" />
                                     )}
-                                    <ProgressCircle
-                                        value={activeProgress?.percentage}
-                                    />
-                                </>
+                                    {activeProgress.type === "ERROR" ? (
+                                        <Typography
+                                            variant="caption"
+                                            color="error"
+                                            noWrap
+                                        >
+                                            {activeProgress.message ?? "Failed"}
+                                        </Typography>
+                                    ) : activeProgress.type === "QUEUED" ? (
+                                        <Typography
+                                            variant="caption"
+                                            color="text.secondary"
+                                        >
+                                            Queued
+                                        </Typography>
+                                    ) : (
+                                        <ProgressCircle
+                                            value={
+                                                activeProgress.percentage ?? 0
+                                            }
+                                            size={32}
+                                        />
+                                    )}
+                                </Stack>
                             )}
-                            <Typography>{name}</Typography>
+                            <Typography noWrap>{name}</Typography>
                         </>
                     }
                 />
-                <Menu
-                    id="basic-menu"
-                    anchorEl={anchorEl}
-                    open={open}
-                    onClose={handleClose}
-                    MenuListProps={{
-                        "aria-labelledby": "basic-button",
-                    }}
-                >
-                    <MenuItem onClick={handleDownloadFile}>Download</MenuItem>
-                    <MenuItem onClick={handleDeleteFile}>delete</MenuItem>
-                </Menu>
             </Card>
+            <Menu
+                id="basic-menu"
+                anchorEl={anchorEl}
+                open={open}
+                onClose={handleClose}
+                MenuListProps={{
+                    "aria-labelledby": "basic-button",
+                }}
+            >
+                <MenuItem onClick={handleDownloadFile} disabled={isPending}>
+                    Download
+                </MenuItem>
+                <MenuItem onClick={handleDeleteFile}>delete</MenuItem>
+            </Menu>
         </Grid>
     );
 }
