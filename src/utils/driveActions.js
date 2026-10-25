@@ -9,7 +9,7 @@
  */
 import { buildTreeFromPaths } from "./buildTreeFromPaths";
 import downloadFile from "./downloadFile";
-import { entriesOf } from "./pickers";
+import { entriesOf, isAbort } from "./pickers";
 import { collectSubtree, findFolder, messageIdsOf, recordIdsOf } from "./tree";
 import { cancelUploads, enqueueUpload, isQueued } from "./uploadQueue";
 import { createFolder, getSnapshot, removeRecords } from "../services/drive";
@@ -200,7 +200,7 @@ function freeName(named, parent, name) {
  * Must be called synchronously inside the drop handler: the items list is
  * emptied once the event returns, so the entries are grabbed up front.
  */
-export async function readDrop(dataTransfer) {
+export async function readDrop(dataTransfer, scan) {
     const items = Array.from(dataTransfer.items ?? []).filter(
         (item) => item.kind === "file",
     );
@@ -217,24 +217,32 @@ export async function readDrop(dataTransfer) {
         try {
             const resolved = await Promise.all(handles);
             if (resolved.every(Boolean)) {
-                const lists = await Promise.all(resolved.map(entriesOf));
+                const lists = await Promise.all(
+                    resolved.map((handle) => entriesOf(handle, scan)),
+                );
+                scan?.done();
                 return lists.flat();
             }
-        } catch {
+        } catch (error) {
+            if (isAbort(error)) throw error;
             // fall back to the entries grabbed above
         }
     }
     if (!roots.length) return loose.map((file) => ({ file, path: file.name }));
-    const lists = await Promise.all(roots.map((entry) => walk(entry, "")));
+    const lists = await Promise.all(
+        roots.map((entry) => walk(entry, "", scan)),
+    );
+    scan?.done();
     return lists.flat();
 }
 
-async function walk(entry, prefix) {
+async function walk(entry, prefix, scan) {
     const path = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.isFile) {
         const file = await new Promise((resolve, reject) =>
             entry.file(resolve, reject),
         );
+        scan?.add(file);
         return [{ file, path }];
     }
     const reader = entry.createReader();
@@ -247,7 +255,10 @@ async function walk(entry, prefix) {
         if (!batch.length) break;
         children.push(...batch);
     }
-    const lists = await Promise.all(children.map((child) => walk(child, path)));
+    scan?.check();
+    const lists = await Promise.all(
+        children.map((child) => walk(child, path, scan)),
+    );
     return lists.flat();
 }
 

@@ -12,6 +12,7 @@ import {
     DialogContent,
     DialogTitle,
     FormControlLabel,
+    LinearProgress,
     Link,
     List,
     ListItemButton,
@@ -437,6 +438,66 @@ export function UploadModeDialog({
         </Dialog>
     );
 }
+
+// a scan quicker than this never shows, so one small file does not flash it
+const SCAN_DIALOG_DELAY = 250;
+
+/**
+ * Files picked or dropped and still being read: how many so far, and their
+ * size. A big folder takes a while to walk, and until it is done the drive
+ * shows nothing new. `scan` is { phase: "reading" | "checking", files,
+ * bytes, cancel? }, or null when nothing is being scanned.
+ */
+export function ScanDialog({ scan }) {
+    const [shown, setShown] = useState(false);
+    const open = Boolean(scan);
+
+    useEffect(() => {
+        if (!open) {
+            setShown(false);
+            return undefined;
+        }
+        const timer = setTimeout(() => setShown(true), SCAN_DIALOG_DELAY);
+        return () => clearTimeout(timer);
+    }, [open]);
+
+    const reading = scan?.phase === "reading";
+    const found = scan
+        ? `${scan.files.toLocaleString("vi-VN")} tệp · ${formatSize(
+              scan.bytes,
+          )}`
+        : "";
+
+    return (
+        <Dialog open={open && shown} maxWidth="xs" fullWidth>
+            <DialogTitle>
+                {reading ? "Đã nhận, đang quét tệp…" : "Đang chuẩn bị tải lên…"}
+            </DialogTitle>
+            <DialogContent>
+                <Typography variant="body2" sx={{ mb: 2 }}>
+                    {reading
+                        ? `Đã tìm thấy ${found}.`
+                        : `Đang đối chiếu ${found} với các tệp đã có trong Drive.`}
+                </Typography>
+                <LinearProgress />
+            </DialogContent>
+            {reading && scan.cancel && (
+                <DialogActions>
+                    <Button onClick={scan.cancel}>Huỷ</Button>
+                </DialogActions>
+            )}
+        </Dialog>
+    );
+}
+
+ScanDialog.propTypes = {
+    scan: PropTypes.shape({
+        phase: PropTypes.oneOf(["reading", "checking"]),
+        files: PropTypes.number,
+        bytes: PropTypes.number,
+        cancel: PropTypes.func,
+    }),
+};
 
 /**
  * Files whose names are already taken in the folder they go to, as a file

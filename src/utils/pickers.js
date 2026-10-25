@@ -19,60 +19,102 @@ export const isAbort = (error) => error?.name === "AbortError";
 
 // how many files are asked for their details at once while walking a folder
 const READ_AHEAD = 64;
+// the most often a scan reports how far it got, in ms
+const REPORT_EVERY = 100;
 
-async function walk(dir, root, rootId, prefix, out, onCount) {
+const cancelled = () => new DOMException("Scan cancelled", "AbortError");
+
+/**
+ * What a scan of picked or dropped files has read so far, shared by every
+ * folder walked for it. `onProgress({ files, bytes })` hears about it at most
+ * every 100 ms, and once more at the end (done()); cancel() stops the walk
+ * with an AbortError.
+ */
+export function scanProgress(onProgress) {
+    const seen = { files: 0, bytes: 0 };
+    let last = 0;
+    let stopped = false;
+    return {
+        add(file) {
+            if (stopped) throw cancelled();
+            seen.files += 1;
+            seen.bytes += file.size;
+            const now = performance.now();
+            if (now - last >= REPORT_EVERY) {
+                last = now;
+                onProgress?.({ ...seen });
+            }
+        },
+        check() {
+            if (stopped) throw cancelled();
+        },
+        cancel() {
+            stopped = true;
+        },
+        done() {
+            if (stopped) throw cancelled();
+            onProgress?.({ ...seen });
+        },
+    };
+}
+
+async function walk(dir, root, rootId, prefix, out, scan) {
     const files = [];
     for await (const child of dir.values()) {
+        scan?.check();
         const sub = prefix ? `${prefix}/${child.name}` : child.name;
         if (child.kind === "file") files.push([child, sub]);
-        else await walk(child, root, rootId, sub, out, onCount);
+        else await walk(child, root, rootId, sub, out, scan);
     }
     // one at a time, a folder of thousands takes long enough to look stuck
     for (let i = 0; i < files.length; i += READ_AHEAD) {
         const batch = files.slice(i, i + READ_AHEAD);
         const read = await Promise.all(batch.map(([child]) => child.getFile()));
-        batch.forEach(([, sub], j) =>
+        batch.forEach(([, sub], j) => {
+            scan?.add(read[j]);
             out.push({
                 file: read[j],
                 path: `${root.name}/${sub}`,
                 handle: { rootId, root, sub },
-            }),
-        );
-        onCount?.(out.length);
+            });
+        });
     }
 }
 
 /**
- * Entries under one picked or dropped handle, a file or a folder.
- * `onCount` hears how many files have been read so far.
+ * Entries under one picked or dropped handle, a file or a folder. `scan`,
+ * from scanProgress(), counts what is read.
  */
-export async function entriesOf(root, onCount) {
+export async function entriesOf(root, scan) {
     const rootId = uuid4();
     if (root.kind === "file") {
-        return [
-            {
-                file: await root.getFile(),
-                path: root.name,
-                handle: { rootId, root, sub: "" },
-            },
-        ];
+        const file = await root.getFile();
+        scan?.add(file);
+        return [{ file, path: root.name, handle: { rootId, root, sub: "" } }];
     }
     const out = [];
-    await walk(root, root, rootId, "", out, onCount);
+    await walk(root, root, rootId, "", out, scan);
     return out;
 }
 
-export async function pickFiles() {
+/**
+ * `onPicked` runs once the user has chosen, before anything is read;
+ * `scan`, from scanProgress(), counts what is read.
+ */
+export async function pickFiles({ onPicked, scan } = {}) {
     const handles = await window.showOpenFilePicker({ multiple: true });
-    const lists = await Promise.all(handles.map((h) => entriesOf(h)));
+    onPicked?.();
+    const lists = await Promise.all(handles.map((h) => entriesOf(h, scan)));
+    scan?.done();
     return lists.flat();
 }
 
-/** `onPicked` runs once the user has chosen, before the folder is read. */
-export async function pickFolder({ onPicked, onCount } = {}) {
+export async function pickFolder({ onPicked, scan } = {}) {
     const root = await window.showDirectoryPicker();
     onPicked?.();
-    return entriesOf(root, onCount);
+    const entries = await entriesOf(root, scan);
+    scan?.done();
+    return entries;
 }
 
 /** Read the file a saved handle points at again. */
