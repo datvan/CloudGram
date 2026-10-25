@@ -1,6 +1,12 @@
 import { helpers } from "telegram";
 
-import { createFile, fileOps, flush, getRecord } from "../services/drive";
+import {
+    createFile,
+    fileOps,
+    flush,
+    getRecord,
+    trash,
+} from "../services/drive";
 import { getClient } from "../services/telegram";
 import {
     dropEntry,
@@ -81,6 +87,8 @@ export const isQueued = (id) => jobs.has(id) && !failed.has(id);
  * where the bytes can be found again after a reload (a Dropbox link, or
  * nothing for a file from this computer), `handle` lets Chrome and Edge reopen
  * the file without a picker, and `path` is where it sat in what was picked.
+ * `replaces` is a file this one takes the place of: it goes to the trash once
+ * this one is safely in the vault, so a failed upload loses nothing.
  */
 /** The folders from the root down to a record's parent, as the log keeps them. */
 function foldersAbove(record) {
@@ -106,6 +114,7 @@ export function enqueueUpload({
     source,
     handle,
     path,
+    replaces,
 }) {
     if (recordId && jobs.has(recordId)) {
         // only a job waiting for Retry takes new bytes; a live one is left be
@@ -130,7 +139,13 @@ export function enqueueUpload({
             Store.dispatch(batchProgress(actions));
         });
     announce.push(queuedProgress(record.id, record.name));
-    const job = { id: record.id, file, asMedia, resume: loadResume(resume) };
+    const job = {
+        id: record.id,
+        file,
+        asMedia,
+        replaces,
+        resume: loadResume(resume),
+    };
     jobs.set(record.id, job);
     logEntry(record.id, {
         kind: "file",
@@ -147,6 +162,7 @@ export function enqueueUpload({
         lastModified: file.lastModified,
         path: path ?? record.name,
         asMedia,
+        replaces,
         source,
         queuedAt: Date.now(),
         resume: saveResume(job.resume),
@@ -307,7 +323,7 @@ async function run(job, release) {
     // retrying from here would send a second copy and orphan the first. A
     // failure here is also not offered as a retry, for the same reason.
     try {
-        await settle(id, result);
+        await settle(id, result, job.replaces);
     } catch (error) {
         console.log(error);
         Store.dispatch(
@@ -326,7 +342,7 @@ async function run(job, release) {
  * The log entry goes only once the vault has the id: until then it is the
  * one place that still knows which message belongs to the record.
  */
-async function settle(id, result) {
+async function settle(id, result, replaces) {
     const record = cancelled.delete(id) ? undefined : await fileOps.getByID(id);
 
     const { message, changes } = result;
@@ -343,6 +359,8 @@ async function settle(id, result) {
             () => true,
             () => false,
         );
+        const old = replaces && getRecord(replaces);
+        if (stored && old && !old.trashedAt) trash([replaces]);
     } else {
         await getClient().deleteMessages("me", [message.id], {
             revoke: true,
@@ -356,11 +374,16 @@ async function settle(id, result) {
 
 /**
  * Give a record the message an earlier, closed tab already sent for it.
- * `kind` is how that tab sent it (photo, video or file).
+ * `kind` is how that tab sent it (photo, video or file), `replaces` the file
+ * it was to take the place of.
  */
-export function adoptMessage(id, message, kind) {
-    return settle(id, {
-        message,
-        changes: sentChanges(message, kind, getRecord(id)?.size),
-    });
+export function adoptMessage(id, message, kind, replaces) {
+    return settle(
+        id,
+        {
+            message,
+            changes: sentChanges(message, kind, getRecord(id)?.size),
+        },
+        replaces,
+    );
 }

@@ -62,6 +62,7 @@ import {
     MoveDialog,
     NameDialog,
     PasswordDialog,
+    UploadConflictDialog,
     UploadModeDialog,
 } from "../../components/drive/Dialogs";
 import {
@@ -148,6 +149,10 @@ export default function DriveApp({ mode, onToggleMode }) {
     const { records, byId } = drive.useDrive();
 
     const [navOpen, setNavOpen] = useState(false);
+    // bumped to have the resume banner look again
+    const [resumeScan, setResumeScan] = useState(0);
+    // files whose names are taken where they go, waiting for an answer
+    const [conflict, setConflict] = useState(null);
     const [layout, setLayout] = useState(() =>
         readPref("cloudgram.layout", "list"),
     );
@@ -499,14 +504,38 @@ export default function DriveApp({ mode, onToggleMode }) {
         sendUpload(entries, uploadTarget, false);
     }
 
-    function sendUpload(entries, target, asMedia) {
-        const count = uploadEntries(entries, target, { asMedia });
-        if (!target) {
-            setNotice({
-                severity: "info",
-                text: `Đang tải ${count} tệp lên Drive của tôi.`,
+    async function sendUpload(entries, target, asMedia) {
+        let counts;
+        try {
+            counts = await uploadEntries(entries, target, {
+                asMedia,
+                onConflict: (list) =>
+                    new Promise((resolve) => setConflict({ list, resolve })),
             });
+        } catch (err) {
+            setNotice({ severity: "error", text: describeError(err) });
+            return;
         }
+        const { queued, resumed, replaced, renamed, skipped } = counts;
+        // what the banner offered to resume may have just been picked up
+        if (resumed || skipped) setResumeScan((n) => n + 1);
+        const going = queued + replaced + renamed;
+        if (!going && !resumed && !skipped) return;
+        if (target && !resumed && !skipped && !replaced && !renamed) return;
+        const text = [
+            going &&
+                `đang tải ${going} tệp lên${target ? "" : " Drive của tôi"}`,
+            replaced && `${replaced} tệp sẽ thay bản cũ`,
+            renamed && `${renamed} tệp được đổi tên để giữ cả hai`,
+            resumed && `tải tiếp ${resumed} tệp đang dở`,
+            skipped && `bỏ qua ${skipped} tệp`,
+        ]
+            .filter(Boolean)
+            .join(", ");
+        setNotice({
+            severity: "info",
+            text: `${text[0].toUpperCase()}${text.slice(1)}.`,
+        });
     }
 
     // Chrome and Edge get the File System Access pickers, whose handles let a
@@ -1033,7 +1062,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                         )}
                     </Box>
 
-                    <ResumeBanner onNotice={setNotice} />
+                    <ResumeBanner key={resumeScan} onNotice={setNotice} />
 
                     {/* the items */}
                     <Box
@@ -1356,6 +1385,14 @@ export default function DriveApp({ mode, onToggleMode }) {
                 onStart={(asMedia) => {
                     sendUpload(dialog.entries, dialog.target, asMedia);
                     setDialog(null);
+                }}
+            />
+
+            <UploadConflictDialog
+                conflicts={conflict?.list}
+                onChoose={(choice) => {
+                    conflict?.resolve(choice);
+                    setConflict(null);
                 }}
             />
 
