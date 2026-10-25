@@ -62,6 +62,7 @@ import {
     MoveDialog,
     NameDialog,
     PasswordDialog,
+    ScanDialog,
     UploadConflictDialog,
     UploadModeDialog,
 } from "../../components/drive/Dialogs";
@@ -91,6 +92,7 @@ import {
     isAbort,
     pickFiles,
     pickFolder,
+    scanProgress,
 } from "../../utils/pickers";
 import { isHidden, pathTo } from "../../utils/tree";
 import { retryUpload } from "../../utils/uploadQueue";
@@ -153,6 +155,8 @@ export default function DriveApp({ mode, onToggleMode }) {
     const [resumeScan, setResumeScan] = useState(0);
     // files whose names are taken where they go, waiting for an answer
     const [conflict, setConflict] = useState(null);
+    // picked or dropped files still being read or checked (ScanDialog)
+    const [scanning, setScanning] = useState(null);
     const [layout, setLayout] = useState(() =>
         readPref("cloudgram.layout", "list"),
     );
@@ -488,10 +492,44 @@ export default function DriveApp({ mode, onToggleMode }) {
             (entry instanceof File ? entry : entry.file).type,
         );
 
+    /**
+     * A scan for files about to be read, reporting into the scan dialog.
+     * show() opens the dialog; until then the counts are kept quietly.
+     * upload() takes what was read, unless "Huỷ" came in the meantime.
+     */
+    function newScan() {
+        const scan = scanProgress((seen) =>
+            setScanning((now) => (now ? { ...now, ...seen } : now)),
+        );
+        let cancelled = false;
+        const cancel = () => {
+            cancelled = true;
+            scan.cancel();
+            setScanning(null);
+        };
+        scan.show = () =>
+            setScanning({ phase: "reading", files: 0, bytes: 0, cancel });
+        // the walk may have finished just before the click reached it
+        scan.upload = (entries) => {
+            if (!cancelled) startUpload(entries);
+        };
+        return scan;
+    }
+
+    function scanFailed(err) {
+        setScanning(null);
+        if (!isAbort(err))
+            setNotice({ severity: "error", text: describeError(err) });
+    }
+
     function startUpload(entries) {
-        if (!entries.length) return;
+        if (!entries.length) {
+            setScanning(null);
+            return;
+        }
         const mediaCount = entries.filter(isMedia).length;
         if (mediaCount) {
+            setScanning(null);
             // the target is fixed now; the user may browse away meanwhile
             setDialog({
                 type: "uploadMode",
@@ -505,16 +543,30 @@ export default function DriveApp({ mode, onToggleMode }) {
     }
 
     async function sendUpload(entries, target, asMedia) {
+        setScanning({
+            phase: "checking",
+            files: entries.length,
+            bytes: entries.reduce(
+                (sum, e) => sum + (e instanceof File ? e : e.file).size,
+                0,
+            ),
+        });
         let counts;
         try {
             counts = await uploadEntries(entries, target, {
                 asMedia,
-                onConflict: (list) =>
-                    new Promise((resolve) => setConflict({ list, resolve })),
+                onConflict: (list) => {
+                    setScanning(null);
+                    return new Promise((resolve) =>
+                        setConflict({ list, resolve }),
+                    );
+                },
             });
         } catch (err) {
             setNotice({ severity: "error", text: describeError(err) });
             return;
+        } finally {
+            setScanning(null);
         }
         const { queued, resumed, replaced, renamed, skipped } = counts;
         // what the banner offered to resume may have just been picked up
@@ -545,10 +597,11 @@ export default function DriveApp({ mode, onToggleMode }) {
             (folder ? folderInput : fileInput).current?.click();
             return;
         }
-        (folder ? pickFolder() : pickFiles()).then(startUpload, (err) => {
-            if (!isAbort(err))
-                setNotice({ severity: "error", text: describeError(err) });
-        });
+        const scan = newScan();
+        (folder ? pickFolder : pickFiles)({ onPicked: scan.show, scan }).then(
+            scan.upload,
+            scanFailed,
+        );
     }
 
     function onPickFiles(event) {
@@ -589,14 +642,9 @@ export default function DriveApp({ mode, onToggleMode }) {
                   e.preventDefault();
                   dragDepth.current = 0;
                   setDropping(false);
-                  readDrop(e.dataTransfer)
-                      .then(startUpload)
-                      .catch((err) =>
-                          setNotice({
-                              severity: "error",
-                              text: describeError(err),
-                          }),
-                      );
+                  const scan = newScan();
+                  scan.show();
+                  readDrop(e.dataTransfer, scan).then(scan.upload, scanFailed);
               },
           };
 
@@ -1387,6 +1435,8 @@ export default function DriveApp({ mode, onToggleMode }) {
                     setDialog(null);
                 }}
             />
+
+            <ScanDialog scan={scanning} />
 
             <UploadConflictDialog
                 conflicts={conflict?.list}

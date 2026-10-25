@@ -18,6 +18,7 @@ import {
     isAbort,
     pickFiles,
     pickFolder,
+    scanProgress,
 } from "../../utils/pickers";
 
 /**
@@ -113,12 +114,13 @@ export default function ResumeBanner({ onNotice }) {
             return;
         }
         try {
+            const options = {
+                onPicked: () => setReading(0),
+                scan: scanProgress(({ files }) => setReading(files)),
+            };
             const entries = await (folder
-                ? pickFolder({
-                      onPicked: () => setReading(0),
-                      onCount: setReading,
-                  })
-                : pickFiles());
+                ? pickFolder(options)
+                : pickFiles(options));
             await onPicked(entries);
         } catch (error) {
             setReading(null);
