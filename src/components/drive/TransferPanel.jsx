@@ -107,6 +107,17 @@ export default function TransferPanel() {
                     <CloseIcon />
                 </IconButton>
             </Stack>
+            {uploading > 0 && (
+                <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    component="div"
+                    sx={{ px: 2.5, py: 0.75 }}
+                >
+                    Tệp đi thẳng từ tab này lên Telegram, nên giữ tab mở. Lỡ
+                    đóng thì lần sau mở lại CloudGram sẽ hỏi có tiếp tục không.
+                </Typography>
+            )}
             {!collapsed && (
                 <Box sx={{ maxHeight: 280, overflow: "auto" }}>
                     {rows.map((entry) => (

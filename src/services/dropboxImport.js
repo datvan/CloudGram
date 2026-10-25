@@ -12,12 +12,14 @@
  * closing the dialog does not stop them.
  */
 import { useSyncExternalStore } from "react";
+import { v4 as uuid4 } from "uuid";
 
 import { api, describeError } from "./api";
 import { createFolder, getSnapshot } from "./drive";
+import { dropEntry, entryOf, logEntry } from "./uploadLog";
 import { ZipError, ZipReader } from "./zipStream";
 import { findFolder } from "../utils/tree";
-import { enqueueUpload } from "../utils/uploadQueue";
+import { enqueueUpload, isQueued } from "../utils/uploadQueue";
 
 // file bytes are folded into a Blob every few MB so they leave the JS heap
 const MERGE_BYTES = 8 * 1024 * 1024;
@@ -90,6 +92,8 @@ export const importsBusy = () =>
     jobs.some((j) => j.status === "waiting" || j.status === "working");
 
 export function clearFinished() {
+    // a failed link cleared away is not offered for resuming either
+    for (const job of jobs) if (job.status === "error") dropEntry(job.logId);
     jobs = jobs.filter((j) => j.status === "waiting" || j.status === "working");
     publish();
 }
@@ -97,8 +101,19 @@ export function clearFinished() {
 /** Queue links for import under `parentID` (null is My Drive). */
 export function startImport(links, parentID, { asMedia = false } = {}) {
     for (const link of links) {
+        // logged until the link has been read to the end, so a tab closed
+        // while the ZIP is still coming down can run the link again
+        const logId = `import:${uuid4()}`;
+        logEntry(logId, {
+            kind: "import",
+            link: link.trim(),
+            parentID,
+            asMedia,
+            queuedAt: Date.now(),
+        });
         jobs.push({
             id: nextId++,
+            logId,
             link: link.trim(),
             parentID,
             asMedia,
@@ -127,10 +142,12 @@ async function pump() {
             try {
                 await run(job);
                 patch(job, { status: "done" });
+                dropEntry(job.logId);
             } catch (error) {
-                if (job.abort.signal.aborted)
+                if (job.abort.signal.aborted) {
                     patch(job, { status: "cancelled" });
-                else patch(job, { status: "error", error: explain(error) });
+                    dropEntry(job.logId);
+                } else patch(job, { status: "error", error: explain(error) });
             }
         }
     } finally {
@@ -189,9 +206,14 @@ function folderMaker(rootId) {
     return ensure;
 }
 
-/** A file already there under the same name and size is not sent twice. */
-function alreadyThere(parentID, name, size) {
-    return getSnapshot().records.some(
+/**
+ * The record of a file already there under the same name and size, if any. A
+ * record without a file_id is a file whose upload was cut short; it is filled
+ * again rather than skipped, which is what lets a link be run a second time
+ * after the tab was closed.
+ */
+function sameFile(parentID, name, size) {
+    return getSnapshot().records.find(
         (r) =>
             r.type === "file" &&
             !r.trashedAt &&
@@ -245,16 +267,23 @@ async function run(job) {
     });
 
     const deliver = (parentID, fileName, bytes) => {
+        const existing = sameFile(parentID, fileName, bytes.size);
         if (bytes.size > MAX_FILE) {
             job.skipped.push({ name: fileName, reason: "quá 4 GB" });
-        } else if (alreadyThere(parentID, fileName, bytes.size)) {
+        } else if (existing?.file_id != null) {
             job.skipped.push({ name: fileName, reason: "đã có" });
+        } else if (existing && isQueued(existing.id)) {
+            job.skipped.push({ name: fileName, reason: "đang tải lên" });
         } else {
             enqueueUpload({
                 file: bytes.file(fileName),
                 parentID,
                 name: fileName,
                 asMedia: job.asMedia,
+                recordId: existing?.id,
+                // the parts an earlier, closed tab already sent
+                resume: existing && entryOf(existing.id)?.resume,
+                source: { dropbox: job.link, parent: job.parentID },
             });
             job.files += 1;
         }

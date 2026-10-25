@@ -82,6 +82,11 @@ export function getRecord(id) {
     return record && !record.deleted ? record : undefined;
 }
 
+/** Deleted on purpose (a tombstone), as opposed to never having arrived. */
+export function wasDeleted(id) {
+    return Boolean(records.get(id)?.deleted);
+}
+
 // ----- loading and merging -----------------------------------------------------
 
 function merge(incoming) {
@@ -226,14 +231,14 @@ function put(record) {
     });
 }
 
-export function createFolder(name, parent) {
+export function createFolder(name, parent, { id, createdAt } = {}) {
     const now = Date.now();
     const record = {
-        id: uuid4(),
+        id: id ?? uuid4(),
         type: "folder",
         name,
         parent: parent ?? null,
-        createdAt: now,
+        createdAt: createdAt ?? now,
         updatedAt: now,
     };
     put(record);
@@ -241,17 +246,23 @@ export function createFolder(name, parent) {
     return record;
 }
 
-/** A file whose bytes are not on Telegram yet; uploadQueue fills in file_id. */
-export function createFile({ name, parent, size, mime }) {
+/**
+ * A file whose bytes are not on Telegram yet; uploadQueue fills in file_id.
+ *
+ * `id` and `createdAt` are passed only when a resumed upload puts back a
+ * record the vault never received (the tab closed before the tree was
+ * pushed), so the upload log and the tree keep agreeing on the id.
+ */
+export function createFile({ id, name, parent, size, mime, createdAt }) {
     const now = Date.now();
     const record = {
-        id: uuid4(),
+        id: id ?? uuid4(),
         type: "file",
         name,
         parent: parent ?? null,
         size,
         mime,
-        createdAt: now,
+        createdAt: createdAt ?? now,
         updatedAt: now,
     };
     put(record);

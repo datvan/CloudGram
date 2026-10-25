@@ -31,6 +31,7 @@ import {
     refresh,
 } from "./drive";
 import { browserId, clearKey, loadKey, saveKey } from "./keystore";
+import { closeUploadLog, openUploadLog } from "./uploadLog";
 import {
     clearLegacySession,
     getClient,
@@ -172,6 +173,7 @@ export async function logout() {
     }
     await clearKey();
     closeDrive();
+    closeUploadLog();
     dek = null;
     account = null;
     set({ phase: "signedOut", username: null, me: null, notice: null });
@@ -184,6 +186,7 @@ async function enter(key) {
     set({ phase: "connecting", username: account.username });
     try {
         await openDrive(dek);
+        openUploadLog(account.username, dek);
         await migrateLegacyTree();
     } catch (error) {
         set({

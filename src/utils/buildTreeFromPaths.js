@@ -35,7 +35,14 @@ export function buildTreeFromPaths(files) {
             parentTempId = tempId;
         }
 
-        entries.push({ file, name, parentTempId });
+        // the handle (pickers.js) and path go to the upload log, for resuming
+        entries.push({
+            file,
+            name,
+            parentTempId,
+            handle: item.handle,
+            path: relativePath,
+        });
     }
 
     return { folders, files: entries };

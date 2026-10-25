@@ -1,0 +1,84 @@
+/**
+ * Choosing files to upload through the File System Access API where the
+ * browser has it (Chrome, Edge), so the upload log can keep a handle to each
+ * file and a closed tab can resume with one permission prompt instead of the
+ * user picking everything again. Firefox and Safari keep the plain <input>.
+ *
+ * Every entry is `{ file, path, handle }`, the shape readDrop() produces, with
+ * `handle` = { rootId, root, sub }: `root` is what the user picked or dropped
+ * (a folder, or a loose file), `sub` the path from it down to the file. A
+ * whole folder therefore needs one permission grant, not one per file.
+ */
+import { v4 as uuid4 } from "uuid";
+
+export const canKeepHandles =
+    typeof window !== "undefined" && "showOpenFilePicker" in window;
+
+/** The user closed the picker; not an error worth showing. */
+export const isAbort = (error) => error?.name === "AbortError";
+
+async function walk(dir, root, rootId, prefix, out) {
+    for await (const child of dir.values()) {
+        const sub = prefix ? `${prefix}/${child.name}` : child.name;
+        if (child.kind === "file") {
+            out.push({
+                file: await child.getFile(),
+                path: `${root.name}/${sub}`,
+                handle: { rootId, root, sub },
+            });
+        } else {
+            await walk(child, root, rootId, sub, out);
+        }
+    }
+}
+
+/** Entries under one picked or dropped handle, a file or a folder. */
+export async function entriesOf(root) {
+    const rootId = uuid4();
+    if (root.kind === "file") {
+        return [
+            {
+                file: await root.getFile(),
+                path: root.name,
+                handle: { rootId, root, sub: "" },
+            },
+        ];
+    }
+    const out = [];
+    await walk(root, root, rootId, "", out);
+    return out;
+}
+
+export async function pickFiles() {
+    const handles = await window.showOpenFilePicker({ multiple: true });
+    const lists = await Promise.all(handles.map(entriesOf));
+    return lists.flat();
+}
+
+export async function pickFolder() {
+    return entriesOf(await window.showDirectoryPicker());
+}
+
+/** Read the file a saved handle points at again. */
+export async function fileFrom({ root, sub }) {
+    if (root.kind === "file") return root.getFile();
+    const parts = sub.split("/");
+    const name = parts.pop();
+    let dir = root;
+    for (const part of parts) dir = await dir.getDirectoryHandle(part);
+    return (await dir.getFileHandle(name)).getFile();
+}
+
+/**
+ * Ask again for read access to saved handles, one prompt per root. The first
+ * request has to start inside the click that asked for it, so they are all
+ * started before anything is awaited.
+ */
+export async function askToRead(roots) {
+    const answers = await Promise.all(
+        roots.map((root) =>
+            root.requestPermission({ mode: "read" }).catch(() => "denied"),
+        ),
+    );
+    return roots.filter((_, i) => answers[i] === "granted");
+}
