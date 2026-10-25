@@ -17,10 +17,12 @@ export function retryingProgress(id, message) {
     };
 }
 
-export function uploadProgress(id, percentage) {
+// `speed` is in bytes a second, once there is enough to tell
+export function uploadProgress(id, percentage, speed) {
     return {
         id: id,
         percentage: Math.min(percentage, 100),
+        speed: speed,
         type: "UPLOADING",
     };
 }
