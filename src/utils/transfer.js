@@ -92,6 +92,29 @@ async function call(client, request, dcId, stats) {
 
 const newStats = () => ({ waits: [], reconnects: 0, retries: 0 });
 
+// Upload parts in flight across every file at once. A 2 MB file has only
+// four parts, so files going one or two at a time left the connection half
+// idle; now several go together and share this many, while a big file on its
+// own still gets them all. A part is read from disk only once it has a turn,
+// so this also bounds the memory the uploads hold.
+const UPLOAD_POOL = 16;
+let poolFree = UPLOAD_POOL;
+const poolWaiting = [];
+
+function takeTurn() {
+    if (poolFree > 0) {
+        poolFree -= 1;
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => poolWaiting.push(resolve));
+}
+
+function giveTurn() {
+    const next = poolWaiting.shift();
+    if (next) next();
+    else poolFree += 1;
+}
+
 /** Run `inflight` copies of `lane` and settle when all are done. */
 function lanes(inflight, lane) {
     return Promise.all(Array.from({ length: inflight }, lane));
@@ -124,32 +147,43 @@ export async function uploadParts(client, file, options = {}) {
         while (next < parts && !failed) {
             const index = next++;
             if (done.has(index)) continue;
-            const start = index * partSize;
-            const blob = file.slice(start, Math.min(size, start + partSize));
-            const bytes = Buffer.from(await blob.arrayBuffer());
-            const request = big
-                ? new Api.upload.SaveBigFilePart({
-                      fileId,
-                      filePart: index,
-                      fileTotalParts: parts,
-                      bytes,
-                  })
-                : new Api.upload.SaveFilePart({
-                      fileId,
-                      filePart: index,
-                      bytes,
-                  });
+            await takeTurn();
             try {
-                await call(client, request, dcId, stats);
-            } catch (error) {
-                failed = true;
-                throw error;
+                await sendPart(index);
+            } finally {
+                giveTurn();
             }
-            done.add(index);
-            sent += bytes.length;
-            onProgress?.(sent / Math.max(1, size));
         }
     });
+
+    async function sendPart(index) {
+        // another lane failed while this one waited for its turn
+        if (failed) return;
+        const start = index * partSize;
+        const blob = file.slice(start, Math.min(size, start + partSize));
+        const bytes = Buffer.from(await blob.arrayBuffer());
+        const request = big
+            ? new Api.upload.SaveBigFilePart({
+                  fileId,
+                  filePart: index,
+                  fileTotalParts: parts,
+                  bytes,
+              })
+            : new Api.upload.SaveFilePart({
+                  fileId,
+                  filePart: index,
+                  bytes,
+              });
+        try {
+            await call(client, request, dcId, stats);
+        } catch (error) {
+            failed = true;
+            throw error;
+        }
+        done.add(index);
+        sent += bytes.length;
+        onProgress?.(sent / Math.max(1, size));
+    }
 
     const name = file.name;
     return big

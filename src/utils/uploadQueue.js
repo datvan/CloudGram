@@ -24,13 +24,19 @@ import uploadFile, { sentChanges } from "./uploadFile";
  * One bounded worker pool behind every upload in the app.
  *
  * Parts are read from the file as they go out (transfer.js), so a big file no
- * longer sits in memory whole; two at a time still keeps the connection busy
- * between one file's last part and the next file's first.
+ * longer sits in memory whole. Several files go at once: a small one has too
+ * few parts to keep the connection busy alone, and transfer.js shares one
+ * budget of parts in flight among them, so more files do not mean more load.
+ *
+ * A file gives its place up as soon as its last part is out. Sending the
+ * message and writing the file id to the vault take a moment of their own,
+ * and the next file's parts go meanwhile; the vault writes of files finishing
+ * together are folded into one (drive.js, flush).
  *
  * Every job is also written to the upload log (services/uploadLog.js) until
  * its file_id is safely in the vault, so a closed tab can be resumed.
  */
-const MAX_CONCURRENT = 2;
+const MAX_CONCURRENT = 6;
 // pauses before each automatic retry of a whole file, in seconds; once they
 // run out the file waits for Retry. Each part has already been tried several
 // times by then (transfer.js), so these are for longer outages.
@@ -195,10 +201,14 @@ function pump() {
             continue;
         }
         running += 1;
-        run(job).finally(() => {
+        let released = false;
+        const release = () => {
+            if (released) return;
+            released = true;
             running -= 1;
             pump();
-        });
+        };
+        run(job, release).finally(release);
     }
 }
 
@@ -219,7 +229,8 @@ function retryDelay(job, error) {
     return RETRY_DELAYS[job.attempts];
 }
 
-async function run(job) {
+/** `release` gives the job's place in the pool to the next one. */
+async function run(job, release) {
     const { id, file, asMedia } = job;
     // kept on the job, through Retry too, so no attempt resends a part
     // Telegram already has
@@ -243,6 +254,8 @@ async function run(job) {
             // on disk before the message goes, so a reopened tab knows to
             // look for it in Saved Messages before sending another copy
             onSend: (kind) => {
+                // every part is out; what is left does not use the pool
+                release();
                 patchEntry(id, {
                     resume: saveResume(job.resume),
                     sending: Date.now(),
