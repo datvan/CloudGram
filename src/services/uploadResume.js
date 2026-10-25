@@ -291,15 +291,22 @@ function queue(item, file, handle, path, unchanged) {
  */
 export function matchPicked(waiting, picked) {
     const { byId } = getSnapshot();
-    const pool = waiting.filter((item) => getRecord(item.id));
+    // by name and size: thousands picked against thousands waiting
+    const pool = new Map();
+    const keyOf = (name, size) => `${size}
+${name}`;
+    for (const item of waiting) {
+        if (!getRecord(item.id)) continue;
+        const key = keyOf(item.name, item.size);
+        if (!pool.has(key)) pool.set(key, []);
+        pool.get(key).push(item);
+    }
     let queued = 0;
     for (const { file, path, handle } of picked) {
         const name = lastName(path ?? file.name);
         const dirs = (path ?? "").split("/").filter(Boolean).slice(0, -1);
-        const candidates = pool.filter(
-            (item) => item.name === name && item.size === file.size,
-        );
-        if (!candidates.length) continue;
+        const candidates = pool.get(keyOf(name, file.size));
+        if (!candidates?.length) continue;
         const score = (item) => {
             const folders = pathTo(byId, getRecord(item.id).parent).map(
                 (f) => f.name,
@@ -314,12 +321,12 @@ export function matchPicked(waiting, picked) {
                 same += 1;
             return same;
         };
-        const best = candidates.sort((a, b) => score(b) - score(a))[0];
-        pool.splice(pool.indexOf(best), 1);
+        candidates.sort((a, b) => score(b) - score(a));
+        const best = candidates.shift();
         queue(best, file, handle, path, sameBytes(best, file));
         queued += 1;
     }
-    return { queued, unmatched: pool };
+    return { queued, unmatched: [...pool.values()].flat() };
 }
 
 /**
