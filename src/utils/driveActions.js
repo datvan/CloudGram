@@ -11,48 +11,188 @@ import { buildTreeFromPaths } from "./buildTreeFromPaths";
 import downloadFile from "./downloadFile";
 import { entriesOf } from "./pickers";
 import { collectSubtree, findFolder, messageIdsOf, recordIdsOf } from "./tree";
-import { cancelUploads, enqueueUpload } from "./uploadQueue";
+import { cancelUploads, enqueueUpload, isQueued } from "./uploadQueue";
 import { createFolder, getSnapshot, removeRecords } from "../services/drive";
+import { TAB, liveTabs, readEntries } from "../services/uploadLog";
 import { dropShares } from "../services/shares";
 import { getClient } from "../services/telegram";
 
-/** Upload loose files, or a picked/dropped folder, under `parentID`. */
-export function uploadEntries(entries, parentID, { asMedia = false } = {}) {
+/**
+ * Upload loose files, or a picked/dropped folder, under `parentID`.
+ *
+ * Folders of the same name merge. For files:
+ *
+ * - one still unfinished in the target folder under the same name and size
+ *   (a closed tab, a failure) is uploaded into its old record, from the
+ *   parts Telegram already has when the bytes are unchanged. Nothing is
+ *   asked: it is the same upload, interrupted.
+ * - one whose name is taken by a finished file is a conflict, as when
+ *   copying in a file manager. `onConflict(conflicts)` decides for all of
+ *   them at once and resolves to "replace" (the old file goes to the trash
+ *   once the new one is up), "keep" (the new one is renamed "name (1).ext"),
+ *   "skip", or "cancel", which uploads nothing at all. Without it they are
+ *   skipped.
+ *
+ * Resolves to how many files were `queued`, `resumed`, `replaced`,
+ * `renamed` and `skipped`.
+ */
+export async function uploadEntries(
+    entries,
+    parentID,
+    { asMedia = false, onConflict } = {},
+) {
     const tree = buildTreeFromPaths(entries);
-    const records = [...getSnapshot().records];
+    const records = getSnapshot().records;
     const realId = new Map();
+    const parentOf = (item) =>
+        item.parentTempId ? realId.get(item.parentTempId) : parentID;
 
-    // buildTreeFromPaths lists parents before children, so every parent
-    // already has a real id by the time its child is reached.
+    // Uploading the same folder twice merges into the existing one. Folders
+    // still missing are only made once the conflicts are settled, so a
+    // cancelled upload leaves nothing behind; nothing in them can conflict.
+    // buildTreeFromPaths lists parents before children.
+    const missing = [];
     for (const folder of tree.folders) {
-        const parent = folder.parentTempId
-            ? realId.get(folder.parentTempId)
-            : parentID;
-        // uploading the same folder twice merges into the existing one
-        const existing = findFolder(records, parent, folder.name);
-        if (existing) {
-            realId.set(folder.tempId, existing.id);
-            continue;
-        }
-        const record = createFolder(folder.name, parent);
-        // keep the snapshot current so the next sibling dedupes too
-        records.push(record);
+        const parent = parentOf(folder);
+        const existing =
+            parent !== MISSING && findFolder(records, parent, folder.name);
+        realId.set(folder.tempId, existing ? existing.id : MISSING);
+        if (!existing) missing.push(folder);
+    }
+
+    // what each folder already holds, by name
+    const named = new Map();
+    for (const record of records) {
+        if (record.trashedAt) continue;
+        const key = nameKey(record.parent, record.name);
+        if (!named.has(key)) named.set(key, []);
+        named.get(key).push(record);
+    }
+
+    const placed = tree.files.map((entry) => {
+        const parent = parentOf(entry);
+        const name = entry.name ?? entry.file.name;
+        const there =
+            parent === MISSING ? [] : named.get(nameKey(parent, name)) ?? [];
+        const files = there.filter((r) => r.type === "file");
+        return {
+            entry,
+            parent,
+            name,
+            unfinished: files.find(
+                (r) => r.file_id == null && r.size === entry.file.size,
+            ),
+            taken: files.find((r) => r.file_id != null),
+        };
+    });
+
+    // unfinished matches may have a log entry: the parts already sent, and
+    // whether another open tab is uploading the file right now
+    let logOf = new Map();
+    let live = new Set();
+    if (placed.some((p) => p.unfinished)) {
+        [logOf, live] = await Promise.all([
+            readEntries().then((all) => new Map(all.map((e) => [e.id, e]))),
+            liveTabs(),
+        ]);
+    }
+
+    const conflicts = placed.filter((p) => !p.unfinished && p.taken);
+    const choice = conflicts.length
+        ? (await onConflict?.(
+              conflicts.map((p) => ({
+                  name: p.name,
+                  size: p.entry.file.size,
+                  existingSize: p.taken.size,
+              })),
+          )) ?? "skip"
+        : null;
+
+    const counts = {
+        queued: 0,
+        resumed: 0,
+        replaced: 0,
+        renamed: 0,
+        skipped: 0,
+    };
+    if (choice === "cancel") return counts;
+
+    for (const folder of missing) {
+        const record = createFolder(folder.name, parentOf(folder));
         realId.set(folder.tempId, record.id);
     }
-
-    for (const entry of tree.files) {
+    const queue = (p, extra = {}) =>
         enqueueUpload({
-            file: entry.file,
-            name: entry.name,
-            handle: entry.handle,
-            path: entry.path,
+            file: p.entry.file,
+            name: p.name,
+            handle: p.entry.handle,
+            path: p.entry.path,
             asMedia,
-            parentID: entry.parentTempId
-                ? realId.get(entry.parentTempId)
-                : parentID,
+            parentID: parentOf(p.entry),
+            ...extra,
         });
+
+    for (const p of placed) {
+        const { entry, unfinished, taken } = p;
+        if (unfinished) {
+            const log = logOf.get(unfinished.id);
+            if (
+                isQueued(unfinished.id) ||
+                (log && log.tab !== TAB && live.has(log.tab)) ||
+                // its message may be out already; the resume banner looks
+                // for it in Saved Messages instead of sending a second copy
+                log?.messageId ||
+                log?.sending
+            ) {
+                counts.skipped += 1;
+                continue;
+            }
+            const unchanged =
+                log?.lastModified == null ||
+                log.lastModified === entry.file.lastModified;
+            enqueueUpload({
+                file: entry.file,
+                recordId: unfinished.id,
+                handle: entry.handle,
+                path: entry.path,
+                asMedia: log?.asMedia ?? asMedia,
+                resume: unchanged ? log?.resume : undefined,
+                replaces: log?.replaces,
+            });
+            counts.resumed += 1;
+        } else if (!taken) {
+            queue(p);
+            counts.queued += 1;
+        } else if (choice === "replace") {
+            queue(p, { replaces: taken.id });
+            counts.replaced += 1;
+        } else if (choice === "keep") {
+            const name = freeName(named, p.parent, p.name);
+            // taken from now on, for the next file of this batch
+            named.set(nameKey(p.parent, name), [{ name }]);
+            queue(p, { name });
+            counts.renamed += 1;
+        } else {
+            counts.skipped += 1;
+        }
     }
-    return tree.files.length;
+    return counts;
+}
+
+// the parent of what goes into a folder not made yet
+const MISSING = Symbol("missing folder");
+
+const nameKey = (parent, name) => `${parent ?? ""}\n${name}`;
+
+/** "name (1).ext", "name (2).ext"... whichever is free in the folder. */
+function freeName(named, parent, name) {
+    const dot = name.lastIndexOf(".");
+    const [stem, ext] =
+        dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+    for (let n = 1; ; n += 1) {
+        const candidate = `${stem} (${n})${ext}`;
+        if (!named.has(nameKey(parent, candidate))) return candidate;
+    }
 }
 
 /**

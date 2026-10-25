@@ -217,7 +217,12 @@ export async function resume(found, granted) {
             try {
                 const message = await sentMessage(entry);
                 if (message) {
-                    await adoptMessage(id, message, entry.sentAs);
+                    await adoptMessage(
+                        id,
+                        message,
+                        entry.sentAs,
+                        entry.replaces,
+                    );
                     result.adopted += 1;
                     continue;
                 }
@@ -281,6 +286,7 @@ function queue(item, file, handle, path, unchanged) {
         resume: unchanged ? item.entry?.resume : undefined,
         handle,
         path: path ?? record.name,
+        replaces: item.entry?.replaces,
     });
 }
 

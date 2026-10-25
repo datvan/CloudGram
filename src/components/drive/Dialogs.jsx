@@ -26,6 +26,7 @@ import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import { canMove, useDrive } from "../../services/drive";
 import { changePassword } from "../../services/account";
 import { describeError } from "../../services/api";
+import { formatSize } from "../../utils/format";
 import { pathTo } from "../../utils/tree";
 
 /** New folder and rename share this: a title, one name field, OK. */
@@ -436,6 +437,123 @@ export function UploadModeDialog({
         </Dialog>
     );
 }
+
+/**
+ * Files whose names are already taken in the folder they go to, as a file
+ * manager asks when copying: replace, skip, or keep both. One answer covers
+ * every conflict of the upload. See uploadEntries (driveActions.js).
+ */
+export function UploadConflictDialog({ conflicts, onChoose }) {
+    const open = Boolean(conflicts?.length);
+    const list = conflicts ?? [];
+    const one = list.length === 1 ? list[0] : null;
+    const sameSize = list.filter((c) => c.size === c.existingSize).length;
+    const shown = list.slice(0, 5);
+
+    const options = [
+        {
+            choice: "replace",
+            title: one ? "Thay thế tệp đang có" : "Thay thế các tệp đang có",
+            detail: "Bản cũ chuyển vào thùng rác khi bản mới đã tải lên xong.",
+        },
+        {
+            choice: "skip",
+            title: one ? "Bỏ qua tệp này" : "Bỏ qua các tệp này",
+            detail: "Giữ nguyên bản đang có, không tải bản mới lên.",
+        },
+        {
+            choice: "keep",
+            title: "Giữ cả hai",
+            detail: one
+                ? "Bản mới được đổi tên, ví dụ “tên (1).đuôi”."
+                : "Các bản mới được đổi tên, ví dụ “tên (1).đuôi”.",
+        },
+    ];
+
+    return (
+        <Dialog
+            open={open}
+            onClose={() => onChoose("cancel")}
+            maxWidth="sm"
+            fullWidth
+        >
+            <DialogTitle>
+                {one
+                    ? "Tệp này đã có trong thư mục"
+                    : `${list.length} tệp đã có trong thư mục`}
+            </DialogTitle>
+            <DialogContent>
+                {one ? (
+                    <Typography variant="body2">
+                        Đã có “{one.name}” ({formatSize(one.existingSize)}). Bản
+                        mới: {formatSize(one.size)}
+                        {one.size === one.existingSize
+                            ? ", cùng kích thước, nhiều khả năng là cùng một tệp."
+                            : "."}
+                    </Typography>
+                ) : (
+                    <>
+                        <Typography variant="body2">
+                            Thư mục đích đã có tệp trùng tên với {list.length}{" "}
+                            tệp sắp tải lên
+                            {sameSize
+                                ? `; ${sameSize} tệp trong số đó cùng kích thước, nhiều khả năng là cùng một tệp`
+                                : ""}
+                            :
+                        </Typography>
+                        <Box
+                            component="ul"
+                            sx={{ my: 1, pl: 3, typography: "body2" }}
+                        >
+                            {shown.map((c) => (
+                                <li key={c.name}>{c.name}</li>
+                            ))}
+                            {list.length > shown.length && (
+                                <li>
+                                    và {list.length - shown.length} tệp khác
+                                </li>
+                            )}
+                        </Box>
+                    </>
+                )}
+                <List sx={{ mt: 1 }}>
+                    {options.map((o, i) => (
+                        <ListItemButton
+                            key={o.choice}
+                            autoFocus={i === 1}
+                            onClick={() => onChoose(o.choice)}
+                            sx={{
+                                border: 1,
+                                borderColor: "divider",
+                                borderRadius: 2,
+                                mb: 1,
+                            }}
+                        >
+                            <ListItemText
+                                primary={o.title}
+                                secondary={o.detail}
+                            />
+                        </ListItemButton>
+                    ))}
+                </List>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={() => onChoose("cancel")}>Huỷ tải lên</Button>
+            </DialogActions>
+        </Dialog>
+    );
+}
+
+UploadConflictDialog.propTypes = {
+    conflicts: PropTypes.arrayOf(
+        PropTypes.shape({
+            name: PropTypes.string,
+            size: PropTypes.number,
+            existingSize: PropTypes.number,
+        }),
+    ),
+    onChoose: PropTypes.func,
+};
 
 UploadModeDialog.propTypes = {
     open: PropTypes.bool,
