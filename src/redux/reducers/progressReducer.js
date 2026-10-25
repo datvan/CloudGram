@@ -42,6 +42,7 @@ export default function reducer(
         type: action.type,
         percentage: action.percentage ?? 0,
         message: action.message,
+        speed: action.speed,
     };
     // An ERROR entry carries no direction of its own, so remember which way
     // the transfer was going from the entry it replaces.

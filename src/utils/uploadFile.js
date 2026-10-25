@@ -88,6 +88,25 @@ export function sentChanges(message, kind, size) {
     return changes;
 }
 
+// how far back the upload speed looks, so it neither jumps with every part
+// nor lags a change in the connection by long
+const SPEED_WINDOW = 3000;
+
+/** Feed it the bytes sent so far; it answers with bytes a second lately. */
+function speedMeter() {
+    const samples = [];
+    return (sent) => {
+        const now = performance.now();
+        samples.push([now, sent]);
+        while (samples.length > 2 && samples[1][0] <= now - SPEED_WINDOW)
+            samples.shift();
+        const [since, from] = samples[0];
+        // a part or two is not enough to say anything
+        if (now - since < 500) return undefined;
+        return ((sent - from) * 1000) / (now - since);
+    };
+}
+
 export default async function uploadFile(
     id,
     file,
@@ -96,10 +115,13 @@ export default async function uploadFile(
     const { kind, options } = await sendOptions(file, asMedia);
     const client = getClient();
 
+    const speed = speedMeter();
     const inputFile = await uploadParts(client, file, {
         resume,
         onProgress: (fraction) =>
-            Store.dispatch(uploadProgress(id, fraction * 100)),
+            Store.dispatch(
+                uploadProgress(id, fraction * 100, speed(fraction * file.size)),
+            ),
     });
 
     // from here a closed tab may leave a message nobody recorded

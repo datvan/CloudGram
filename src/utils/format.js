@@ -1,5 +1,11 @@
 export { formatSize } from "./buildTreeFromPaths";
 
+/** Bytes a second as megabits a second, the way connections are sold. */
+export function formatSpeed(bytesPerSecond) {
+    const mbps = (bytesPerSecond * 8) / 1e6;
+    return `${mbps < 10 ? mbps.toFixed(1) : Math.round(mbps)} Mbps`;
+}
+
 /** Drive's style: the time for today, the day for this year, else the full date. */
 export function formatDate(ms) {
     if (!ms) return "—";

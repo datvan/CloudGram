@@ -20,6 +20,7 @@ import ScheduleIcon from "@mui/icons-material/Schedule";
 
 import { FileIcon } from "./FileIcon";
 import { getRecord } from "../../services/drive";
+import { formatSpeed } from "../../utils/format";
 import { clearFinished } from "../../redux/actions/progressAction";
 import { retryUpload } from "../../utils/uploadQueue";
 
@@ -46,9 +47,16 @@ export default function TransferPanel() {
     const failed = active.filter((p) => p.type === "ERROR");
     const uploading = running.filter((p) => p.direction !== "down").length;
     const downloading = running.length - uploading;
+    // what every upload going right now adds up to
+    const upSpeed = running
+        .filter((p) => p.type === "UPLOADING" && p.speed)
+        .reduce((sum, p) => sum + p.speed, 0);
     const title = running.length
         ? [
-              uploading && `Đang tải lên ${uploading} mục`,
+              uploading &&
+                  `Đang tải lên ${uploading} mục${
+                      upSpeed ? ` · ${formatSpeed(upSpeed)}` : ""
+                  }`,
               downloading && `Đang tải xuống ${downloading} mục`,
           ]
               .filter(Boolean)
@@ -152,6 +160,18 @@ export default function TransferPanel() {
                                         fontSize="small"
                                     />
                                 </Tooltip>
+                            )}
+                            {entry.type === "UPLOADING" && entry.speed > 0 && (
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    noWrap
+                                    sx={{
+                                        fontVariantNumeric: "tabular-nums",
+                                    }}
+                                >
+                                    {formatSpeed(entry.speed)}
+                                </Typography>
                             )}
                             {(entry.type === "UPLOADING" ||
                                 entry.type === "DOWNLOADING") && (
