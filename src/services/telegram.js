@@ -4,6 +4,7 @@ import { AuthKey } from "telegram/crypto/AuthKey";
 import { Buffer } from "buffer/";
 
 import { API_ID, API_HASH } from "../config/config";
+import { ConnectionWebCryptoObfuscated } from "./obfuscatedTransport";
 
 /**
  * The one Telegram connection the app uses.
@@ -18,6 +19,8 @@ let client = null;
 export function newClient(session = "") {
     return new TelegramClient(new StringSession(session), API_ID, API_HASH, {
         connectionRetries: 5,
+        // GramJS's own, with the per-byte encryption moved to WebCrypto
+        connection: ConnectionWebCryptoObfuscated,
     });
 }
 
