@@ -53,6 +53,14 @@ export function completedProgress(id) {
     };
 }
 
+/** Several of the actions above as one update. */
+export function batchProgress(actions) {
+    return {
+        type: "BATCH",
+        actions: actions,
+    };
+}
+
 export function clearFinished() {
     return {
         type: "CLEAR_FINISHED",

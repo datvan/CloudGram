@@ -70,6 +70,8 @@ import {
     kindOf,
     previewKind,
 } from "../../components/drive/fileTypes";
+import { Store } from "../../redux/store";
+import { activeEntry } from "../../redux/reducers/progressReducer";
 import * as drive from "../../services/drive";
 import { logout, logoutOthers, unlinkTelegram } from "../../services/account";
 import { describeError } from "../../services/api";
@@ -144,9 +146,6 @@ export default function DriveApp({ mode, onToggleMode }) {
     const desktop = useMediaQuery(theme.breakpoints.up("md"));
     const view = useView();
     const { records, byId } = drive.useDrive();
-    const activeProgress = useSelector(
-        (state) => state.progress.activeProgress,
-    );
 
     const [navOpen, setNavOpen] = useState(false);
     const [layout, setLayout] = useState(() =>
@@ -274,7 +273,9 @@ export default function DriveApp({ mode, onToggleMode }) {
 
     useEffect(() => {
         const onBeforeUnload = (event) => {
-            const uploading = activeProgress.some(
+            // read when leaving rather than subscribed to: following every
+            // upload's progress would render the whole drive with each one
+            const uploading = Store.getState().progress.activeProgress.some(
                 (p) => p.type === "UPLOADING" || p.type === "QUEUED",
             );
             if (drive.getSnapshot().dirty || uploading || importsBusy()) {
@@ -284,7 +285,7 @@ export default function DriveApp({ mode, onToggleMode }) {
         };
         window.addEventListener("beforeunload", onBeforeUnload);
         return () => window.removeEventListener("beforeunload", onBeforeUnload);
-    }, [activeProgress]);
+    }, []);
 
     // ----- selection --------------------------------------------------------------------
 
@@ -355,6 +356,14 @@ export default function DriveApp({ mode, onToggleMode }) {
     const menuItems = menu
         ? menu.ids.map((id) => byId.get(id)).filter(Boolean)
         : [];
+    // a boolean, so the page renders again only when the answer changes
+    const canRetry = useSelector((state) =>
+        menuItems.some(
+            (item) =>
+                item.file_id == null &&
+                activeEntry(state, item.id)?.type === "ERROR",
+        ),
+    );
 
     async function run(label, fn) {
         setBusy(true);
@@ -1242,12 +1251,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                 items={menuItems}
                 inTrash={inTrash}
                 showLocate={view.kind !== "folder" && !inTrash}
-                canRetry={menuItems.some(
-                    (item) =>
-                        item.file_id == null &&
-                        activeProgress.find((p) => p.id === item.id)?.type ===
-                            "ERROR",
-                )}
+                canRetry={canRetry}
                 onClose={() => setMenu(null)}
                 onAction={(action) => act(action, menuItems)}
             />

@@ -11,6 +11,7 @@ import {
 } from "../services/uploadLog";
 import { Store } from "../redux/store";
 import {
+    batchProgress,
     completedProgress,
     errorProgress,
     queuedProgress,
@@ -44,6 +45,8 @@ const failed = new Map();
 /** Every job not finished yet, by record id, so none is queued twice. */
 const jobs = new Map();
 let running = 0;
+/** Files queued since the page last heard, announced together. */
+let announce = [];
 
 // the file id is a big integer, which JSON cannot carry
 const saveResume = (resume) =>
@@ -112,7 +115,15 @@ export function enqueueUpload({
               mime: file.type || undefined,
           });
     if (!record) return undefined;
-    Store.dispatch(queuedProgress(record.id, record.name));
+    // a folder queues thousands in one go; one update for all of them, or
+    // the page renders thousands of times before the first byte goes out
+    if (!announce.length)
+        queueMicrotask(() => {
+            const actions = announce;
+            announce = [];
+            Store.dispatch(batchProgress(actions));
+        });
+    announce.push(queuedProgress(record.id, record.name));
     const job = { id: record.id, file, asMedia, resume: loadResume(resume) };
     jobs.set(record.id, job);
     logEntry(record.id, {

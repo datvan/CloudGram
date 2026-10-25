@@ -88,6 +88,10 @@ export function sentChanges(message, kind, size) {
     return changes;
 }
 
+// the page hears about a file's progress at most this often; every 512 KB
+// part would be a dozen updates a second per file
+const PROGRESS_EVERY = 250;
+
 // how far back the upload speed looks, so it neither jumps with every part
 // nor lags a change in the connection by long
 const SPEED_WINDOW = 3000;
@@ -116,12 +120,16 @@ export default async function uploadFile(
     const client = getClient();
 
     const speed = speedMeter();
+    let told = 0;
     const inputFile = await uploadParts(client, file, {
         resume,
-        onProgress: (fraction) =>
-            Store.dispatch(
-                uploadProgress(id, fraction * 100, speed(fraction * file.size)),
-            ),
+        onProgress: (fraction) => {
+            const rate = speed(fraction * file.size);
+            const now = performance.now();
+            if (fraction < 1 && now - told < PROGRESS_EVERY) return;
+            told = now;
+            Store.dispatch(uploadProgress(id, fraction * 100, rate));
+        },
     });
 
     // from here a closed tab may leave a message nobody recorded

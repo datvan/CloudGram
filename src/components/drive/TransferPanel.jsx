@@ -29,6 +29,9 @@ import { retryUpload } from "../../utils/uploadQueue";
  * entries in flight, most of them scrolled out of view in the file list, so
  * this is what answers "is it done yet".
  */
+// queued and finished rows listed at most, each
+const SHOWN = 30;
+
 export default function TransferPanel() {
     const dispatch = useDispatch();
     const active = useSelector((state) => state.progress.activeProgress);
@@ -76,7 +79,23 @@ export default function TransferPanel() {
         setHidden(true);
     }
 
-    const rows = [...active, ...finished.map((f) => ({ ...f, type: "DONE" }))];
+    // A folder of thousands would mean thousands of rows, rendered again with
+    // every update, and that alone slowed the uploads to a crawl. What moves
+    // goes first, then a screenful of the rest; the others are only counted.
+    const moving = active.filter(
+        (p) => p.type === "UPLOADING" || p.type === "DOWNLOADING",
+    );
+    const queued = active.filter((p) => p.type === "QUEUED");
+    const rows = [
+        ...moving,
+        ...failed,
+        ...queued.slice(0, SHOWN),
+        ...finished.slice(0, SHOWN).map((f) => ({ ...f, type: "DONE" })),
+    ];
+    const notShown = [
+        queued.length > SHOWN && `${queued.length - SHOWN} mục đang chờ`,
+        finished.length > SHOWN && `${finished.length - SHOWN} mục đã xong`,
+    ].filter(Boolean);
 
     return (
         <Paper
@@ -214,6 +233,16 @@ export default function TransferPanel() {
                             )}
                         </Stack>
                     ))}
+                    {notShown.length > 0 && (
+                        <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            component="div"
+                            sx={{ px: 2.5, py: 1 }}
+                        >
+                            Và {notShown.join(", ")} nữa.
+                        </Typography>
+                    )}
                 </Box>
             )}
         </Paper>
