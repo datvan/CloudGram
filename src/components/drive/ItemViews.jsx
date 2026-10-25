@@ -22,15 +22,14 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 
 import { FileIcon } from "./FileIcon";
+import { activeEntry } from "../../redux/reducers/progressReducer";
 import { DRAG_TYPE, kindOf } from "./fileTypes";
 import { formatDate, formatSize } from "../../utils/format";
 import { useThumbnail } from "../../utils/thumbnails";
 
 /** Upload/download state shown next to a name, or nothing when idle. */
 function TransferBadge({ id, pending }) {
-    const progress = useSelector((state) =>
-        state.progress.activeProgress.find((p) => p.id === id),
-    );
+    const progress = useSelector((state) => activeEntry(state, id));
     if (progress?.type === "ERROR") {
         return (
             <Tooltip title={progress.message ?? "Thất bại"}>
