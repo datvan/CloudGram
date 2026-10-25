@@ -9,6 +9,7 @@
  */
 import { buildTreeFromPaths } from "./buildTreeFromPaths";
 import downloadFile from "./downloadFile";
+import { entriesOf } from "./pickers";
 import { collectSubtree, findFolder, messageIdsOf, recordIdsOf } from "./tree";
 import { cancelUploads, enqueueUpload } from "./uploadQueue";
 import { createFolder, getSnapshot, removeRecords } from "../services/drive";
@@ -43,6 +44,8 @@ export function uploadEntries(entries, parentID, { asMedia = false } = {}) {
         enqueueUpload({
             file: entry.file,
             name: entry.name,
+            handle: entry.handle,
+            path: entry.path,
             asMedia,
             parentID: entry.parentTempId
                 ? realId.get(entry.parentTempId)
@@ -57,23 +60,33 @@ export function uploadEntries(entries, parentID, { asMedia = false } = {}) {
  * Must be called synchronously inside the drop handler: the items list is
  * emptied once the event returns, so the entries are grabbed up front.
  */
-export function readDrop(dataTransfer) {
+export async function readDrop(dataTransfer) {
+    const items = Array.from(dataTransfer.items ?? []).filter(
+        (item) => item.kind === "file",
+    );
+    // Chrome and Edge hand out file handles too, which is what lets a closed
+    // tab resume without the files being dropped again (pickers.js)
+    const handles = items.map((item) => item.getAsFileSystemHandle?.());
     const roots = [];
-    for (const item of Array.from(dataTransfer.items ?? [])) {
+    for (const item of items) {
         const entry = item.webkitGetAsEntry?.();
         if (entry) roots.push(entry);
     }
-    if (!roots.length) {
-        return Promise.resolve(
-            Array.from(dataTransfer.files ?? []).map((file) => ({
-                file,
-                path: file.name,
-            })),
-        );
+    const loose = Array.from(dataTransfer.files ?? []);
+    if (items.length && handles.every(Boolean)) {
+        try {
+            const resolved = await Promise.all(handles);
+            if (resolved.every(Boolean)) {
+                const lists = await Promise.all(resolved.map(entriesOf));
+                return lists.flat();
+            }
+        } catch {
+            // fall back to the entries grabbed above
+        }
     }
-    return Promise.all(roots.map((entry) => walk(entry, ""))).then((lists) =>
-        lists.flat(),
-    );
+    if (!roots.length) return loose.map((file) => ({ file, path: file.name }));
+    const lists = await Promise.all(roots.map((entry) => walk(entry, "")));
+    return lists.flat();
 }
 
 async function walk(entry, prefix) {

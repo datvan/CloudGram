@@ -75,10 +75,23 @@ function largestPhotoSize(photo) {
  * through, so the error is marked `maybeSent` and the caller should not send
  * again on its own.
  */
+/**
+ * The record fields a sent message changes. Also used for a message found
+ * again after a reload, when the upload that sent it is gone.
+ */
+export function sentChanges(message, kind, size) {
+    const changes = { sentAs: kind };
+    if (kind === "photo" && message.media?.photo) {
+        changes.mime = "image/jpeg";
+        changes.size = largestPhotoSize(message.media.photo) || size;
+    }
+    return changes;
+}
+
 export default async function uploadFile(
     id,
     file,
-    { asMedia = false, resume } = {},
+    { asMedia = false, resume, onSend } = {},
 ) {
     const { kind, options } = await sendOptions(file, asMedia);
     const client = getClient();
@@ -89,6 +102,8 @@ export default async function uploadFile(
             Store.dispatch(uploadProgress(id, fraction * 100)),
     });
 
+    // from here a closed tab may leave a message nobody recorded
+    await onSend?.(kind);
     let message;
     try {
         message = await client.sendFile("me", {
@@ -100,10 +115,5 @@ export default async function uploadFile(
         throw error;
     }
 
-    const changes = { sentAs: kind };
-    if (kind === "photo" && message.media?.photo) {
-        changes.mime = "image/jpeg";
-        changes.size = largestPhotoSize(message.media.photo) || file.size;
-    }
-    return { message, changes };
+    return { message, changes: sentChanges(message, kind, file.size) };
 }

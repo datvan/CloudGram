@@ -54,6 +54,7 @@ import DetailsPanel from "../../components/drive/DetailsPanel";
 import PreviewDialog from "../../components/drive/PreviewDialog";
 import ShareDialog from "../../components/drive/ShareDialog";
 import DropboxDialog from "../../components/drive/DropboxDialog";
+import ResumeBanner from "../../components/drive/ResumeBanner";
 import TransferPanel from "../../components/drive/TransferPanel";
 import useMarquee from "../../components/drive/useMarquee";
 import {
@@ -82,6 +83,12 @@ import {
     uploadEntries,
 } from "../../utils/driveActions";
 import { fold } from "../../utils/format";
+import {
+    canKeepHandles,
+    isAbort,
+    pickFiles,
+    pickFolder,
+} from "../../utils/pickers";
 import { isHidden, pathTo } from "../../utils/tree";
 import { retryUpload } from "../../utils/uploadQueue";
 
@@ -493,6 +500,19 @@ export default function DriveApp({ mode, onToggleMode }) {
         }
     }
 
+    // Chrome and Edge get the File System Access pickers, whose handles let a
+    // closed tab resume without picking again; others keep the <input>
+    function openPicker(folder) {
+        if (!canKeepHandles) {
+            (folder ? folderInput : fileInput).current?.click();
+            return;
+        }
+        (folder ? pickFolder() : pickFiles()).then(startUpload, (err) => {
+            if (!isAbort(err))
+                setNotice({ severity: "error", text: describeError(err) });
+        });
+    }
+
     function onPickFiles(event) {
         startUpload(Array.from(event.target.files ?? []));
         event.target.value = "";
@@ -623,8 +643,8 @@ export default function DriveApp({ mode, onToggleMode }) {
     const sidebar = (
         <Sidebar
             onNewFolder={() => setDialog({ type: "newFolder" })}
-            onUploadFiles={() => fileInput.current?.click()}
-            onUploadFolder={() => folderInput.current?.click()}
+            onUploadFiles={() => openPicker(false)}
+            onUploadFolder={() => openPicker(true)}
             onImportDropbox={openDropbox}
             onNavigate={() => setNavOpen(false)}
             onDropOn={onDropOnFolder}
@@ -1004,6 +1024,8 @@ export default function DriveApp({ mode, onToggleMode }) {
                         )}
                     </Box>
 
+                    <ResumeBanner onNotice={setNotice} />
+
                     {/* the items */}
                     <Box
                         ref={marquee.ref}
@@ -1040,7 +1062,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                         ) : (
                             <EmptyState
                                 view={view}
-                                onUpload={() => fileInput.current?.click()}
+                                onUpload={() => openPicker(false)}
                             />
                         )}
                     </Box>
@@ -1187,8 +1209,8 @@ export default function DriveApp({ mode, onToggleMode }) {
                 }
                 onClose={() => setNewMenu(null)}
                 onNewFolder={() => setDialog({ type: "newFolder" })}
-                onUploadFiles={() => fileInput.current?.click()}
-                onUploadFolder={() => folderInput.current?.click()}
+                onUploadFiles={() => openPicker(false)}
+                onUploadFolder={() => openPicker(true)}
                 onImportDropbox={openDropbox}
             />
 
