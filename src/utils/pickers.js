@@ -17,23 +17,36 @@ export const canKeepHandles =
 /** The user closed the picker; not an error worth showing. */
 export const isAbort = (error) => error?.name === "AbortError";
 
-async function walk(dir, root, rootId, prefix, out) {
+// how many files are asked for their details at once while walking a folder
+const READ_AHEAD = 64;
+
+async function walk(dir, root, rootId, prefix, out, onCount) {
+    const files = [];
     for await (const child of dir.values()) {
         const sub = prefix ? `${prefix}/${child.name}` : child.name;
-        if (child.kind === "file") {
+        if (child.kind === "file") files.push([child, sub]);
+        else await walk(child, root, rootId, sub, out, onCount);
+    }
+    // one at a time, a folder of thousands takes long enough to look stuck
+    for (let i = 0; i < files.length; i += READ_AHEAD) {
+        const batch = files.slice(i, i + READ_AHEAD);
+        const read = await Promise.all(batch.map(([child]) => child.getFile()));
+        batch.forEach(([, sub], j) =>
             out.push({
-                file: await child.getFile(),
+                file: read[j],
                 path: `${root.name}/${sub}`,
                 handle: { rootId, root, sub },
-            });
-        } else {
-            await walk(child, root, rootId, sub, out);
-        }
+            }),
+        );
+        onCount?.(out.length);
     }
 }
 
-/** Entries under one picked or dropped handle, a file or a folder. */
-export async function entriesOf(root) {
+/**
+ * Entries under one picked or dropped handle, a file or a folder.
+ * `onCount` hears how many files have been read so far.
+ */
+export async function entriesOf(root, onCount) {
     const rootId = uuid4();
     if (root.kind === "file") {
         return [
@@ -45,18 +58,21 @@ export async function entriesOf(root) {
         ];
     }
     const out = [];
-    await walk(root, root, rootId, "", out);
+    await walk(root, root, rootId, "", out, onCount);
     return out;
 }
 
 export async function pickFiles() {
     const handles = await window.showOpenFilePicker({ multiple: true });
-    const lists = await Promise.all(handles.map(entriesOf));
+    const lists = await Promise.all(handles.map((h) => entriesOf(h)));
     return lists.flat();
 }
 
-export async function pickFolder() {
-    return entriesOf(await window.showDirectoryPicker());
+/** `onPicked` runs once the user has chosen, before the folder is read. */
+export async function pickFolder({ onPicked, onCount } = {}) {
+    const root = await window.showDirectoryPicker();
+    onPicked?.();
+    return entriesOf(root, onCount);
 }
 
 /** Read the file a saved handle points at again. */
