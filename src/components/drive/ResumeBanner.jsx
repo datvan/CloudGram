@@ -16,6 +16,7 @@ import {
     askToRead,
     canKeepHandles,
     isAbort,
+    isBrave,
     pickFiles,
     pickFolder,
     scanProgress,
@@ -306,7 +307,13 @@ export default function ResumeBanner({ onNotice }) {
             : found?.denied
             ? `Trình duyệt chưa cho đọc lại thư mục nên còn ${summary} chưa tải tiếp. Bấm Tiếp tục, và chọn Cho phép nếu trình duyệt hỏi.`
             : noneKept
-            ? `Còn ${summary} tải lên dở từ lần trước. Trình duyệt này (ví dụ Brave) không cho trang web nhớ thư mục, nên bấm Tiếp tục rồi chọn lại đúng thư mục cũ${folderHint} một lần; app tự khớp và tải tiếp, tệp đã lên rồi không gửi lại.`
+            ? `Còn ${summary} tải lên dở từ lần trước. ${
+                  canKeepHandles
+                      ? "Lần đó trình duyệt chưa nhớ được thư mục"
+                      : isBrave
+                      ? "Brave đang tắt tính năng nhớ thư mục (bật “File System Access API” trong brave://flags để lần sau khỏi chọn lại)"
+                      : "Trình duyệt này không nhớ được thư mục"
+              }, nên bấm Tiếp tục rồi chọn lại đúng thư mục cũ${folderHint} một lần; app tự khớp và tải tiếp, tệp đã lên rồi không gửi lại.`
             : found
             ? `Còn ${summary} tải lên dở từ lần trước (tab đã bị đóng giữa chừng).`
             : `Còn ${list.length} tệp (${formatSize(
