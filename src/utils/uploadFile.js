@@ -88,6 +88,11 @@ export function sentChanges(message, kind, size) {
     return changes;
 }
 
+// GramJS refuses a request outright once the client is disconnected (the
+// lease went elsewhere), before anything is queued, so nothing went out
+const neverQueued = (error) =>
+    /^Cannot send requests while disconnected/.test(error?.message ?? "");
+
 // the page hears about a file's progress at most this often; every 512 KB
 // part would be a dozen updates a second per file
 const PROGRESS_EVERY = 250;
@@ -141,7 +146,8 @@ export default async function uploadFile(
             ...options,
         });
     } catch (error) {
-        if (!(error instanceof errors.RPCError)) error.maybeSent = true;
+        if (!(error instanceof errors.RPCError) && !neverQueued(error))
+            error.maybeSent = true;
         throw error;
     }
 

@@ -7,7 +7,7 @@ import {
     getRecord,
     trash,
 } from "../services/drive";
-import { getClient } from "../services/telegram";
+import { getClient, isOnline, onClientChange } from "../services/telegram";
 import {
     dropEntry,
     logEntry,
@@ -49,6 +49,9 @@ const MAX_CONCURRENT = 6;
 const RETRY_DELAYS = [5, 20, 60];
 // how often the parts Telegram has are written to the log while uploading
 const RESUME_SAVE = 2000;
+// how often a queue held up by a lost connection looks again, in ms; a new
+// client (the lease came back) restarts it at once
+const OFFLINE_CHECK = 3000;
 
 const waiting = [];
 const cancelled = new Set();
@@ -208,7 +211,25 @@ export function retryUpload(id) {
     pump();
 }
 
+let offlineCheck = null;
+
+// back to work as soon as the session is live here again
+onClientChange((client) => {
+    if (client) pump();
+});
+
 function pump() {
+    // Without Telegram every file would fail at once and use up its retries
+    // (another device took the lease, the network dropped). They wait instead.
+    if (!isOnline()) {
+        if (waiting.length && !offlineCheck) {
+            offlineCheck = setTimeout(() => {
+                offlineCheck = null;
+                pump();
+            }, OFFLINE_CHECK);
+        }
+        return;
+    }
     while (running < MAX_CONCURRENT && waiting.length) {
         const job = waiting.shift();
         if (cancelled.delete(job.id)) {
@@ -252,6 +273,8 @@ async function run(job, release) {
     // Telegram already has
     job.resume ??= {};
     job.attempts ??= 0;
+    // pump() only starts a job while Telegram is connected
+    const client = getClient();
 
     let saved = job.resume.done?.size ?? 0;
     const saver = setInterval(() => {
@@ -289,6 +312,20 @@ async function run(job, release) {
                 sending: undefined,
                 resume: saveResume(job.resume),
             });
+        // The connection went, not the file: it waits at the front of the
+        // line for Telegram to come back, without using a retry. A message
+        // that may be out already still waits for the user, as below.
+        const lost = !isOnline() || getClient() !== client;
+        if (lost && !error?.maybeSent) {
+            Store.dispatch(
+                retryingProgress(
+                    id,
+                    "Mất kết nối Telegram, sẽ tự tải tiếp khi kết nối lại",
+                ),
+            );
+            waiting.unshift(job);
+            return;
+        }
         const seconds = retryDelay(job, error);
         if (!seconds) {
             failed.set(id, job);
