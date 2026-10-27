@@ -153,6 +153,8 @@ export default function DriveApp({ mode, onToggleMode }) {
     const [navOpen, setNavOpen] = useState(false);
     // bumped to have the resume banner look again
     const [resumeScan, setResumeScan] = useState(0);
+    // the upload of picked or dropped files still scanning or asking
+    const activeRun = useRef(null);
     // files whose names are taken where they go, waiting for an answer
     const [conflict, setConflict] = useState(null);
     // picked or dropped files still being read or checked (ScanDialog)
@@ -493,82 +495,114 @@ export default function DriveApp({ mode, onToggleMode }) {
         );
 
     /**
-     * A scan for files about to be read, reporting into the scan dialog.
-     * show() opens the dialog; until then the counts are kept quietly.
-     * upload() takes what was read, unless "Huỷ" came in the meantime.
+     * One upload of picked or dropped files. A big folder arrives in batches
+     * while it is still being read (scanProgress), so uploading starts after
+     * the first hundred files instead of after the last. The questions, send
+     * as media and what to do with names already taken, are asked once and
+     * the answer kept for every batch after.
      */
-    function newScan() {
-        const scan = scanProgress((seen) =>
-            setScanning((now) => (now ? { ...now, ...seen } : now)),
+    function newRun() {
+        return {
+            // fixed now; the user may browse away meanwhile
+            target: uploadTarget,
+            found: 0,
+            media: 0,
+            // the whole folder is read, so `found` and `media` are final
+            scanned: false,
+            asMedia: undefined,
+            choice: undefined,
+            stopped: false,
+            stop: null,
+            counts: {
+                queued: 0,
+                resumed: 0,
+                replaced: 0,
+                renamed: 0,
+                skipped: 0,
+            },
+            // batches go one after another, so folders made by one are found
+            // by the next
+            chain: Promise.resolve(),
+        };
+    }
+
+    function stopRun(run) {
+        run.stopped = true;
+        run.stop?.();
+    }
+
+    function addBatch(run, entries) {
+        run.found += entries.length;
+        run.media += entries.filter(isMedia).length;
+        run.chain = run.chain
+            .then(() => sendBatch(run, entries))
+            .catch((err) => {
+                stopRun(run);
+                endRun(run);
+                setNotice({ severity: "error", text: describeError(err) });
+            });
+    }
+
+    // a run stopped partway still says what its earlier batches queued
+    function stopAndReport(run) {
+        if (run.stopped) return;
+        stopRun(run);
+        finishRun(run);
+    }
+
+    async function sendBatch(run, entries) {
+        if (run.stopped) return;
+        // the rest of the scan goes on out of the way of the uploads
+        setScanning((now) =>
+            now?.phase === "reading" ? { ...now, phase: "background" } : now,
         );
-        let cancelled = false;
-        const cancel = () => {
-            cancelled = true;
-            scan.cancel();
-            setScanning(null);
-        };
-        scan.show = () =>
-            setScanning({ phase: "reading", files: 0, bytes: 0, cancel });
-        // the walk may have finished just before the click reached it
-        scan.upload = (entries) => {
-            if (!cancelled) startUpload(entries);
-        };
-        return scan;
-    }
-
-    function scanFailed(err) {
-        setScanning(null);
-        if (!isAbort(err))
-            setNotice({ severity: "error", text: describeError(err) });
-    }
-
-    function startUpload(entries) {
-        if (!entries.length) {
-            setScanning(null);
-            return;
+        if (run.asMedia === undefined && entries.some(isMedia)) {
+            const asMedia = await new Promise((resolve) =>
+                setDialog({
+                    type: "uploadMode",
+                    // while the folder is still read the counts are not
+                    // final, so the dialog leaves them out
+                    total: run.scanned ? run.found : null,
+                    mediaCount: run.scanned ? run.media : null,
+                    resolve,
+                }),
+            );
+            if (asMedia == null) {
+                stopAndReport(run);
+                return;
+            }
+            // "Dừng" may have been clicked while the question was open
+            if (run.stopped) return;
+            run.asMedia = asMedia;
         }
-        const mediaCount = entries.filter(isMedia).length;
-        if (mediaCount) {
-            setScanning(null);
-            // the target is fixed now; the user may browse away meanwhile
-            setDialog({
-                type: "uploadMode",
-                entries,
-                target: uploadTarget,
-                mediaCount,
-            });
-            return;
-        }
-        sendUpload(entries, uploadTarget, false);
-    }
-
-    async function sendUpload(entries, target, asMedia) {
-        setScanning({
-            phase: "checking",
-            files: entries.length,
-            bytes: entries.reduce(
-                (sum, e) => sum + (e instanceof File ? e : e.file).size,
-                0,
-            ),
+        const counts = await uploadEntries(entries, run.target, {
+            asMedia: run.asMedia ?? false,
+            onConflict: async (list) => {
+                if (run.choice) return run.choice;
+                const choice = await new Promise((resolve) =>
+                    setConflict({ list, resolve }),
+                );
+                if (run.stopped) return "cancel";
+                run.choice = choice;
+                if (choice === "cancel") stopAndReport(run);
+                return choice;
+            },
         });
-        let counts;
-        try {
-            counts = await uploadEntries(entries, target, {
-                asMedia,
-                onConflict: (list) => {
-                    setScanning(null);
-                    return new Promise((resolve) =>
-                        setConflict({ list, resolve }),
-                    );
-                },
-            });
-        } catch (err) {
-            setNotice({ severity: "error", text: describeError(err) });
-            return;
-        } finally {
-            setScanning(null);
-        }
-        const { queued, resumed, replaced, renamed, skipped } = counts;
+        for (const key of Object.keys(run.counts))
+            run.counts[key] += counts[key];
+    }
+
+    /** The run no longer needs the scan dialog, nor holds back new ones. */
+    function endRun(run) {
+        if (activeRun.current !== run) return;
+        activeRun.current = null;
+        setScanning(null);
+    }
+
+    function finishRun(run) {
+        endRun(run);
+        const { queued, resumed, replaced, renamed, skipped } = run.counts;
+        const { target } = run;
         // what the banner offered to resume may have just been picked up
         if (resumed || skipped) setResumeScan((n) => n + 1);
         const going = queued + replaced + renamed;
@@ -590,6 +624,72 @@ export default function DriveApp({ mode, onToggleMode }) {
         });
     }
 
+    /**
+     * A scan for files about to be read, reporting into the scan dialog and
+     * handing what it finds to an upload run as it goes. show() opens the
+     * dialog; until then the counts are kept quietly. finish() is for once
+     * the walk is done, and does nothing after "Huỷ".
+     */
+    function newScan() {
+        const run = newRun();
+        activeRun.current = run;
+        const scan = scanProgress(
+            (seen) => setScanning((now) => (now ? { ...now, ...seen } : now)),
+            (entries) => addBatch(run, entries),
+        );
+        // stopping the run, e.g. "Huỷ tải lên" on a name conflict, also
+        // stops reading the rest
+        run.stop = () => scan.cancel();
+        const cancel = () => stopAndReport(run);
+        scan.show = () =>
+            setScanning({ phase: "reading", files: 0, bytes: 0, cancel });
+        // the walk may have finished just before the click reached it
+        scan.finish = () => {
+            run.scanned = true;
+            if (!run.stopped)
+                run.chain.then(() => {
+                    if (!run.stopped) finishRun(run);
+                });
+        };
+        // what was handed over before the error keeps uploading; the rest
+        // of the walk stops
+        scan.fail = (err) => {
+            if (isAbort(err)) {
+                endRun(run);
+                return;
+            }
+            stopRun(run);
+            run.chain.then(() => {
+                endRun(run);
+                setNotice({ severity: "error", text: describeError(err) });
+            });
+        };
+        return scan;
+    }
+
+    // One upload at a time: a second one would share the scan note and the
+    // questions with the first. Says so, and is false, while one runs.
+    function canStartRun() {
+        if (!activeRun.current) return true;
+        setNotice({
+            severity: "warning",
+            text: "Đang quét và đưa lên các tệp vừa chọn. Đợi xong rồi thêm tiếp nhé.",
+        });
+        return false;
+    }
+
+    /** Files that came all at once, from an <input>. */
+    function startUpload(entries) {
+        if (!entries.length || !canStartRun()) return;
+        const run = newRun();
+        run.scanned = true;
+        activeRun.current = run;
+        addBatch(run, entries);
+        run.chain.then(() => {
+            if (!run.stopped) finishRun(run);
+        });
+    }
+
     // Chrome and Edge get the File System Access pickers, whose handles let a
     // closed tab resume without picking again; others keep the <input>
     function openPicker(folder) {
@@ -597,10 +697,11 @@ export default function DriveApp({ mode, onToggleMode }) {
             (folder ? folderInput : fileInput).current?.click();
             return;
         }
+        if (!canStartRun()) return;
         const scan = newScan();
         (folder ? pickFolder : pickFiles)({ onPicked: scan.show, scan }).then(
-            scan.upload,
-            scanFailed,
+            scan.finish,
+            scan.fail,
         );
     }
 
@@ -642,9 +743,10 @@ export default function DriveApp({ mode, onToggleMode }) {
                   e.preventDefault();
                   dragDepth.current = 0;
                   setDropping(false);
+                  if (!canStartRun()) return;
                   const scan = newScan();
                   scan.show();
-                  readDrop(e.dataTransfer, scan).then(scan.upload, scanFailed);
+                  readDrop(e.dataTransfer, scan).then(scan.finish, scan.fail);
               },
           };
 
@@ -1427,11 +1529,14 @@ export default function DriveApp({ mode, onToggleMode }) {
             />
             <UploadModeDialog
                 open={dialog?.type === "uploadMode"}
-                total={dialog?.entries?.length ?? 0}
+                total={dialog?.total ?? 0}
                 mediaCount={dialog?.mediaCount ?? 0}
-                onClose={() => setDialog(null)}
+                onClose={() => {
+                    dialog?.resolve(null);
+                    setDialog(null);
+                }}
                 onStart={(asMedia) => {
-                    sendUpload(dialog.entries, dialog.target, asMedia);
+                    dialog.resolve(asMedia);
                     setDialog(null);
                 }}
             />
