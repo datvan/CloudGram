@@ -24,9 +24,23 @@ export function newClient(session = "") {
     });
 }
 
+const listeners = new Set();
+
+/** Hear when the client is set or stopped, e.g. to resume waiting uploads. */
+export function onClientChange(listener) {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+}
+
 /** Adopt a connected client, e.g. the one that just finished logging in. */
 export function setClient(next) {
     client = next;
+    listeners.forEach((listener) => listener(client));
+}
+
+/** Is Telegram reachable right now? False while GramJS reconnects. */
+export function isOnline() {
+    return client !== null && client.connected !== false;
 }
 
 export function getClient() {
@@ -42,6 +56,7 @@ export async function stopClient() {
     const current = client;
     client = null;
     if (!current) return;
+    listeners.forEach((listener) => listener(null));
     try {
         // destroy() also stops the update loop that disconnect() leaves running
         await current.destroy();
