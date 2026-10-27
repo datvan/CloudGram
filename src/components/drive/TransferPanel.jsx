@@ -23,6 +23,15 @@ import { getRecord } from "../../services/drive";
 import { formatSpeed } from "../../utils/format";
 import { clearFinished } from "../../redux/actions/progressAction";
 import { retryUpload } from "../../utils/uploadQueue";
+import { canKeepHandles, isBrave } from "../../utils/pickers";
+
+// Without file handles a closed tab cannot reopen what it was sending, so
+// "Tiếp tục" will need the folder picked again; said while it can be helped
+const NO_HANDLES_HINT = canKeepHandles
+    ? null
+    : isBrave
+    ? "Brave đang tắt tính năng nhớ thư mục, nên nếu tab bị đóng giữa chừng sẽ phải chọn lại thư mục. Bật “File System Access API” trong brave://flags rồi khởi động lại Brave để lần sau bấm Tiếp tục là tự tải tiếp."
+    : "Trình duyệt này không nhớ được thư mục, nên nếu tab bị đóng giữa chừng sẽ phải chọn lại thư mục. Dùng Chrome hoặc Edge để bấm Tiếp tục là tự tải tiếp.";
 
 /**
  * Drive's bottom-right transfer card. A folder upload can put hundreds of
@@ -143,6 +152,18 @@ export default function TransferPanel() {
                 >
                     Tệp đi thẳng từ tab này lên Telegram, nên giữ tab mở. Lỡ
                     đóng thì lần sau mở lại CloudGram sẽ hỏi có tiếp tục không.
+                    {NO_HANDLES_HINT && (
+                        <Box
+                            component="span"
+                            sx={{
+                                display: "block",
+                                mt: 0.5,
+                                color: "warning.main",
+                            }}
+                        >
+                            {NO_HANDLES_HINT}
+                        </Box>
+                    )}
                 </Typography>
             )}
             {!collapsed && (

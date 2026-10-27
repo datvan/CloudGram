@@ -14,6 +14,13 @@ import { v4 as uuid4 } from "uuid";
 export const canKeepHandles =
     typeof window !== "undefined" && "showOpenFilePicker" in window;
 
+/**
+ * Brave ships the File System Access API turned off (brave://flags turns it
+ * on), so it is told apart from Firefox and Safari, which have none.
+ */
+export const isBrave =
+    typeof navigator !== "undefined" && Boolean(navigator.brave);
+
 /** The user closed the picker; not an error worth showing. */
 export const isAbort = (error) => error?.name === "AbortError";
 
