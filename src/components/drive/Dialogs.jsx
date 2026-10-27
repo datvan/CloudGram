@@ -18,6 +18,7 @@ import {
     ListItemButton,
     ListItemIcon,
     ListItemText,
+    Snackbar,
     TextField,
     Typography,
 } from "@mui/material";
@@ -406,7 +407,11 @@ export function UploadModeDialog({
     return (
         <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
             <DialogTitle>
-                {total === 1 ? "Tải lên 1 tệp" : `Tải lên ${total} tệp`}
+                {total == null
+                    ? "Tải lên"
+                    : total === 1
+                    ? "Tải lên 1 tệp"
+                    : `Tải lên ${total} tệp`}
             </DialogTitle>
             <DialogContent>
                 <FormControlLabel
@@ -425,7 +430,9 @@ export function UploadModeDialog({
                     sx={{ mt: 1 }}
                 >
                     {compress
-                        ? `${mediaCount} ảnh/video sẽ được Telegram nén: nhẹ hơn, xem ngay được, nhưng giảm chất lượng (ảnh PNG thành JPEG). Ảnh quá 10 MB hoặc định dạng khác vẫn gửi dạng tệp.`
+                        ? `${
+                              mediaCount == null ? "Các" : mediaCount
+                          } ảnh/video sẽ được Telegram nén: nhẹ hơn, xem ngay được, nhưng giảm chất lượng (ảnh PNG thành JPEG). Ảnh quá 10 MB hoặc định dạng khác vẫn gửi dạng tệp.`
                         : "Mọi tệp được gửi dạng tệp (document), giữ nguyên bản gốc từng byte."}
                 </Typography>
             </DialogContent>
@@ -444,9 +451,10 @@ const SCAN_DIALOG_DELAY = 250;
 
 /**
  * Files picked or dropped and still being read: how many so far, and their
- * size. A big folder takes a while to walk, and until it is done the drive
- * shows nothing new. `scan` is { phase: "reading" | "checking", files,
- * bytes, cancel? }, or null when nothing is being scanned.
+ * size. `scan` is { phase, files, bytes, cancel? }, or null when nothing is
+ * being scanned. While "reading", nothing is uploading yet and a dialog says
+ * the files were received; once the first files go up ("background") the
+ * rest of the scan shows as a small note in the corner, out of their way.
  */
 export function ScanDialog({ scan }) {
     const [shown, setShown] = useState(false);
@@ -461,7 +469,7 @@ export function ScanDialog({ scan }) {
         return () => clearTimeout(timer);
     }, [open]);
 
-    const reading = scan?.phase === "reading";
+    const background = scan?.phase === "background";
     const found = scan
         ? `${scan.files.toLocaleString("vi-VN")} tệp · ${formatSize(
               scan.bytes,
@@ -469,30 +477,51 @@ export function ScanDialog({ scan }) {
         : "";
 
     return (
-        <Dialog open={open && shown} maxWidth="xs" fullWidth>
-            <DialogTitle>
-                {reading ? "Đã nhận, đang quét tệp…" : "Đang chuẩn bị tải lên…"}
-            </DialogTitle>
-            <DialogContent>
-                <Typography variant="body2" sx={{ mb: 2 }}>
-                    {reading
-                        ? `Đã tìm thấy ${found}.`
-                        : `Đang đối chiếu ${found} với các tệp đã có trong Drive.`}
-                </Typography>
-                <LinearProgress />
-            </DialogContent>
-            {reading && scan.cancel && (
-                <DialogActions>
-                    <Button onClick={scan.cancel}>Huỷ</Button>
-                </DialogActions>
-            )}
-        </Dialog>
+        <>
+            <Dialog open={open && shown && !background} maxWidth="xs" fullWidth>
+                <DialogTitle>Đã nhận, đang quét tệp…</DialogTitle>
+                <DialogContent>
+                    <Typography variant="body2" sx={{ mb: 2 }}>
+                        {`Đã tìm thấy ${found}. Các tệp đầu tiên sẽ bắt đầu tải lên ngay.`}
+                    </Typography>
+                    <LinearProgress />
+                </DialogContent>
+                {scan?.cancel && (
+                    <DialogActions>
+                        <Button onClick={scan.cancel}>Huỷ</Button>
+                    </DialogActions>
+                )}
+            </Dialog>
+            <Snackbar
+                open={open && background}
+                anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+            >
+                <Alert
+                    severity="info"
+                    variant="filled"
+                    icon={false}
+                    action={
+                        scan?.cancel && (
+                            <Button
+                                color="inherit"
+                                size="small"
+                                onClick={scan.cancel}
+                            >
+                                Dừng
+                            </Button>
+                        )
+                    }
+                >
+                    {`Đang tải lên và quét tiếp… đã tìm thấy ${found}`}
+                </Alert>
+            </Snackbar>
+        </>
     );
 }
 
 ScanDialog.propTypes = {
     scan: PropTypes.shape({
-        phase: PropTypes.oneOf(["reading", "checking"]),
+        phase: PropTypes.oneOf(["reading", "background"]),
         files: PropTypes.number,
         bytes: PropTypes.number,
         cancel: PropTypes.func,

@@ -224,11 +224,22 @@ export async function readDrop(dataTransfer, scan) {
                 return lists.flat();
             }
         } catch (error) {
-            if (isAbort(error)) throw error;
+            // what was found so far may be uploading already; walking it all
+            // again the other way would queue it twice
+            if (isAbort(error) || scan?.handed) throw error;
             // fall back to the entries grabbed above
+            scan?.restart();
         }
     }
-    if (!roots.length) return loose.map((file) => ({ file, path: file.name }));
+    if (!roots.length) {
+        const entries = loose.map((file) => ({ file, path: file.name }));
+        entries.forEach((entry) => {
+            scan?.add(entry.file);
+            scan?.found(entry);
+        });
+        scan?.done();
+        return entries;
+    }
     const lists = await Promise.all(
         roots.map((entry) => walk(entry, "", scan)),
     );
@@ -243,6 +254,7 @@ async function walk(entry, prefix, scan) {
             entry.file(resolve, reject),
         );
         scan?.add(file);
+        scan?.found({ file, path });
         return [{ file, path }];
     }
     const reader = entry.createReader();

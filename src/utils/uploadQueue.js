@@ -79,6 +79,9 @@ const loadResume = (saved) =>
 /** Is this record's upload queued or running here (not waiting for Retry)? */
 export const isQueued = (id) => jobs.has(id) && !failed.has(id);
 
+/** Held by this tab's queue, waiting, running or failed. */
+export const hasJob = (id) => jobs.has(id);
+
 /**
  * Record the file, then line it up behind the pool.
  *

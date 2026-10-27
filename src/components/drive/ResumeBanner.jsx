@@ -32,6 +32,8 @@ export default function ResumeBanner({ onNotice }) {
     // can resume on its own, or what "Tiếp tục" could not
     const [waiting, setWaiting] = useState(null);
     const [busy, setBusy] = useState(false);
+    // { done, total } while "Tiếp tục" opens the files again
+    const [opening, setOpening] = useState(null);
     // files read so far from a picked folder, while it is read and matched
     const [reading, setReading] = useState(null);
     const [confirm, setConfirm] = useState(false);
@@ -74,8 +76,9 @@ export default function ResumeBanner({ onNotice }) {
         // started inside the click, before any await (pickers.js)
         const granted = askToRead(handleRoots(found));
         setBusy(true);
+        setOpening({ done: 0, total: found.files.length });
         try {
-            const result = await resume(found, granted);
+            const result = await resume(found, granted, setOpening);
             const parts = [
                 result.queued && `${result.queued} tệp tiếp tục tải lên`,
                 result.adopted &&
@@ -83,12 +86,23 @@ export default function ResumeBanner({ onNotice }) {
                 result.links && `chạy lại ${result.links} link Dropbox`,
             ].filter(Boolean);
             if (parts.length) report(`Đã tiếp tục: ${parts.join(", ")}.`);
-            setFound(null);
-            setWaiting(result.needsPick.length ? result.needsPick : null);
+            // the browser said no to reading the folder for now: the next
+            // click on "Tiếp tục" asks it again, no picking needed
+            setFound(
+                result.denied.length
+                    ? { files: result.denied, imports: [], denied: true }
+                    : null,
+            );
+            // added to what an earlier click left for picking
+            setWaiting((before) => {
+                const all = [...(before ?? []), ...result.needsPick];
+                return all.length ? all : null;
+            });
         } catch (error) {
             report(describeError(error), "error");
         } finally {
             setBusy(false);
+            setOpening(null);
         }
     }
 
@@ -143,7 +157,10 @@ export default function ResumeBanner({ onNotice }) {
     async function onDiscard() {
         setBusy(true);
         try {
-            await discard(found ?? { files: waiting, imports: [] });
+            await discard({
+                files: [...(found?.files ?? []), ...(waiting ?? [])],
+                imports: found?.imports ?? [],
+            });
             report("Đã bỏ các tệp tải lên dở.");
             setFound(null);
             setWaiting(null);
@@ -228,11 +245,20 @@ export default function ResumeBanner({ onNotice }) {
         </>
     );
 
+    const count = (n) => n.toLocaleString("vi-VN");
     const text =
-        reading != null
+        opening != null
+            ? `Đang mở lại các tệp trên máy… ${count(opening.done)} / ${count(
+                  opening.total,
+              )}`
+            : reading != null
             ? `Đang đọc thư mục đã chọn… ${reading} tệp`
             : confirm
-            ? `Xoá ${list.length} tệp chưa tải xong khỏi Drive? Tệp gốc trên máy không bị ảnh hưởng.`
+            ? `Xoá ${
+                  (found?.files.length ?? 0) + (waiting?.length ?? 0)
+              } tệp chưa tải xong khỏi Drive? Tệp gốc trên máy không bị ảnh hưởng.`
+            : found?.denied
+            ? `Trình duyệt chưa cho đọc lại thư mục nên còn ${summary} chưa tải tiếp. Bấm Tiếp tục, và chọn Cho phép nếu trình duyệt hỏi.`
             : found
             ? `Còn ${summary} tải lên dở từ lần trước (tab đã bị đóng giữa chừng).`
             : `Còn ${list.length} tệp (${formatSize(
