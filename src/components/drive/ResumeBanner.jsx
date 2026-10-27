@@ -37,6 +37,12 @@ export default function ResumeBanner({ onNotice }) {
     // files read so far from a picked folder, while it is read and matched
     const [reading, setReading] = useState(null);
     const [confirm, setConfirm] = useState(false);
+    // what "Tiếp tục" is still sorting out when the picker it opened
+    // returns: the files left for picking, once it knows them
+    const resuming = useRef(null);
+    // the latest list, for a picker opened by an earlier render's click
+    const waitingNow = useRef(null);
+    waitingNow.current = waiting;
     const fileInput = useRef(null);
     const folderInput = useRef(null);
 
@@ -74,11 +80,21 @@ export default function ResumeBanner({ onNotice }) {
 
     async function onResume() {
         // started inside the click, before any await (pickers.js)
-        const granted = askToRead(handleRoots(found));
+        const roots = handleRoots(found);
+        const granted = askToRead(roots);
+        // Nothing to reopen on its own: the browser kept no folder (Brave
+        // does not let a site keep one), so the folder is asked for right
+        // away, in the same click, and matched once it is read
+        if (!roots.length && found.files.length) pick(true);
         setBusy(true);
         setOpening({ done: 0, total: found.files.length });
+        let left = () => {};
+        resuming.current = new Promise((resolve) => {
+            left = resolve;
+        });
         try {
             const result = await resume(found, granted, setOpening);
+            left(result.needsPick);
             const parts = [
                 result.queued && `${result.queued} tệp tiếp tục tải lên`,
                 result.adopted &&
@@ -99,8 +115,10 @@ export default function ResumeBanner({ onNotice }) {
                 return all.length ? all : null;
             });
         } catch (error) {
+            left(null);
             report(describeError(error), "error");
         } finally {
+            resuming.current = null;
             setBusy(false);
             setOpening(null);
         }
@@ -111,7 +129,15 @@ export default function ResumeBanner({ onNotice }) {
         // let the banner say so before matching thousands of files holds the
         // page for a moment
         await new Promise((resolve) => setTimeout(resolve, 50));
-        const { queued, unmatched } = matchPicked(waiting, entries);
+        // picked while "Tiếp tục" was still at work: match against what it
+        // leaves, not the list from before
+        const pending = resuming.current && (await resuming.current);
+        const list = pending ?? waitingNow.current;
+        if (!list?.length) {
+            setReading(null);
+            return;
+        }
+        const { queued, unmatched } = matchPicked(list, entries);
         setReading(null);
         report(
             unmatched.length
@@ -246,6 +272,26 @@ export default function ResumeBanner({ onNotice }) {
     );
 
     const count = (n) => n.toLocaleString("vi-VN");
+    // the folders the files were picked from, by the name they had then
+    const folders = [
+        ...new Set(
+            list
+                .map((item) => item.entry?.path)
+                .filter((path) => path?.includes("/"))
+                .map((path) => path.split("/")[0]),
+        ),
+    ];
+    const folderHint = folders.length
+        ? ` (thư mục ${folders
+              .slice(0, 3)
+              .map((name) => `"${name}"`)
+              .join(", ")}${folders.length > 3 ? "…" : ""})`
+        : "";
+    const noneKept =
+        found &&
+        !found.denied &&
+        found.files.length > 0 &&
+        found.files.every((item) => !item.entry?.handle);
     const text =
         opening != null
             ? `Đang mở lại các tệp trên máy… ${count(opening.done)} / ${count(
@@ -259,11 +305,13 @@ export default function ResumeBanner({ onNotice }) {
               } tệp chưa tải xong khỏi Drive? Tệp gốc trên máy không bị ảnh hưởng.`
             : found?.denied
             ? `Trình duyệt chưa cho đọc lại thư mục nên còn ${summary} chưa tải tiếp. Bấm Tiếp tục, và chọn Cho phép nếu trình duyệt hỏi.`
+            : noneKept
+            ? `Còn ${summary} tải lên dở từ lần trước. Trình duyệt này (ví dụ Brave) không cho trang web nhớ thư mục, nên bấm Tiếp tục rồi chọn lại đúng thư mục cũ${folderHint} một lần; app tự khớp và tải tiếp, tệp đã lên rồi không gửi lại.`
             : found
             ? `Còn ${summary} tải lên dở từ lần trước (tab đã bị đóng giữa chừng).`
             : `Còn ${list.length} tệp (${formatSize(
                   bytes,
-              )}) chưa tải lên xong. Chọn lại đúng thư mục hoặc các tệp đã chọn lúc trước để tải tiếp; tệp nào đã lên rồi sẽ không gửi lại.`;
+              )}) chưa tải lên xong. Chọn lại đúng thư mục cũ${folderHint} hoặc các tệp đã chọn lúc trước để tải tiếp; tệp nào đã lên rồi sẽ không gửi lại.`;
 
     return (
         <>
