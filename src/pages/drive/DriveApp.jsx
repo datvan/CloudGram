@@ -1529,8 +1529,9 @@ export default function DriveApp({ mode, onToggleMode }) {
             />
             <UploadModeDialog
                 open={dialog?.type === "uploadMode"}
-                total={dialog?.total ?? 0}
-                mediaCount={dialog?.mediaCount ?? 0}
+                // null while the folder is still read: no count shown yet
+                total={dialog?.total}
+                mediaCount={dialog?.mediaCount}
                 onClose={() => {
                     dialog?.resolve(null);
                     setDialog(null);
@@ -1556,6 +1557,12 @@ export default function DriveApp({ mode, onToggleMode }) {
                 siblings={previewable}
                 onClose={() => setPreview(null)}
                 onNavigate={setPreview}
+                // from the bin there is nothing to star, share or bin again
+                onAction={
+                    inTrash
+                        ? undefined
+                        : (action, target) => act(action, [target])
+                }
             />
             <TransferPanel />
 

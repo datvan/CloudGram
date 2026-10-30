@@ -9,6 +9,10 @@
  * transferBench.js, that took a single large upload from about 3-4 MB/s to
  * 6-7 MB/s; more connections per DC and bigger download parts did not help,
  * so there is one connection and the knobs stay parameters for the bench.
+ * (Extra connections were tried again for downloads, the way Telegram Web
+ * opens three: Telegram kept closing them mid-transfer, which stalled a
+ * download for half a minute. What held downloads back was decryption on the
+ * page's thread, now done in workers: see services/decryptWorkers.js.)
  *
  * Upload parts are read from the File one at a time as they go out, so a
  * large file is never held in memory whole.
@@ -92,27 +96,52 @@ async function call(client, request, dcId, stats) {
 
 const newStats = () => ({ waits: [], reconnects: 0, retries: 0 });
 
+/** At most `size` holders at once; the rest wait their turn in order. */
+function turns(size) {
+    let free = size;
+    const waiting = [];
+    return {
+        take() {
+            if (free > 0) {
+                free -= 1;
+                return Promise.resolve();
+            }
+            return new Promise((resolve) => waiting.push(resolve));
+        },
+        give() {
+            const next = waiting.shift();
+            if (next) next();
+            else free += 1;
+        },
+    };
+}
+
 // Upload parts in flight across every file at once. A 2 MB file has only
 // four parts, so files going one or two at a time left the connection half
 // idle; now several go together and share this many, while a big file on its
 // own still gets them all. A part is read from disk only once it has a turn,
 // so this also bounds the memory the uploads hold.
 const UPLOAD_POOL = 16;
-let poolFree = UPLOAD_POOL;
-const poolWaiting = [];
+const uploadTurns = turns(UPLOAD_POOL);
 
-function takeTurn() {
-    if (poolFree > 0) {
-        poolFree -= 1;
-        return Promise.resolve();
-    }
-    return new Promise((resolve) => poolWaiting.push(resolve));
-}
+// How far back a rate looks, so it neither jumps with every part nor lags a
+// change in the connection by long.
+const RATE_WINDOW = 3000;
 
-function giveTurn() {
-    const next = poolWaiting.shift();
-    if (next) next();
-    else poolFree += 1;
+/** Bytes a second through one direction, from the parts that landed lately. */
+function rateMeter() {
+    const seen = [];
+    return {
+        add(bytes) {
+            seen.push([performance.now(), bytes]);
+        },
+        rate() {
+            const now = performance.now();
+            while (seen.length && seen[0][0] <= now - RATE_WINDOW) seen.shift();
+            const bytes = seen.reduce((sum, [, n]) => sum + n, 0);
+            return (bytes * 1000) / RATE_WINDOW;
+        },
+    };
 }
 
 /** Run `inflight` copies of `lane` and settle when all are done. */
@@ -121,6 +150,16 @@ function lanes(inflight, lane) {
 }
 
 // ----- upload ---------------------------------------------------------------
+
+const sentMeter = rateMeter();
+
+/**
+ * Bytes a second Telegram confirmed receiving lately, all uploads together.
+ * Measured here rather than added up per file: a file whose parts are all
+ * out may wait a long while for its message to go, and its last speed is no
+ * longer anything the connection is doing.
+ */
+export const uploadRate = () => sentMeter.rate();
 
 /**
  * Upload a File's bytes and return the InputFile to send it with.
@@ -147,11 +186,11 @@ export async function uploadParts(client, file, options = {}) {
         while (next < parts && !failed) {
             const index = next++;
             if (done.has(index)) continue;
-            await takeTurn();
+            await uploadTurns.take();
             try {
                 await sendPart(index);
             } finally {
-                giveTurn();
+                uploadTurns.give();
             }
         }
     });
@@ -182,6 +221,7 @@ export async function uploadParts(client, file, options = {}) {
         }
         done.add(index);
         sent += bytes.length;
+        sentMeter.add(bytes.length);
         onProgress?.(sent / Math.max(1, size));
     }
 
@@ -193,12 +233,24 @@ export async function uploadParts(client, file, options = {}) {
 
 // ----- download -------------------------------------------------------------
 
+// Download parts in flight across every file at once, so several files
+// fetched together share the connection instead of piling onto it.
+const downloadTurns = turns(DOWNLOAD_DEFAULTS.inflight);
+const receivedMeter = rateMeter();
+
+/** Bytes a second arriving lately, all downloads together. */
+export const downloadRate = () => receivedMeter.rate();
+
 /**
  * Fetch a file's bytes from `location` on `dcId`.
  *
  * Parts may be up to 1 MB as long as each stays inside one 1 MB block, which
  * a part size that divides 1 MB at aligned offsets always does. Rejects on
  * anything unexpected so the caller can fall back to GramJS's own path.
+ *
+ * The bytes come back as one Uint8Array, unless `write(bytes, offset)` is
+ * given: then each part goes there as it lands (a file on disk, for what is
+ * too big to hold in memory) and nothing is returned.
  */
 export async function downloadParts(
     client,
@@ -206,9 +258,11 @@ export async function downloadParts(
     options = {},
 ) {
     const { partSize, inflight } = { ...DOWNLOAD_DEFAULTS, ...options };
-    const { onProgress, stats = newStats() } = options;
+    const { onProgress, stats = newStats(), write } = options;
+    // the bench measures settings one at a time, outside the shared pool
+    const pool = options.inflight ? null : downloadTurns;
     if (MB % partSize !== 0) throw new Error("Part size must divide 1 MB");
-    const out = new Uint8Array(size);
+    const out = write ? null : new Uint8Array(size);
     const parts = Math.ceil(size / partSize);
     let next = 0;
     let done = 0;
@@ -244,17 +298,24 @@ export async function downloadParts(
     await lanes(inflight, async () => {
         while (next < parts && !failed) {
             const index = next++;
+            await pool?.take();
             try {
+                // another lane failed while this one waited for its turn
+                if (failed) return;
                 const bytes = await fetchPart(index);
                 const expected = Math.min(partSize, size - index * partSize);
                 if (bytes.length !== expected)
                     throw new Error(`Part ${index} came back short`);
-                out.set(bytes, index * partSize);
+                receivedMeter.add(bytes.length);
+                if (write) await write(bytes, index * partSize);
+                else out.set(bytes, index * partSize);
                 done += bytes.length;
                 onProgress?.(done);
             } catch (error) {
                 failed = true;
                 throw error;
+            } finally {
+                pool?.give();
             }
         }
     });

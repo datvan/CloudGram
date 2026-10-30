@@ -5,6 +5,9 @@ import { Buffer } from "buffer/";
 
 import { API_ID, API_HASH } from "../config/config";
 import { ConnectionWebCryptoObfuscated } from "./obfuscatedTransport";
+import { offloadDecryption } from "./decryptWorkers";
+
+offloadDecryption();
 
 /**
  * The one Telegram connection the app uses.

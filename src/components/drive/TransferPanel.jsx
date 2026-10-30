@@ -23,6 +23,7 @@ import { getRecord } from "../../services/drive";
 import { formatSpeed } from "../../utils/format";
 import { clearFinished } from "../../redux/actions/progressAction";
 import { retryUpload } from "../../utils/uploadQueue";
+import { downloadRate, uploadRate } from "../../utils/transfer";
 import { canKeepHandles, isBrave } from "../../utils/pickers";
 
 // Without file handles a closed tab cannot reopen what it was sending, so
@@ -47,6 +48,23 @@ export default function TransferPanel() {
     const finished = useSelector((state) => state.progress.finished);
     const [collapsed, setCollapsed] = useState(false);
     const [hidden, setHidden] = useState(false);
+    const [speed, setSpeed] = useState({ up: 0, down: 0 });
+    const moving = active.some(
+        (p) => p.type === "UPLOADING" || p.type === "DOWNLOADING",
+    );
+
+    // read on a clock, so the figure drops when the bytes stop even though
+    // nothing else changes then
+    useEffect(() => {
+        if (!moving) {
+            setSpeed({ up: 0, down: 0 });
+            return undefined;
+        }
+        const tick = () => setSpeed({ up: uploadRate(), down: downloadRate() });
+        tick();
+        const timer = setInterval(tick, 1000);
+        return () => clearInterval(timer);
+    }, [moving]);
 
     // a new transfer brings the panel back after it was closed
     useEffect(() => {
@@ -59,17 +77,16 @@ export default function TransferPanel() {
     const failed = active.filter((p) => p.type === "ERROR");
     const uploading = running.filter((p) => p.direction !== "down").length;
     const downloading = running.length - uploading;
-    // what every upload going right now adds up to
-    const upSpeed = running
-        .filter((p) => p.type === "UPLOADING" && p.speed)
-        .reduce((sum, p) => sum + p.speed, 0);
     const title = running.length
         ? [
               uploading &&
                   `Đang tải lên ${uploading} mục${
-                      upSpeed ? ` · ${formatSpeed(upSpeed)}` : ""
+                      speed.up ? ` · ${formatSpeed(speed.up)}` : ""
                   }`,
-              downloading && `Đang tải xuống ${downloading} mục`,
+              downloading &&
+                  `Đang tải xuống ${downloading} mục${
+                      speed.down ? ` · ${formatSpeed(speed.down)}` : ""
+                  }`,
           ]
               .filter(Boolean)
               .join(", ")
@@ -91,12 +108,12 @@ export default function TransferPanel() {
     // A folder of thousands would mean thousands of rows, rendered again with
     // every update, and that alone slowed the uploads to a crawl. What moves
     // goes first, then a screenful of the rest; the others are only counted.
-    const moving = active.filter(
+    const inMotion = active.filter(
         (p) => p.type === "UPLOADING" || p.type === "DOWNLOADING",
     );
     const queued = active.filter((p) => p.type === "QUEUED");
     const rows = [
-        ...moving,
+        ...inMotion,
         ...failed,
         ...queued.slice(0, SHOWN),
         ...finished.slice(0, SHOWN).map((f) => ({ ...f, type: "DONE" })),

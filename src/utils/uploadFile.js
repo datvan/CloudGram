@@ -133,7 +133,11 @@ export default async function uploadFile(
             const now = performance.now();
             if (fraction < 1 && now - told < PROGRESS_EVERY) return;
             told = now;
-            Store.dispatch(uploadProgress(id, fraction * 100, rate));
+            // every part is out: what is left is sending the message, which
+            // moves no bytes however long it waits
+            Store.dispatch(
+                uploadProgress(id, fraction * 100, fraction < 1 ? rate : 0),
+            );
         },
     });
 
