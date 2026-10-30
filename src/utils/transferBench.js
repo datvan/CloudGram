@@ -27,9 +27,8 @@ export const UPLOADS = {
 };
 
 export const DOWNLOADS = {
-    // what the app did before
-    "512k-i8": { partSize: 512 * KB, inflight: 8 },
     "1m-i8": { partSize: MB, inflight: 8 },
+    "1m-i16": { partSize: MB, inflight: 16 },
 };
 
 function makeFile(bytes, name) {
@@ -119,7 +118,7 @@ async function verify(
         const up = await upload("win-512k-i16", file);
         const message = await send(up.inputFile);
         const row = { size, messageId: message.id, up: up.mbps };
-        for (const name of ["512k-i8", "1m-i8"]) {
+        for (const name of Object.keys(DOWNLOADS)) {
             const down = await download(name, message);
             row[name] = (await sha256(down.bytes)) === want ? "ok" : "MISMATCH";
         }

@@ -274,13 +274,26 @@ async function walk(entry, prefix, scan) {
     return lists.flat();
 }
 
+// files fetched at once; they share one pool of parts in flight
+// (transfer.js), so more at once only spreads it thinner
+const DOWNLOADS_AT_ONCE = 3;
+
 export async function downloadMany(records) {
-    // one at a time: each download is held in memory until it is saved
-    for (const record of records) {
-        if (record.type === "file" && record.file_id != null) {
-            await downloadFile(record.id, record.file_id, record.name);
-        }
-    }
+    const files = records.filter(
+        (record) => record.type === "file" && record.file_id != null,
+    );
+    let next = 0;
+    await Promise.all(
+        Array.from(
+            { length: Math.min(DOWNLOADS_AT_ONCE, files.length) },
+            async () => {
+                while (next < files.length) {
+                    const record = files[next++];
+                    await downloadFile(record.id, record.file_id, record.name);
+                }
+            },
+        ),
+    );
 }
 
 // collectSubtree treats its root as a folder, so a file is its own subtree
