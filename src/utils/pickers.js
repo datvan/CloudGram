@@ -11,6 +11,8 @@
  */
 import { v4 as uuid4 } from "uuid";
 
+import { loadFolders, saveFolders } from "../services/uploadLog";
+
 export const canKeepHandles =
     typeof window !== "undefined" && "showOpenFilePicker" in window;
 
@@ -199,6 +201,41 @@ export function fileOpener() {
     };
 }
 
+// folders remembered for askToWrite, newest first
+const KEEP_FOLDERS = 20;
+
+/**
+ * A folder holding `file` with write access, or null. One picked before is
+ * reused: no prompt while its access lasts, otherwise a single Allow. Only
+ * the first time, or for a folder never picked, does the picker open.
+ */
+async function writeFolderFor(file) {
+    const folders = await loadFolders();
+    for (const folder of folders) {
+        if (!(await folder.resolve(file).catch(() => null))) continue;
+        const mode = { mode: "readwrite" };
+        if ((await folder.queryPermission(mode)) === "granted") return folder;
+        const answer = await folder.requestPermission(mode).catch(() => null);
+        // a refusal means delete nothing, as Huỷ on the picker would
+        return answer === "granted" ? folder : null;
+    }
+    if (!window.showDirectoryPicker) return null;
+    const folder = await window
+        .showDirectoryPicker({
+            id: "cloudgram-originals",
+            mode: "readwrite",
+            startIn: file,
+        })
+        .catch(() => null);
+    if (folder) {
+        const others = [];
+        for (const old of folders)
+            if (!(await old.isSameEntry(folder))) others.push(old);
+        await saveFolders([folder, ...others].slice(0, KEEP_FOLDERS));
+    }
+    return folder;
+}
+
 /**
  * Ask to change what was picked, so the originals can be deleted once they
  * are uploaded (enqueueUpload's `removeOriginal`). Like askToRead, it has to
@@ -208,7 +245,8 @@ export function fileOpener() {
  * separately: fifty files, fifty prompts. With more than one, the user is
  * asked once for the folder holding them instead, and the entries under it
  * are pointed at it, `filesOnly` since its folders were never picked. That
- * folder is kept on `run` for the batches after the first.
+ * folder is kept on `run` for the batches after the first, and remembered
+ * for later uploads from it (writeFolderFor).
  */
 export async function askToWrite(entries, run) {
     const loose = new Set(
@@ -217,13 +255,7 @@ export async function askToWrite(entries, run) {
             .filter((root) => root?.kind === "file"),
     );
     if (run.writeFolder === undefined && loose.size > 1) {
-        run.writeFolder = await window
-            .showDirectoryPicker({
-                id: "cloudgram-originals",
-                mode: "readwrite",
-                startIn: [...loose][0],
-            })
-            .catch(() => null);
+        run.writeFolder = await writeFolderFor([...loose][0]);
         run.writeFolderId = uuid4();
     }
     const folder = run.writeFolder;

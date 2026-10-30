@@ -171,6 +171,34 @@ export function saveHandle(id, handle) {
     schedule();
 }
 
+// a row of its own in the handles store, which no entry id can collide with
+const foldersKey = () => `originals:${username}`;
+
+/** The folders picked for deleting originals (pickers.js askToWrite). */
+export async function loadFolders() {
+    if (!username) return [];
+    try {
+        const row = await transact("readonly", (_, handles) =>
+            request(handles.get(foldersKey())),
+        );
+        return (await row)?.folders ?? [];
+    } catch {
+        return [];
+    }
+}
+
+export async function saveFolders(folders) {
+    if (!username) return;
+    const owner = username;
+    try {
+        await transact("readwrite", (_, handles) =>
+            handles.put({ username: owner, folders }, foldersKey()),
+        );
+    } catch (error) {
+        console.log(error);
+    }
+}
+
 /** Let queued writes reach the disk, e.g. before reading the log back. */
 export async function settleWrites() {
     clearTimeout(timer);
