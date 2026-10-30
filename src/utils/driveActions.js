@@ -39,7 +39,7 @@ import { getClient } from "../services/telegram";
 export async function uploadEntries(
     entries,
     parentID,
-    { asMedia = false, onConflict } = {},
+    { asMedia = false, removeOriginal = false, onConflict } = {},
 ) {
     const tree = buildTreeFromPaths(entries);
     const records = getSnapshot().records;
@@ -128,6 +128,7 @@ export async function uploadEntries(
             handle: p.entry.handle,
             path: p.entry.path,
             asMedia,
+            removeOriginal,
             parentID: parentOf(p.entry),
             ...extra,
         });
@@ -158,6 +159,8 @@ export async function uploadEntries(
                 asMedia: log?.asMedia ?? asMedia,
                 resume: unchanged ? log?.resume : undefined,
                 replaces: log?.replaces,
+                // picked again just now, so what was chosen just now
+                removeOriginal,
             });
             counts.resumed += 1;
         } else if (!taken) {

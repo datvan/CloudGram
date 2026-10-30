@@ -386,22 +386,34 @@ export function UploadModeDialog({
     open,
     mediaCount,
     total,
+    hasMedia = true,
+    removable = false,
     onClose,
     onStart,
 }) {
     const [compress, setCompress] = useState(loadCompress);
+    // never remembered: deleting has to be chosen each time
+    const [remove, setRemove] = useState(false);
 
     useEffect(() => {
-        if (open) setCompress(loadCompress());
+        if (open) {
+            setCompress(loadCompress());
+            setRemove(false);
+        }
     }, [open]);
 
     function start() {
-        try {
-            localStorage.setItem(COMPRESS_KEY, compress ? "1" : "0");
-        } catch {
-            // private mode; the choice just is not remembered
+        if (hasMedia) {
+            try {
+                localStorage.setItem(COMPRESS_KEY, compress ? "1" : "0");
+            } catch {
+                // private mode; the choice just is not remembered
+            }
         }
-        onStart(compress);
+        onStart({
+            asMedia: hasMedia && compress,
+            removeOriginal: removable && remove,
+        });
     }
 
     return (
@@ -414,27 +426,65 @@ export function UploadModeDialog({
                     : `Tải lên ${total} tệp`}
             </DialogTitle>
             <DialogContent>
-                <FormControlLabel
-                    control={
-                        <Checkbox
-                            checked={compress}
-                            onChange={(e) => setCompress(e.target.checked)}
-                            autoFocus
+                {hasMedia && (
+                    <>
+                        <FormControlLabel
+                            control={
+                                <Checkbox
+                                    checked={compress}
+                                    onChange={(e) =>
+                                        setCompress(e.target.checked)
+                                    }
+                                    autoFocus
+                                />
+                            }
+                            label="Nén ảnh và video (gửi dạng media như Telegram)"
                         />
-                    }
-                    label="Nén ảnh và video (gửi dạng media như Telegram)"
-                />
-                <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mt: 1 }}
-                >
-                    {compress
-                        ? `${
-                              mediaCount == null ? "Các" : mediaCount
-                          } ảnh/video sẽ được Telegram nén: nhẹ hơn, xem ngay được, nhưng giảm chất lượng (ảnh PNG thành JPEG). Ảnh quá 10 MB hoặc định dạng khác vẫn gửi dạng tệp.`
-                        : "Mọi tệp được gửi dạng tệp (document), giữ nguyên bản gốc từng byte."}
-                </Typography>
+                        <Typography
+                            variant="body2"
+                            color="text.secondary"
+                            sx={{ mt: 1 }}
+                        >
+                            {compress
+                                ? `${
+                                      mediaCount == null ? "Các" : mediaCount
+                                  } ảnh/video sẽ được Telegram nén: nhẹ hơn, xem ngay được, nhưng giảm chất lượng (ảnh PNG thành JPEG). Ảnh quá 10 MB hoặc định dạng khác vẫn gửi dạng tệp.`
+                                : "Mọi tệp được gửi dạng tệp (document), giữ nguyên bản gốc từng byte."}
+                        </Typography>
+                    </>
+                )}
+                {removable && (
+                    <>
+                        <FormControlLabel
+                            sx={{ mt: hasMedia ? 2 : 0 }}
+                            control={
+                                <Checkbox
+                                    checked={remove}
+                                    onChange={(e) =>
+                                        setRemove(e.target.checked)
+                                    }
+                                />
+                            }
+                            label="Xoá tệp/thư mục gốc trên máy sau khi tải lên xong"
+                        />
+                        {remove && (
+                            <Alert
+                                severity={
+                                    hasMedia && compress ? "error" : "warning"
+                                }
+                                sx={{ mt: 1 }}
+                            >
+                                {hasMedia && compress
+                                    ? "Ảnh/video sẽ bị nén, nên sau khi xoá bạn chỉ còn bản đã giảm chất lượng trên Telegram. "
+                                    : ""}
+                                Mỗi tệp bị xoá vĩnh viễn (không vào Thùng rác)
+                                ngay khi đã lên Telegram; tệp lỗi hoặc bị sửa
+                                trong lúc tải được giữ lại. Trình duyệt sẽ hỏi
+                                quyền sửa thư mục, hãy chọn Cho phép.
+                            </Alert>
+                        )}
+                    </>
+                )}
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose}>Huỷ</Button>
@@ -649,6 +699,8 @@ UploadModeDialog.propTypes = {
     open: PropTypes.bool,
     mediaCount: PropTypes.number,
     total: PropTypes.number,
+    hasMedia: PropTypes.bool,
+    removable: PropTypes.bool,
     onClose: PropTypes.func,
     onStart: PropTypes.func,
 };

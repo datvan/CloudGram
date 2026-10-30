@@ -220,6 +220,8 @@ async function push() {
             throw error;
         }
     }
+    // still dirty: callers such as the upload queue must not take it as saved
+    throw new Error("The file list kept changing on the server; not saved");
 }
 
 // ----- mutations ------------------------------------------------------------------

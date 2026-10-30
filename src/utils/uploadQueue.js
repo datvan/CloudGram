@@ -24,6 +24,7 @@ import {
     retryingProgress,
 } from "../redux/actions/progressAction";
 import { isFinal } from "./transfer";
+import { removePicked } from "./pickers";
 import uploadFile, { sentChanges } from "./uploadFile";
 
 /**
@@ -95,6 +96,8 @@ export const hasJob = (id) => jobs.has(id);
  * the file without a picker, and `path` is where it sat in what was picked.
  * `replaces` is a file this one takes the place of: it goes to the trash once
  * this one is safely in the vault, so a failed upload loses nothing.
+ * `removeOriginal` deletes the file from this computer at that same point,
+ * through `handle` (removePicked).
  */
 /** The folders from the root down to a record's parent, as the log keeps them. */
 function foldersAbove(record) {
@@ -121,6 +124,7 @@ export function enqueueUpload({
     handle,
     path,
     replaces,
+    removeOriginal = false,
 }) {
     if (recordId && jobs.has(recordId)) {
         // only a job waiting for Retry takes new bytes; a live one is left be
@@ -150,6 +154,8 @@ export function enqueueUpload({
         file,
         asMedia,
         replaces,
+        handle,
+        removeOriginal,
         resume: loadResume(resume),
     };
     jobs.set(record.id, job);
@@ -169,6 +175,7 @@ export function enqueueUpload({
         path: path ?? record.name,
         asMedia,
         replaces,
+        removeOriginal,
         source,
         queuedAt: Date.now(),
         resume: saveResume(job.resume),
@@ -363,7 +370,7 @@ async function run(job, release) {
     // retrying from here would send a second copy and orphan the first. A
     // failure here is also not offered as a retry, for the same reason.
     try {
-        await settle(id, result, job.replaces);
+        await settle(id, result, job.replaces, job);
     } catch (error) {
         console.log(error);
         Store.dispatch(
@@ -382,7 +389,7 @@ async function run(job, release) {
  * The log entry goes only once the vault has the id: until then it is the
  * one place that still knows which message belongs to the record.
  */
-async function settle(id, result, replaces) {
+async function settle(id, result, replaces, job) {
     const record = cancelled.delete(id) ? undefined : await fileOps.getByID(id);
 
     const { message, changes } = result;
@@ -401,6 +408,16 @@ async function settle(id, result, replaces) {
         );
         const old = replaces && getRecord(replaces);
         if (stored && old && !old.trashedAt) trash([replaces]);
+        // a file put in the trash meanwhile may be emptied out of it next,
+        // so its original stays as the copy left
+        const trashed =
+            record.trashedAt ||
+            foldersAbove(record).some((f) => getRecord(f.id)?.trashedAt);
+        if (stored && !trashed && job?.removeOriginal && job.handle) {
+            removePicked(job.handle, job.file).catch((error) =>
+                console.log("Could not delete the original", error),
+            );
+        }
     } else {
         await getClient().deleteMessages("me", [message.id], {
             revoke: true,

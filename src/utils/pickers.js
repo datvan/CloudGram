@@ -200,6 +200,59 @@ export function fileOpener() {
 }
 
 /**
+ * Ask to change what was picked, so the originals can be deleted once they
+ * are uploaded (enqueueUpload's `removeOriginal`). Like askToRead, it has to
+ * start right after the click that asked for it.
+ */
+export async function askToWrite(roots) {
+    await Promise.all(
+        roots.map((root) =>
+            root.requestPermission({ mode: "readwrite" }).catch(() => {}),
+        ),
+    );
+}
+
+const sameFile = (a, b) =>
+    a.size === b.size && a.lastModified === b.lastModified;
+
+/**
+ * Delete the file a saved handle points at, then the folders that leaves
+ * empty, up to and including what was picked. Nothing goes without write
+ * access, and a file changed since `uploaded` was read stays, so only bytes
+ * Telegram has are ever deleted. This is permanent: the browser does not use
+ * the Recycle Bin. Resolves to whether the file went.
+ */
+export async function removePicked(handle, uploaded) {
+    const { root, sub } = handle;
+    if ((await root.queryPermission({ mode: "readwrite" })) !== "granted")
+        return false;
+    if (root.kind === "file") {
+        if (!sameFile(await root.getFile(), uploaded)) return false;
+        await root.remove();
+        return true;
+    }
+    const folders = sub.split("/");
+    const name = folders.pop();
+    const dirs = [root];
+    for (const folder of folders)
+        dirs.push(await dirs[dirs.length - 1].getDirectoryHandle(folder));
+    const parent = dirs[dirs.length - 1];
+    if (!sameFile(await (await parent.getFileHandle(name)).getFile(), uploaded))
+        return false;
+    await parent.removeEntry(name);
+    // without `recursive` a folder that still holds anything refuses to go,
+    // which is what keeps files not (yet) uploaded
+    try {
+        for (let i = folders.length - 1; i >= 0; i -= 1)
+            await dirs[i].removeEntry(folders[i]);
+        await root.remove();
+    } catch {
+        // not empty yet; the last file out of it takes it along
+    }
+    return true;
+}
+
+/**
  * Ask again for read access to saved handles, one prompt per root. The first
  * request has to start inside the click that asked for it, so they are all
  * started before anything is awaited.

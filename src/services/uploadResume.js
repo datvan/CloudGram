@@ -363,6 +363,7 @@ function queue(item, file, handle, path, unchanged) {
         handle,
         path: path ?? record.name,
         replaces: item.entry?.replaces,
+        removeOriginal: item.entry?.removeOriginal,
     });
 }
 
