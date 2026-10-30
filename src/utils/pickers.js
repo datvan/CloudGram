@@ -203,10 +203,50 @@ export function fileOpener() {
  * Ask to change what was picked, so the originals can be deleted once they
  * are uploaded (enqueueUpload's `removeOriginal`). Like askToRead, it has to
  * start right after the click that asked for it.
+ *
+ * A loose file is a root of its own, and the browser asks for each one
+ * separately: fifty files, fifty prompts. With more than one, the user is
+ * asked once for the folder holding them instead, and the entries under it
+ * are pointed at it, `filesOnly` since its folders were never picked. That
+ * folder is kept on `run` for the batches after the first.
  */
-export async function askToWrite(roots) {
+export async function askToWrite(entries, run) {
+    const loose = new Set(
+        entries
+            .map((entry) => entry.handle?.root)
+            .filter((root) => root?.kind === "file"),
+    );
+    if (run.writeFolder === undefined && loose.size > 1) {
+        run.writeFolder = await window
+            .showDirectoryPicker({
+                id: "cloudgram-originals",
+                mode: "readwrite",
+                startIn: [...loose][0],
+            })
+            .catch(() => null);
+        run.writeFolderId = uuid4();
+    }
+    const folder = run.writeFolder;
+    if (folder) {
+        for (const entry of entries) {
+            if (entry.handle?.root.kind !== "file") continue;
+            const path = await folder.resolve(entry.handle.root);
+            if (!path) continue;
+            entry.handle = {
+                rootId: run.writeFolderId,
+                root: folder,
+                sub: path.join("/"),
+                filesOnly: true,
+            };
+        }
+    }
+    // what is left: picked folders, or the one loose file
+    const roots = new Set(entries.map((entry) => entry.handle?.root));
+    roots.delete(undefined);
+    roots.delete(folder);
+    if (folder !== undefined) for (const root of loose) roots.delete(root);
     await Promise.all(
-        roots.map((root) =>
+        [...roots].map((root) =>
             root.requestPermission({ mode: "readwrite" }).catch(() => {}),
         ),
     );
@@ -240,6 +280,7 @@ export async function removePicked(handle, uploaded) {
     if (!sameFile(await (await parent.getFileHandle(name)).getFile(), uploaded))
         return false;
     await parent.removeEntry(name);
+    if (handle.filesOnly) return true;
     // without `recursive` a folder that still holds anything refuses to go,
     // which is what keeps files not (yet) uploaded
     try {

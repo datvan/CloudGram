@@ -582,15 +582,9 @@ export default function DriveApp({ mode, onToggleMode }) {
             run.asMedia = answer.asMedia;
             run.removeOriginal = answer.removeOriginal;
         }
-        if (run.removeOriginal) {
-            // the first batch is still inside the click; a later one with
-            // roots of its own is refused without it, and its files stay
-            await askToWrite([
-                ...new Set(
-                    entries.map((entry) => entry.handle?.root).filter(Boolean),
-                ),
-            ]);
-        }
+        // the first batch is still inside the click; a later one with roots
+        // of its own is refused without it, and its files stay
+        if (run.removeOriginal) await askToWrite(entries, run);
         const counts = await uploadEntries(entries, run.target, {
             asMedia: run.asMedia ?? false,
             removeOriginal: run.removeOriginal,
