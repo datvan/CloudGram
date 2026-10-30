@@ -88,6 +88,7 @@ import {
 } from "../../utils/driveActions";
 import { fold } from "../../utils/format";
 import {
+    askToWrite,
     canKeepHandles,
     isAbort,
     pickFiles,
@@ -510,6 +511,7 @@ export default function DriveApp({ mode, onToggleMode }) {
             // the whole folder is read, so `found` and `media` are final
             scanned: false,
             asMedia: undefined,
+            removeOriginal: false,
             choice: undefined,
             stopped: false,
             stop: null,
@@ -556,27 +558,42 @@ export default function DriveApp({ mode, onToggleMode }) {
         setScanning((now) =>
             now?.phase === "reading" ? { ...now, phase: "background" } : now,
         );
-        if (run.asMedia === undefined && entries.some(isMedia)) {
-            const asMedia = await new Promise((resolve) =>
+        // only files picked with a handle (Chrome, Edge) can be deleted after
+        const removable = entries.some((entry) => entry.handle);
+        if (run.asMedia === undefined && (entries.some(isMedia) || removable)) {
+            const answer = await new Promise((resolve) =>
                 setDialog({
                     type: "uploadMode",
                     // while the folder is still read the counts are not
                     // final, so the dialog leaves them out
                     total: run.scanned ? run.found : null,
                     mediaCount: run.scanned ? run.media : null,
+                    hasMedia: entries.some(isMedia),
+                    removable,
                     resolve,
                 }),
             );
-            if (asMedia == null) {
+            if (answer == null) {
                 stopAndReport(run);
                 return;
             }
             // "Dừng" may have been clicked while the question was open
             if (run.stopped) return;
-            run.asMedia = asMedia;
+            run.asMedia = answer.asMedia;
+            run.removeOriginal = answer.removeOriginal;
+        }
+        if (run.removeOriginal) {
+            // the first batch is still inside the click; a later one with
+            // roots of its own is refused without it, and its files stay
+            await askToWrite([
+                ...new Set(
+                    entries.map((entry) => entry.handle?.root).filter(Boolean),
+                ),
+            ]);
         }
         const counts = await uploadEntries(entries, run.target, {
             asMedia: run.asMedia ?? false,
+            removeOriginal: run.removeOriginal,
             onConflict: async (list) => {
                 if (run.choice) return run.choice;
                 const choice = await new Promise((resolve) =>
@@ -1532,12 +1549,14 @@ export default function DriveApp({ mode, onToggleMode }) {
                 // null while the folder is still read: no count shown yet
                 total={dialog?.total}
                 mediaCount={dialog?.mediaCount}
+                hasMedia={dialog?.hasMedia}
+                removable={dialog?.removable}
                 onClose={() => {
                     dialog?.resolve(null);
                     setDialog(null);
                 }}
-                onStart={(asMedia) => {
-                    dialog.resolve(asMedia);
+                onStart={(answer) => {
+                    dialog.resolve(answer);
                     setDialog(null);
                 }}
             />
