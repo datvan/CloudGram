@@ -346,6 +346,21 @@ function subtreeOf(records, id) {
     return collectSubtree(records, id);
 }
 
+/** Linked copies (linkFile) outside these subtrees that share a message with them. */
+export function linksOutside(records, ids) {
+    const inside = new Set();
+    const messages = new Set();
+    for (const id of ids) {
+        const subtree = subtreeOf(records, id);
+        recordIdsOf(subtree).forEach((x) => inside.add(x));
+        messageIdsOf(subtree).forEach((x) => messages.add(x));
+    }
+    return records.filter(
+        (r) =>
+            !inside.has(r.id) && r.file_id != null && messages.has(r.file_id),
+    );
+}
+
 /** Everything that would go if these were deleted forever. */
 export function countForever(ids) {
     const { records } = getSnapshot();
@@ -356,11 +371,14 @@ export function countForever(ids) {
         folders += subtree.folders.length;
         files += subtree.files.length;
     }
-    return { folders, files };
+    return { folders, files, links: linksOutside(records, ids) };
 }
 
-export async function deleteForever(ids) {
+/** withLinks: also delete the linked copies elsewhere, so the message goes too. */
+export async function deleteForever(ids, { withLinks = false } = {}) {
     const { records } = getSnapshot();
+    if (withLinks)
+        ids = [...ids, ...linksOutside(records, ids).map((r) => r.id)];
     const recordIds = new Set();
     const messageIds = new Set();
     for (const id of ids) {
@@ -386,7 +404,10 @@ export async function deleteForever(ids) {
     await removeRecords([...recordIds]);
 }
 
-export function emptyTrash() {
+export function emptyTrash(options) {
     const trashed = getSnapshot().records.filter((r) => r.trashedAt);
-    return deleteForever(trashed.map((r) => r.id));
+    return deleteForever(
+        trashed.map((r) => r.id),
+        options,
+    );
 }

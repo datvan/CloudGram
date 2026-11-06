@@ -231,6 +231,8 @@ export function ConfirmDialog({
     busy,
     onConfirm,
     onClose,
+    secondaryLabel,
+    onSecondary,
 }) {
     return (
         <Dialog
@@ -252,9 +254,19 @@ export function ConfirmDialog({
                 <Button onClick={onClose} disabled={busy}>
                     Huỷ
                 </Button>
+                {secondaryLabel && (
+                    <Button
+                        onClick={onSecondary}
+                        color={danger ? "error" : "primary"}
+                        disabled={busy}
+                    >
+                        {secondaryLabel}
+                    </Button>
+                )}
                 <Button
                     onClick={onConfirm}
                     color={danger ? "error" : "primary"}
+                    variant={secondaryLabel ? "contained" : "text"}
                     disabled={busy}
                 >
                     {busy ? "Đang xử lý…" : confirmLabel}
@@ -273,6 +285,8 @@ ConfirmDialog.propTypes = {
     busy: PropTypes.bool,
     onConfirm: PropTypes.func,
     onClose: PropTypes.func,
+    secondaryLabel: PropTypes.string,
+    onSecondary: PropTypes.func,
 };
 
 export function PasswordDialog({ open, onClose, onDone }) {
