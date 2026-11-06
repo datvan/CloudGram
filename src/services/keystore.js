@@ -42,6 +42,15 @@ export async function loadKey(username) {
     }
 }
 
+/** The stored key whoever it belongs to, read only (pages/auth/Rescue). */
+export async function peekKey() {
+    try {
+        return (await run("readonly", (store) => store.get("dek"))) ?? null;
+    } catch {
+        return null;
+    }
+}
+
 export function saveKey(username, key) {
     return run("readwrite", (store) => store.put({ username, key }, "dek"));
 }

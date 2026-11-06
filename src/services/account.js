@@ -61,6 +61,11 @@ const set = (state) => Store.dispatch(setAuth(state));
 // ----- start-up ---------------------------------------------------------------------
 
 export async function boot() {
+    if (window.location.pathname === "/rescue") {
+        // nothing is loaded or written: the page works with the stored key
+        set({ phase: "rescue" });
+        return;
+    }
     if (window.location.pathname === "/setup") {
         set({ phase: "setup", setupToken: window.location.hash.slice(1) });
         return;
