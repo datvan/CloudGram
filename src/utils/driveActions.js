@@ -12,6 +12,7 @@ import downloadFile from "./downloadFile";
 import { entriesOf, isAbort } from "./pickers";
 import { collectSubtree, findFolder, messageIdsOf, recordIdsOf } from "./tree";
 import { cancelUploads, enqueueUpload, isQueued } from "./uploadQueue";
+import { storyboardsOf } from "../services/storyboard";
 import {
     createFolder,
     getSnapshot,
@@ -396,6 +397,11 @@ export async function deleteForever(ids, { withLinks = false } = {}) {
     cancelUploads([...recordIds]);
     // a file deleted for good must not stay downloadable through its link
     await dropShares(records.filter((r) => recordIds.has(r.id)));
+    // the storyboard goes with the last record of its video
+    storyboardsOf(
+        records.filter((r) => recordIds.has(r.id)),
+        messageIds,
+    ).forEach((x) => messageIds.add(x));
     if (messageIds.size) {
         await getClient().deleteMessages("me", [...messageIds], {
             revoke: true,

@@ -64,7 +64,13 @@ async function serve(event, url) {
     let reply = { error: "no page" };
     // without the asking tab (rare), any tab that holds Telegram may answer
     for (const client of clients) {
-        reply = await ask(client, { fileId, start, end });
+        reply = await ask(client, {
+            fileId,
+            start,
+            end,
+            // frames drawn for a storyboard: no fetching ahead
+            quiet: url.searchParams.has("quiet"),
+        });
         if (!reply.error) break;
     }
     if (reply.error === "range") {

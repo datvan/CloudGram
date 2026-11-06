@@ -39,7 +39,11 @@ let held = 0;
 
 const urgent = [];
 const ahead = [];
+// storyboard frames: only when nothing the player wants is waiting, one at a
+// time, so a slot is always free for the player
+const idle = [];
 let active = 0;
+let idleActive = 0;
 
 /** Can a video be streamed in this tab (the service worker controls it)? */
 export const canStream = () =>
@@ -47,9 +51,11 @@ export const canStream = () =>
     Boolean(navigator.serviceWorker?.controller);
 
 /** The URL a <video> plays `record` from. */
-export function streamUrl(record) {
+export function streamUrl(record, { quiet = false } = {}) {
     names.set(record.file_id, record.name);
-    return `/stream/${record.file_id}/${encodeURIComponent(record.name)}`;
+    const url = `/stream/${record.file_id}/${encodeURIComponent(record.name)}`;
+    // quiet: only the bytes asked for, nothing fetched ahead (storyboards)
+    return quiet ? `${url}?quiet` : url;
 }
 
 /** Tell how many bytes a second the video takes, to size the read-ahead. */
@@ -59,26 +65,30 @@ export function setBitrate(fileId, bytesPerSecond) {
 
 function pump() {
     while (active < AT_ONCE) {
-        const task = urgent.shift() ?? ahead.shift();
+        let task = urgent.shift() ?? ahead.shift();
+        const quiet = !task && idleActive === 0 && active < AT_ONCE - 1;
+        if (quiet) task = idle.shift();
         if (!task) return;
         task.queued = false;
         active += 1;
+        if (quiet) idleActive += 1;
         task.job()
             .then(task.resolve, task.reject)
             .finally(() => {
                 active -= 1;
+                if (quiet) idleActive -= 1;
                 pump();
             });
     }
 }
 
-function enqueue(job, now) {
+function enqueue(job, now, queue = now ? urgent : ahead) {
     const task = { job, queued: true };
     task.promise = new Promise((resolve, reject) => {
         task.resolve = resolve;
         task.reject = reject;
     });
-    (now ? urgent : ahead).push(task);
+    queue.push(task);
     pump();
     return task;
 }
@@ -209,7 +219,7 @@ function readAhead(fileId, file, last) {
 }
 
 /** The answer to one range the service worker passed on. */
-async function answer({ fileId, start, end }) {
+async function answer({ fileId, start, end, quiet }) {
     if (!isOnline()) return { error: "offline" };
     let file;
     try {
@@ -226,19 +236,26 @@ async function answer({ fileId, start, end }) {
     const stop = Math.min(
         size - 1,
         end ?? Infinity,
-        (first + ANSWER_PARTS) * PART - 1,
+        (first + (quiet ? 1 : ANSWER_PARTS)) * PART - 1,
     );
     const last = Math.floor(stop / PART);
     let chunks;
     try {
         const wanted = [];
         for (let index = first; index <= last; index += 1)
-            wanted.push(part(fileId, index, true));
-        readAhead(fileId, file, last);
+            wanted.push(
+                // a storyboard's frames are not kept: they would push out
+                // parts the player is about to use
+                quiet && !parts.has(`${fileId}:${index}`)
+                    ? enqueue(() => fetchPart(fileId, index), false, idle)
+                          .promise
+                    : part(fileId, index, true),
+            );
+        if (!quiet) readAhead(fileId, file, last);
         chunks = await Promise.all(wanted);
     } catch (error) {
         console.log(error);
-        failed.add(fileId);
+        if (!quiet) failed.add(fileId);
         return { error: "failed" };
     }
     const out = new Uint8Array(stop - start + 1);
