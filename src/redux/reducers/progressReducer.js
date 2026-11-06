@@ -24,6 +24,7 @@ export default function reducer(
                           id: entry.id,
                           name: entry.name,
                           direction: entry.direction,
+                          kept: action.kept,
                       },
                       ...state.finished.filter((item) => item.id !== entry.id),
                   ].slice(0, FINISHED_KEEP)

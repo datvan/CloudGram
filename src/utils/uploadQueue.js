@@ -24,7 +24,7 @@ import {
     retryingProgress,
 } from "../redux/actions/progressAction";
 import { isFinal } from "./transfer";
-import { removePicked } from "./pickers";
+import { KEPT, removePicked } from "./pickers";
 import uploadFile, { sentChanges } from "./uploadFile";
 import { fromUpload } from "../services/storyboard";
 
@@ -397,6 +397,7 @@ async function settle(id, result, replaces, job) {
 
     const { message, changes } = result;
     let stored = true;
+    let kept = null;
     if (record) {
         const extra = { ...changes };
         // Telegram recompressed a PNG photo to JPEG; keep the name honest so
@@ -416,10 +417,14 @@ async function settle(id, result, replaces, job) {
         const trashed =
             record.trashedAt ||
             foldersAbove(record).some((f) => getRecord(f.id)?.trashedAt);
-        if (stored && !trashed && job?.removeOriginal && job.handle) {
-            removePicked(job.handle, job.file).catch((error) =>
-                console.log("Could not delete the original", error),
-            );
+        if (job?.removeOriginal) {
+            if (!job.handle) kept = KEPT.noHandle;
+            else if (!stored) kept = KEPT.notStored;
+            else if (trashed) kept = KEPT.trashed;
+            else
+                kept = await removePicked(job.handle, job.file).catch(
+                    (error) => `Không xoá được: ${error?.message ?? error}`,
+                );
         }
     } else {
         await getClient().deleteMessages("me", [message.id], {
@@ -429,7 +434,7 @@ async function settle(id, result, replaces, job) {
 
     jobs.delete(id);
     if (stored) dropEntry(id);
-    Store.dispatch(completedProgress(id));
+    Store.dispatch(completedProgress(id, kept));
 }
 
 /**

@@ -292,16 +292,16 @@ const sameFile = (a, b) =>
  * empty, up to and including what was picked. Nothing goes without write
  * access, and a file changed since `uploaded` was read stays, so only bytes
  * Telegram has are ever deleted. This is permanent: the browser does not use
- * the Recycle Bin. Resolves to whether the file went.
+ * the Recycle Bin. Resolves to null when the file went, else why it stayed.
  */
 export async function removePicked(handle, uploaded) {
     const { root, sub } = handle;
     if ((await root.queryPermission({ mode: "readwrite" })) !== "granted")
-        return false;
+        return KEPT.permission;
     if (root.kind === "file") {
-        if (!sameFile(await root.getFile(), uploaded)) return false;
+        if (!sameFile(await root.getFile(), uploaded)) return KEPT.changed;
         await root.remove();
-        return true;
+        return null;
     }
     const folders = sub.split("/");
     const name = folders.pop();
@@ -310,9 +310,9 @@ export async function removePicked(handle, uploaded) {
         dirs.push(await dirs[dirs.length - 1].getDirectoryHandle(folder));
     const parent = dirs[dirs.length - 1];
     if (!sameFile(await (await parent.getFileHandle(name)).getFile(), uploaded))
-        return false;
+        return KEPT.changed;
     await parent.removeEntry(name);
-    if (handle.filesOnly) return true;
+    if (handle.filesOnly) return null;
     // without `recursive` a folder that still holds anything refuses to go,
     // which is what keeps files not (yet) uploaded
     try {
@@ -322,18 +322,33 @@ export async function removePicked(handle, uploaded) {
     } catch {
         // not empty yet; the last file out of it takes it along
     }
-    return true;
+    return null;
 }
+
+/** Why an original asked to be deleted after upload is still on disk. */
+export const KEPT = {
+    permission:
+        "Trình duyệt chưa cho phép xoá trong thư mục này (chưa bấm Cho phép sửa).",
+    changed:
+        "Tệp đã thay đổi sau khi chọn (có thể lúc đó đang được ghi dở), nên giữ lại cho an toàn.",
+    noHandle:
+        "Trình duyệt này không cho web xoá tệp trên máy (cần Chrome hoặc Edge).",
+    notStored:
+        "Chưa lưu được vào cây thư mục trên máy chủ, nên giữ lại cho an toàn.",
+    trashed: "Tệp bị cho vào thùng rác trong lúc tải, nên giữ lại bản gốc.",
+};
 
 /**
  * Ask again for read access to saved handles, one prompt per root. The first
  * request has to start inside the click that asked for it, so they are all
- * started before anything is awaited.
+ * started before anything is awaited. `write` asks for delete rights too,
+ * for uploads that remove their originals.
  */
-export async function askToRead(roots) {
+export async function askToRead(roots, write = false) {
+    const mode = write ? "readwrite" : "read";
     const answers = await Promise.all(
         roots.map((root) =>
-            root.requestPermission({ mode: "read" }).catch(() => "denied"),
+            root.requestPermission({ mode }).catch(() => "denied"),
         ),
     );
     return roots.filter((_, i) => answers[i] === "granted");

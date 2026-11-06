@@ -17,6 +17,7 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorIcon from "@mui/icons-material/Error";
 import ReplayIcon from "@mui/icons-material/Replay";
 import ScheduleIcon from "@mui/icons-material/Schedule";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 
 import { FileIcon } from "./FileIcon";
 import { getRecord } from "../../services/drive";
@@ -94,6 +95,8 @@ export default function TransferPanel() {
         ? `${failed.length} mục không thành công`
         : `Đã xong ${finished.length} mục`;
 
+    const keptCount = finished.filter((f) => f.kept).length;
+
     const nameOf = (entry) => entry.name ?? getRecord(entry.id)?.name ?? "Tệp";
 
     function close() {
@@ -116,7 +119,13 @@ export default function TransferPanel() {
         ...inMotion,
         ...failed,
         ...queued.slice(0, SHOWN),
-        ...finished.slice(0, SHOWN).map((f) => ({ ...f, type: "DONE" })),
+        // kept originals first: they are what still needs a look
+        ...[
+            ...finished.filter((f) => f.kept),
+            ...finished.filter((f) => !f.kept),
+        ]
+            .slice(0, SHOWN)
+            .map((f) => ({ ...f, type: "DONE" })),
     ];
     const notShown = [
         queued.length > SHOWN && `${queued.length - SHOWN} mục đang chờ`,
@@ -183,6 +192,16 @@ export default function TransferPanel() {
                     )}
                 </Typography>
             )}
+            {keptCount > 0 && (
+                <Typography
+                    variant="caption"
+                    component="div"
+                    sx={{ px: 2.5, py: 0.75, color: "warning.main" }}
+                >
+                    {keptCount} tệp đã lên Telegram nhưng bản gốc trên máy chưa
+                    bị xoá. Rê chuột vào dấu cảnh báo để xem lý do.
+                </Typography>
+            )}
             {!collapsed && (
                 <Box sx={{ maxHeight: 280, overflow: "auto" }}>
                     {rows.map((entry) => (
@@ -204,6 +223,16 @@ export default function TransferPanel() {
                             >
                                 {nameOf(entry)}
                             </Typography>
+                            {entry.type === "DONE" && entry.kept && (
+                                <Tooltip
+                                    title={`Bản gốc vẫn còn trên máy: ${entry.kept}`}
+                                >
+                                    <WarningAmberIcon
+                                        color="warning"
+                                        fontSize="small"
+                                    />
+                                </Tooltip>
+                            )}
                             {entry.type === "DONE" && (
                                 <CheckCircleIcon
                                     sx={{ color: "#1e8e3e" }}
