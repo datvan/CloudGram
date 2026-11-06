@@ -545,12 +545,40 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     );
 
     // made only once the video plays, so drawing it never slows the start
-    const board = useStoryboard(
+    const [board, making] = useStoryboard(
         record,
         () => streamUrl(record, { quiet: true }),
         started,
     );
     const grid = !started && !error && Boolean(board);
+
+    // say so while one is drawn and once it is ready, or nothing seems to
+    // happen; after the "Tiếp tục từ" notice, which must not be covered
+    const wasMaking = useRef(false);
+    useEffect(() => {
+        if (making) {
+            wasMaking.current = true;
+            const timer = setTimeout(
+                () =>
+                    setNotice({
+                        text: "Đang tạo hình xem trước cho video này…",
+                        key: Date.now(),
+                        long: true,
+                    }),
+                7000,
+            );
+            return () => clearTimeout(timer);
+        }
+        if (wasMaking.current && board) {
+            wasMaking.current = false;
+            setNotice({
+                text: "Đã có hình xem trước: rê chuột lên thanh tua để xem",
+                key: Date.now(),
+                long: true,
+            });
+        }
+        return undefined;
+    }, [making, board]);
 
     /** Play from `seconds`, also before the video has loaded. */
     const jump = useCallback(
