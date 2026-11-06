@@ -387,7 +387,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     }, []);
 
     useEffect(() => {
-        if (!notice) return undefined;
+        // a storyboard problem stays up, so it can be read out
+        if (!notice || notice.stay) return undefined;
         const timer = setTimeout(
             () => setNotice(null),
             notice.long ? 6000 : 900,
@@ -545,7 +546,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     );
 
     // made only once the video plays, so drawing it never slows the start
-    const [board, making] = useStoryboard(
+    const [board, making, problem] = useStoryboard(
         record,
         () => streamUrl(record, { quiet: true }),
         started,
@@ -579,6 +580,14 @@ const VideoPlayer = forwardRef(function VideoPlayer(
         }
         return undefined;
     }, [making, board]);
+    useEffect(() => {
+        if (problem)
+            setNotice({
+                text: `Hình xem trước ${problem}`,
+                key: Date.now(),
+                stay: true,
+            });
+    }, [problem]);
 
     /** Play from `seconds`, also before the video has loaded. */
     const jump = useCallback(
