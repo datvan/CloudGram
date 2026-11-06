@@ -38,7 +38,7 @@ import { fetchFile, saveBlob } from "../../utils/downloadFile";
 import { formatSize } from "../../utils/format";
 import { useThumbnail } from "../../utils/thumbnails";
 import { useDrive } from "../../services/drive";
-import { canStream, streamUrl } from "../../services/stream";
+import { canStream, streamOffReason, streamUrl } from "../../services/stream";
 import VideoPlayer from "./VideoPlayer";
 
 // GramJS buffers the whole file in memory, so the preview stays within what a
@@ -472,7 +472,7 @@ export default function PreviewDialog({
                             worker), nên đang dùng trình phát cũ: phải tải hết
                             file, không có hình xem trước. Với Brave: bấm biểu
                             tượng sư tử, tắt Shields cho trang này rồi tải lại
-                            trang.
+                            trang. (Lý do: {streamOffReason()})
                         </Typography>
                     </Stack>
                 );
