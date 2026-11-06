@@ -457,7 +457,25 @@ export default function PreviewDialog({
                             onDownload={download}
                         />
                     );
-                return <video src={state.url} controls autoPlay style={fit} />;
+                // no service worker (blocked, or a hard reload): the whole
+                // file was downloaded; say why the full player is missing
+                return (
+                    <Stack alignItems="center" spacing={1} sx={fit}>
+                        <video
+                            src={state.url}
+                            controls
+                            autoPlay
+                            style={{ ...fit, minHeight: 0 }}
+                        />
+                        <Typography color="#fff" fontSize={13} align="center">
+                            Trình duyệt đang chặn chế độ xem trực tiếp (service
+                            worker), nên đang dùng trình phát cũ: phải tải hết
+                            file, không có hình xem trước. Với Brave: bấm biểu
+                            tượng sư tử, tắt Shields cho trang này rồi tải lại
+                            trang.
+                        </Typography>
+                    </Stack>
+                );
             case "audio":
                 return <audio src={state.url} controls autoPlay />;
             case "pdf":
