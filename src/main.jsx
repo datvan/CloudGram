@@ -16,6 +16,10 @@ import "@fontsource/roboto/500.css";
 import "@fontsource/roboto/700.css";
 
 import { makeTheme } from "./theme";
+import { startStreaming } from "./services/stream";
+
+// videos play from Telegram as they download (services/stream.js)
+startStreaming();
 
 // the transfer speed benchmark (window.cgBench); dev server only
 if (import.meta.env.DEV) import("./utils/transferBench");

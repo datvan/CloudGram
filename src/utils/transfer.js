@@ -246,6 +246,42 @@ const receivedMeter = rateMeter();
 export const downloadRate = () => receivedMeter.rate();
 
 /**
+ * One part of a file, `partSize` bytes from part `index`, for reading a file
+ * piece by piece (video streaming) rather than whole. `target` is
+ * `{ location, dcId }`; its dcId follows the file to another data center.
+ */
+export async function filePart(
+    client,
+    target,
+    index,
+    partSize = DOWNLOAD_DEFAULTS.partSize,
+) {
+    if (MB % partSize !== 0) throw new Error("Part size must divide 1 MB");
+    for (;;) {
+        const request = new Api.upload.GetFile({
+            location: target.location,
+            offset: helpers.returnBigInt(index * partSize),
+            limit: partSize,
+            precise: false,
+            cdnSupported: false,
+        });
+        try {
+            const result = await call(client, request, target.dcId, newStats());
+            if (!(result instanceof Api.upload.File))
+                throw new Error("Unexpected file redirect");
+            receivedMeter.add(result.bytes.length);
+            return result.bytes;
+        } catch (error) {
+            if (error instanceof errors.FileMigrateError) {
+                target.dcId = error.newDc;
+                continue;
+            }
+            throw error;
+        }
+    }
+}
+
+/**
  * Fetch a file's bytes from `location` on `dcId`.
  *
  * Parts may be up to 1 MB as long as each stays inside one 1 MB block, which

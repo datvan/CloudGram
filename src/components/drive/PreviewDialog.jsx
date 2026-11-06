@@ -38,6 +38,8 @@ import { fetchFile, saveBlob } from "../../utils/downloadFile";
 import { formatSize } from "../../utils/format";
 import { useThumbnail } from "../../utils/thumbnails";
 import { useDrive } from "../../services/drive";
+import { canStream, streamUrl } from "../../services/stream";
+import VideoPlayer from "./VideoPlayer";
 
 // GramJS buffers the whole file in memory, so the preview stays within what a
 // tab can comfortably hold; anything larger is offered as a download instead.
@@ -158,14 +160,30 @@ export default function PreviewDialog({
     const [fullscreen, setFullscreen] = useState(false);
     const [copied, setCopied] = useState(null);
     const viewer = useRef(null);
+    const player = useRef(null);
     const kind = item ? previewKind(item) : null;
     const isImage = kind === "image";
-    const tooLarge = item && kind && !fitsPreview(item, kind);
+    // a streamed video plays as it arrives, so its size does not matter
+    const streaming = kind === "video" && canStream();
+    const tooLarge = item && kind && !streaming && !fitsPreview(item, kind);
     const index = item ? siblings.findIndex((s) => s.id === item.id) : -1;
     const prev = index > 0 ? siblings[index - 1] : null;
     const next =
         index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : null;
-    const placeholder = useThumbnail(item ?? NONE, isImage, Boolean(item));
+    // the player moves on to the next video, skipping other files
+    const videos = streaming
+        ? siblings.filter(
+              (s) => s.file_id != null && previewKind(s) === "video",
+          )
+        : [];
+    const videoAt = videos.findIndex((s) => s.id === item?.id);
+    const nextVideo = videoAt >= 0 ? videos[videoAt + 1] ?? null : null;
+    const prevVideo = videoAt > 0 ? videos[videoAt - 1] : null;
+    const placeholder = useThumbnail(
+        item ?? NONE,
+        isImage || kind === "video",
+        Boolean(item),
+    );
     // for one render after moving on, what was loaded is still the last file
     const state =
         item && loaded.id === item.id ? loaded : { status: "loading" };
@@ -178,6 +196,10 @@ export default function PreviewDialog({
         const id = item.id;
         if (!kind || tooLarge || item.file_id == null) {
             setLoaded({ id, status: "unsupported" });
+            return undefined;
+        }
+        if (streaming) {
+            setLoaded({ id, status: "ready", url: streamUrl(item) });
             return undefined;
         }
         const cached = cachedPreview(item);
@@ -207,7 +229,7 @@ export default function PreviewDialog({
         // the record object changes on every star or rename; only a new file
         // means new bytes
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [item?.id, item?.file_id, kind, tooLarge]);
+    }, [item?.id, item?.file_id, kind, tooLarge, streaming]);
 
     // the pictures either side are fetched while this one is looked at, so
     // moving on shows them at once
@@ -310,10 +332,18 @@ export default function PreviewDialog({
             ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
         )
             return;
+        // the video player takes its keys first, arrows included
+        // (not while a button or menu has the focus: those keys are theirs)
+        if (
+            streaming &&
+            !target.closest("button, [role=menu]") &&
+            player.current?.handleKey(e)
+        )
+            return;
         // a focused button or a playing video already answers these keys
-        const player = ["VIDEO", "AUDIO"].includes(target.tagName);
-        const own = target.tagName === "BUTTON" || player;
-        const keys = player
+        const media = ["VIDEO", "AUDIO"].includes(target.tagName);
+        const own = target.tagName === "BUTTON" || media;
+        const keys = media
             ? {}
             : {
                   ArrowLeft: () => prev && onNavigate(prev),
@@ -411,6 +441,22 @@ export default function PreviewDialog({
         const fit = { maxWidth: "100%", maxHeight: "100%" };
         switch (kind) {
             case "video":
+                if (streaming)
+                    return (
+                        <VideoPlayer
+                            // a fresh player per video, so the last one's
+                            // events cannot touch this one's saved place
+                            key={item.id}
+                            ref={player}
+                            record={item}
+                            src={state.url}
+                            poster={placeholder}
+                            next={nextVideo}
+                            onNext={nextVideo && (() => onNavigate(nextVideo))}
+                            onPrev={prevVideo && (() => onNavigate(prevVideo))}
+                            onDownload={download}
+                        />
+                    );
                 return <video src={state.url} controls autoPlay style={fit} />;
             case "audio":
                 return <audio src={state.url} controls autoPlay />;
@@ -669,7 +715,7 @@ export default function PreviewDialog({
                                 display: "flex",
                                 alignItems: "center",
                                 justifyContent: "center",
-                                p: isImage ? 0 : { xs: 1, md: 4 },
+                                p: isImage || streaming ? 0 : { xs: 1, md: 4 },
                                 position: "relative",
                             }}
                             onClick={(e) =>
