@@ -217,7 +217,8 @@ renewal task.
 -   The Content-Security-Policy allows scripts only from the site itself and
     connections to `wss://*.web.telegram.org` (where GramJS speaks MTProto).
     Adding a library that calls out means opening it up here, or the browser
-    blocks it silently — check the console.
+    blocks it silently — check the console. `worker-src blob:` is for the
+    HEIC decoder (`heic-to/csp`), which runs in a worker made from a blob.
 
 **SSH login is key-only.** Since 2026-10-24 the server no longer accepts
 passwords. These three lines live in

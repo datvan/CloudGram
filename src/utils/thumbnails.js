@@ -1,16 +1,104 @@
 import { useEffect, useState } from "react";
 
-import { getClient, hasClient } from "../services/telegram";
+import {
+    getClient,
+    hasClient,
+    isOnline,
+    onClientChange,
+} from "../services/telegram";
 
 // Telegram's own limit for a document thumbnail: JPEG, at most 320px a side
 const SIZE = 320;
 // images uploaded before thumbnails existed have none on Telegram, so they
 // are downloaded whole and shrunk here; past this size that costs too much
 const FALLBACK_LIMIT = 10 * 1024 * 1024;
+// pictures larger than this get no thumbnail of their own at upload
+const MAKE_LIMIT = 100 * 1024 * 1024;
 const CONCURRENCY = 3;
+// messages asked for in one request; Telegram takes up to 100
+const BATCH = 100;
+// seconds between tries of a thumbnail that failed to load
+const RETRY_DELAYS = [2, 5, 15, 30];
+// the HEIC decoder never reports a worker the page refused to start
+const HEIC_TIMEOUT = 30_000;
+const VIDEO_TIMEOUT = 10_000;
+// a seek the browser never finishes; the first frame is taken instead
+const SEEK_TIMEOUT = 3000;
+
+// what a file is when the browser does not say (file.type is often empty for
+// HEIC, and for anything dragged in from some places)
+const EXT_TYPES = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+    bmp: "image/bmp",
+    avif: "image/avif",
+    heic: "image/heic",
+    heif: "image/heif",
+    mp4: "video/mp4",
+    m4v: "video/x-m4v",
+    mov: "video/quicktime",
+    webm: "video/webm",
+    mkv: "video/x-matroska",
+};
+
+/** A file's MIME type, from its name when the browser gives none. */
+export function typeOf({ type, name }) {
+    if (type) return type;
+    const dot = name?.lastIndexOf(".") ?? -1;
+    return EXT_TYPES[dot > 0 ? name.slice(dot + 1).toLowerCase() : ""] ?? "";
+}
 
 function isImageType(type) {
     return type?.startsWith("image/") && type !== "image/svg+xml";
+}
+
+const isHeicType = (type) => type === "image/heic" || type === "image/heif";
+let heicStuck = false;
+
+// only these are worth a try in a <video>; avi, wmv and the like never play
+const isVideoType = (type) =>
+    Object.values(EXT_TYPES).includes(type) && type.startsWith("video/");
+
+function withTimeout(promise, ms) {
+    let timer;
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("timed out")), ms);
+        }),
+    ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * The picture in `blob` as an ImageBitmap. HEIC is decoded by a library
+ * loaded only when one turns up, since Chrome and Edge cannot read it; a
+ * picture too large to decode whole is decoded straight to a smaller size.
+ */
+async function decode(blob, type) {
+    try {
+        return await createImageBitmap(blob);
+    } catch (error) {
+        if (isHeicType(type)) {
+            if (heicStuck) throw error;
+            const { heicTo } = await import("heic-to/csp");
+            return withTimeout(
+                heicTo({ blob, type: "bitmap" }),
+                HEIC_TIMEOUT,
+            ).catch((failure) => {
+                // most likely the page may not start its worker (CSP); no
+                // point making every HEIC after this one wait as long
+                if (failure?.message === "timed out") heicStuck = true;
+                throw failure;
+            });
+        }
+        return createImageBitmap(blob, {
+            resizeWidth: SIZE * 4,
+            resizeQuality: "medium",
+        });
+    }
 }
 
 /** Draw an image or video frame at most SIZE px a side, as a JPEG blob. */
@@ -31,8 +119,8 @@ function encodeScaled(source, width, height) {
     );
 }
 
-async function shrink(blob) {
-    const bitmap = await createImageBitmap(blob);
+async function shrink(blob, type) {
+    const bitmap = await decode(blob, type);
     try {
         return await encodeScaled(bitmap, bitmap.width, bitmap.height);
     } finally {
@@ -49,7 +137,7 @@ const asThumbFile = (blob) =>
  * and a side ratio of at most 20. Anything else goes up as a file.
  */
 export async function fitsAsPhoto(file) {
-    if (!["image/jpeg", "image/png"].includes(file.type)) return false;
+    if (!["image/jpeg", "image/png"].includes(typeOf(file))) return false;
     if (file.size > 10 * 1024 * 1024) return false;
     try {
         const bitmap = await createImageBitmap(file);
@@ -65,43 +153,31 @@ export async function fitsAsPhoto(file) {
 }
 
 /**
- * Duration, size and a cover frame of a video the browser can play, which is
- * what Telegram needs to show it as a playable video. Null when the browser
- * cannot read it; the upload then goes up as a file.
+ * Size, duration and a cover frame of a video the browser can play. Telegram
+ * needs all three to show it as a playable video; a file sent as a file
+ * still gets the frame as its thumbnail. `duration` is undefined when the
+ * video does not say (some WebM). Null when the browser cannot read it.
  */
 export function probeVideo(file) {
+    if (!isVideoType(typeOf(file))) return Promise.resolve(null);
     return new Promise((resolve) => {
         const url = URL.createObjectURL(file);
         const video = document.createElement("video");
+        let info = null;
         let done = false;
+        let seekTimer;
         const finish = (value) => {
             if (done) return;
             done = true;
             clearTimeout(timer);
+            clearTimeout(seekTimer);
             video.removeAttribute("src");
             video.load();
             URL.revokeObjectURL(url);
             resolve(value);
         };
-        const timer = setTimeout(() => finish(null), 15_000);
-        video.muted = true;
-        video.preload = "auto";
-        video.onerror = () => finish(null);
-        video.onloadedmetadata = () => {
-            if (!video.videoWidth || !Number.isFinite(video.duration)) {
-                finish(null);
-                return;
-            }
-            // a second in, past the black first frame most clips start with
-            video.currentTime = Math.min(1, video.duration / 2);
-        };
-        video.onseeked = async () => {
-            const info = {
-                duration: Math.round(video.duration),
-                w: video.videoWidth,
-                h: video.videoHeight,
-                thumb: undefined,
-            };
+        const grab = async () => {
+            if (done || !info) return;
             try {
                 info.thumb = asThumbFile(
                     await encodeScaled(video, info.w, info.h),
@@ -111,6 +187,33 @@ export function probeVideo(file) {
             }
             finish(info);
         };
+        const timer = setTimeout(() => finish(info), VIDEO_TIMEOUT);
+        video.muted = true;
+        video.preload = "auto";
+        video.onerror = () => finish(null);
+        video.onloadedmetadata = () => {
+            if (!video.videoWidth) {
+                finish(null);
+                return;
+            }
+            const finite = Number.isFinite(video.duration);
+            info = {
+                duration: finite ? Math.round(video.duration) : undefined,
+                w: video.videoWidth,
+                h: video.videoHeight,
+                thumb: undefined,
+            };
+            if (!finite) return; // no seeking; the first frame will do
+            // a second in, past the black first frame most clips start with
+            video.currentTime = Math.min(1, video.duration / 2);
+            seekTimer = setTimeout(() => {
+                if (video.readyState >= 2) grab();
+            }, SEEK_TIMEOUT);
+        };
+        video.onloadeddata = () => {
+            if (info && info.duration === undefined) grab();
+        };
+        video.onseeked = grab;
         video.src = url;
     });
 }
@@ -121,11 +224,10 @@ export function probeVideo(file) {
  * browser can decode; the upload goes ahead without one.
  */
 export async function makeThumb(file) {
-    if (!isImageType(file.type) || file.size > 50 * 1024 * 1024) {
-        return undefined;
-    }
+    const type = typeOf(file);
+    if (!isImageType(type) || file.size > MAKE_LIMIT) return undefined;
     try {
-        return asThumbFile(await shrink(file));
+        return asThumbFile(await shrink(file, type));
     } catch {
         return undefined;
     }
@@ -133,12 +235,15 @@ export async function makeThumb(file) {
 
 // ----- loading -------------------------------------------------------------------
 
-// record id -> object URL, or null when the file has no thumbnail to show.
-// Kept for the life of the tab; a few hundred 320px JPEGs is a few MB.
+// record key -> object URL, or null when there is no thumbnail to show.
+// A failure is never kept here: it is tried again. Kept for the life of the
+// tab; a few hundred 320px JPEGs is a few MB.
 const cache = new Map();
-const inflight = new Map();
-const queue = [];
-let running = 0;
+// record key -> { key, record, attempts, promise, resolve }
+const pending = new Map();
+let waiting = [];
+let timer = null;
+let draining = false;
 
 function pickSize(thumbs) {
     // stripped and path sizes are tiny placeholders, not something to show
@@ -153,10 +258,8 @@ function pickSize(thumbs) {
 // a retried upload gets a new message, so the key follows file_id too
 const keyOf = (record) => `${record.id}:${record.file_id}`;
 
-async function fetchThumb(record) {
-    const [message] = await getClient().getMessages("me", {
-        ids: record.file_id,
-    });
+/** The thumbnail in an already fetched message, or null when it has none. */
+async function thumbFrom(message, record) {
     const media = message?.media;
     // a file sent as a photo carries its own scaled copies instead of thumbs
     const doc = media?.document;
@@ -171,49 +274,129 @@ async function fetchThumb(record) {
         }
     }
 
+    // Telegram may call a picture sent without a type a plain file
+    const type = isImageType(doc?.mimeType)
+        ? doc.mimeType
+        : typeOf({ name: record.name });
     if (
         doc &&
-        isImageType(doc.mimeType) &&
+        isImageType(type) &&
         Number(doc.size?.value ?? doc.size) <= FALLBACK_LIMIT
     ) {
         const bytes = await getClient().downloadMedia(media, {});
-        return shrink(new Blob([bytes], { type: doc.mimeType }));
+        // a picture this browser cannot decode will not decode on a retry
+        // either, and each retry would download the whole file again
+        return shrink(new Blob([bytes], { type }), type).catch(() => null);
     }
     return null;
 }
 
-function pump() {
-    while (running < CONCURRENCY && queue.length) {
-        const { record, resolve } = queue.shift();
-        running += 1;
-        fetchThumb(record)
-            .catch(() => null)
-            .then((blob) => {
-                const url = blob ? URL.createObjectURL(blob) : null;
-                cache.set(keyOf(record), url);
-                inflight.delete(keyOf(record));
-                resolve(url);
-            })
-            .finally(() => {
-                running -= 1;
-                pump();
-            });
+function settle(entry, blob) {
+    const url = blob ? URL.createObjectURL(blob) : null;
+    cache.set(entry.key, url);
+    pending.delete(entry.key);
+    entry.resolve(url);
+}
+
+/**
+ * Try a failed thumbnail again a little later, as long as Telegram asks to
+ * wait (FLOOD_WAIT) or a few times otherwise. Time spent disconnected does
+ * not count. Once the tries run out the card shows its icon, and showing the
+ * card again later starts over.
+ */
+function retry(entry, error) {
+    // a wait Telegram asked for is not a failure of this thumbnail
+    const counts = isOnline() && !error?.seconds;
+    if (counts && entry.attempts >= RETRY_DELAYS.length) {
+        console.log("No thumbnail for", entry.record.name, error);
+        pending.delete(entry.key);
+        entry.resolve(null);
+        return;
+    }
+    const seconds = error?.seconds ?? RETRY_DELAYS[entry.attempts] ?? 30;
+    if (counts) entry.attempts += 1;
+    setTimeout(() => {
+        // dropped meanwhile by a sign-out
+        if (pending.get(entry.key) !== entry) return;
+        waiting.push(entry);
+        schedule();
+    }, seconds * 1000);
+}
+
+/** Several messages in one request, then their thumbnails a few at a time. */
+async function fetchBatch(entries) {
+    let messages;
+    try {
+        messages = await getClient().getMessages("me", {
+            ids: entries.map((e) => e.record.file_id),
+        });
+    } catch (error) {
+        entries.forEach((entry) => retry(entry, error));
+        return;
+    }
+    const byId = new Map();
+    for (const message of messages ?? []) {
+        if (message) byId.set(message.id, message);
+    }
+    let next = 0;
+    await Promise.all(
+        Array.from({ length: CONCURRENCY }, async () => {
+            while (next < entries.length) {
+                const entry = entries[next++];
+                try {
+                    const message = byId.get(entry.record.file_id);
+                    settle(entry, await thumbFrom(message, entry.record));
+                } catch (error) {
+                    retry(entry, error);
+                }
+            }
+        }),
+    );
+}
+
+async function drain() {
+    if (draining) return;
+    draining = true;
+    try {
+        // without Telegram they wait; onClientChange starts them again
+        while (waiting.length && hasClient()) {
+            await fetchBatch(waiting.splice(0, BATCH));
+        }
+    } finally {
+        draining = false;
     }
 }
+
+// cards asking at about the same time go out together
+function schedule() {
+    if (timer) return;
+    timer = setTimeout(() => {
+        timer = null;
+        drain();
+    }, 30);
+}
+
+onClientChange((client) => {
+    if (client) return schedule();
+    // a sign-out: these message ids mean nothing to the next account
+    waiting.length = 0;
+    for (const entry of pending.values()) entry.resolve(null);
+    pending.clear();
+});
 
 function loadThumb(record) {
     const key = keyOf(record);
     if (cache.has(key)) return Promise.resolve(cache.get(key));
-    if (!inflight.has(key)) {
-        inflight.set(
-            key,
-            new Promise((resolve) => {
-                queue.push({ record, resolve });
-                pump();
-            }),
-        );
+    if (!pending.has(key)) {
+        const entry = { key, record, attempts: 0 };
+        entry.promise = new Promise((resolve) => {
+            entry.resolve = resolve;
+        });
+        pending.set(key, entry);
+        waiting.push(entry);
+        schedule();
     }
-    return inflight.get(key);
+    return pending.get(key).promise;
 }
 
 /**
@@ -228,7 +411,7 @@ export function useThumbnail(record, wanted, visible) {
     );
 
     useEffect(() => {
-        if (!ready || !visible || !hasClient()) return undefined;
+        if (!ready || !visible) return undefined;
         let cancelled = false;
         loadThumb(record).then((next) => !cancelled && setUrl(next));
         return () => {
