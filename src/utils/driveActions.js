@@ -12,7 +12,12 @@ import downloadFile from "./downloadFile";
 import { entriesOf, isAbort } from "./pickers";
 import { collectSubtree, findFolder, messageIdsOf, recordIdsOf } from "./tree";
 import { cancelUploads, enqueueUpload, isQueued } from "./uploadQueue";
-import { createFolder, getSnapshot, removeRecords } from "../services/drive";
+import {
+    createFolder,
+    getSnapshot,
+    linkFile,
+    removeRecords,
+} from "../services/drive";
 import { TAB, liveTabs, readEntries } from "../services/uploadLog";
 import { dropShares } from "../services/shares";
 import { getClient } from "../services/telegram";
@@ -32,14 +37,21 @@ import { getClient } from "../services/telegram";
  *   once the new one is up), "keep" (the new one is renamed "name (1).ext"),
  *   "skip", or "cancel", which uploads nothing at all. Without it they are
  *   skipped.
+ * - one with no such name here, but a finished file of the same name and
+ *   size in another folder, is likely already on Telegram.
+ *   `onElsewhere(found)` decides for all of them: "link" adds a record
+ *   sharing that file's message (linkFile) instead of uploading it again,
+ *   "upload" sends it anyway, "cancel" uploads nothing. Without it they are
+ *   uploaded. A linked file's original is never deleted: its bytes were
+ *   never read, so nothing shows they are the ones Telegram has.
  *
  * Resolves to how many files were `queued`, `resumed`, `replaced`,
- * `renamed` and `skipped`.
+ * `renamed`, `linked` and `skipped`.
  */
 export async function uploadEntries(
     entries,
     parentID,
-    { asMedia = false, removeOriginal = false, onConflict } = {},
+    { asMedia = false, removeOriginal = false, onConflict, onElsewhere } = {},
 ) {
     const tree = buildTreeFromPaths(entries);
     const records = getSnapshot().records;
@@ -60,13 +72,17 @@ export async function uploadEntries(
         if (!existing) missing.push(folder);
     }
 
-    // what each folder already holds, by name
+    // what each folder already holds, by name; finished files anywhere, by
+    // name and size
     const named = new Map();
+    const uploaded = new Map();
     for (const record of records) {
         if (record.trashedAt) continue;
         const key = nameKey(record.parent, record.name);
         if (!named.has(key)) named.set(key, []);
         named.get(key).push(record);
+        if (record.type === "file" && record.file_id != null)
+            uploaded.set(sizeKey(record.name, record.size), record);
     }
 
     const placed = tree.files.map((entry) => {
@@ -83,6 +99,9 @@ export async function uploadEntries(
                 (r) => r.file_id == null && r.size === entry.file.size,
             ),
             taken: files.find((r) => r.file_id != null),
+            elsewhere: there.length
+                ? undefined
+                : uploaded.get(sizeKey(name, entry.file.size)),
         };
     });
 
@@ -113,9 +132,25 @@ export async function uploadEntries(
         resumed: 0,
         replaced: 0,
         renamed: 0,
+        linked: 0,
         skipped: 0,
     };
     if (choice === "cancel") return counts;
+
+    const found = placed.filter((p) => p.elsewhere);
+    const link = found.length
+        ? (await onElsewhere?.(
+              found.map((p) => ({
+                  name: p.name,
+                  size: p.entry.file.size,
+                  // the folder it is in; null for the top level
+                  where:
+                      records.find((r) => r.id === p.elsewhere.parent)?.name ??
+                      null,
+              })),
+          )) ?? "upload"
+        : null;
+    if (link === "cancel") return counts;
 
     for (const folder of missing) {
         const record = createFolder(folder.name, parentOf(folder));
@@ -163,6 +198,9 @@ export async function uploadEntries(
                 removeOriginal,
             });
             counts.resumed += 1;
+        } else if (p.elsewhere && link === "link") {
+            linkFile(p.elsewhere, p.parent, p.name);
+            counts.linked += 1;
         } else if (!taken) {
             queue(p);
             counts.queued += 1;
@@ -186,6 +224,7 @@ export async function uploadEntries(
 const MISSING = Symbol("missing folder");
 
 const nameKey = (parent, name) => `${parent ?? ""}\n${name}`;
+const sizeKey = (name, size) => `${size}\n${name}`;
 
 /** "name (1).ext", "name (2).ext"... whichever is free in the folder. */
 function freeName(named, parent, name) {
@@ -331,6 +370,10 @@ export async function deleteForever(ids) {
         recordIdsOf(subtree).forEach((x) => recordIds.add(x));
         messageIdsOf(subtree).forEach((x) => messageIds.add(x));
     }
+    // a linked copy (linkFile) left elsewhere still needs its message
+    for (const r of records)
+        if (!recordIds.has(r.id) && r.file_id != null)
+            messageIds.delete(r.file_id);
 
     cancelUploads([...recordIds]);
     // a file deleted for good must not stay downloadable through its link
