@@ -152,7 +152,7 @@ export function previewKind(record) {
     const kind = kindOf(record);
     const ext = extensionOf(record.name);
     if (kind === "image" && ext !== "heic") return "image";
-    if (kind === "video" && ["mp4", "webm", "mov", "m4v"].includes(ext))
+    if (kind === "video" && ["mp4", "webm", "mov", "m4v", "mkv"].includes(ext))
         return "video";
     if (kind === "audio") return "audio";
     if (kind === "pdf") return "pdf";
