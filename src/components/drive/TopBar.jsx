@@ -25,6 +25,7 @@ import CloudOffOutlinedIcon from "@mui/icons-material/CloudOffOutlined";
 import DarkModeOutlinedIcon from "@mui/icons-material/DarkModeOutlined";
 import LightModeOutlinedIcon from "@mui/icons-material/LightModeOutlined";
 import LogoutIcon from "@mui/icons-material/Logout";
+import BackupIcon from "@mui/icons-material/Backup";
 import KeyIcon from "@mui/icons-material/Key";
 import DevicesOtherIcon from "@mui/icons-material/DevicesOther";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
@@ -251,6 +252,18 @@ export default function TopBar({
                         <KeyIcon fontSize="small" />
                     </ListItemIcon>
                     Đổi mật khẩu
+                </MenuItem>
+                <MenuItem onClick={() => pick("recovery")}>
+                    <ListItemIcon>
+                        <KeyIcon fontSize="small" />
+                    </ListItemIcon>
+                    Mã khôi phục
+                </MenuItem>
+                <MenuItem onClick={() => pick("backup")}>
+                    <ListItemIcon>
+                        <BackupIcon fontSize="small" />
+                    </ListItemIcon>
+                    Sao lưu cây thư mục
                 </MenuItem>
                 <MenuItem onClick={() => pick("logoutOthers")}>
                     <ListItemIcon>

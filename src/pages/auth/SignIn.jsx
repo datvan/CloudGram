@@ -11,6 +11,7 @@ import {
 } from "@mui/material";
 
 import AuthShell from "./AuthShell";
+import Recover from "./Recover";
 import { describeError } from "../../services/api";
 import { login, unlock } from "../../services/account";
 
@@ -24,6 +25,7 @@ export default function SignIn({ locked, username: knownUser, onSwitchUser }) {
     const [remember, setRemember] = useState(true);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState(null);
+    const [forgot, setForgot] = useState(false);
 
     async function submit(event) {
         event.preventDefault();
@@ -37,6 +39,14 @@ export default function SignIn({ locked, username: knownUser, onSwitchUser }) {
             setBusy(false);
         }
     }
+
+    if (forgot)
+        return (
+            <Recover
+                username={knownUser ?? username}
+                onBack={() => setForgot(false)}
+            />
+        );
 
     return (
         <AuthShell
@@ -78,6 +88,14 @@ export default function SignIn({ locked, username: knownUser, onSwitchUser }) {
                         label="Ghi nhớ đăng nhập trên thiết bị này"
                     />
                     {error && <Alert severity="error">{error}</Alert>}
+                    <Button
+                        size="small"
+                        onClick={() => setForgot(true)}
+                        disabled={busy}
+                        sx={{ alignSelf: "flex-start" }}
+                    >
+                        Quên mật khẩu?
+                    </Button>
                     <Stack
                         direction="row"
                         justifyContent="space-between"

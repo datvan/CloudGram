@@ -9,8 +9,10 @@
  * - the Telegram session and the file tree, both encrypted with the DEK.
  *
  * So the server decides who may fetch a blob, but a copy of DATA_DIR is useless
- * without the account password. The flip side is that a forgotten password
- * cannot be reset without losing the vault; see `cli.js reset`.
+ * without the account password. A forgotten password is covered by a recovery
+ * code the browser made and showed once: the same DEK is wrapped a second time
+ * under a key derived from it (`user.recovery`). Without the code either, the
+ * only way back is `cli.js reset`, which loses the vault.
  *
  * Also here: a lease that lets only one browser use the Telegram session at a
  * time. Telegram answers AUTH_KEY_DUPLICATED and kills the key for good when it
@@ -103,6 +105,15 @@ function requireLoginKey(value) {
         throw new HttpError(400, "bad_login_key");
     }
     return value;
+}
+
+/** A recovery wrap: the KDF of the code, a verifier and the DEK under it. */
+async function requireRecovery(value) {
+    return {
+        kdf: requireKdf(value?.kdf),
+        verifier: await makeVerifier(requireLoginKey(value?.loginKey)),
+        wrappedDek: requireBlob(value?.wrappedDek, 1024, "bad_wrapped_dek"),
+    };
 }
 
 async function makeVerifier(loginKey) {
@@ -209,6 +220,7 @@ export class CloudGramApi {
             delete user.verifier;
             delete user.kdf;
             delete user.wrappedDek;
+            delete user.recovery;
             delete user.session;
             await this.db.deleteTree(user.id);
             this.#dropSessions(name);
@@ -360,6 +372,8 @@ export class CloudGramApi {
             1024,
             "bad_wrapped_dek",
         );
+        if (req.body.recovery)
+            user.recovery = await requireRecovery(req.body.recovery);
         delete user.setup;
         await this.#startSession(
             res,
@@ -393,7 +407,93 @@ export class CloudGramApi {
             kdf: user.kdf,
             wrappedDek: user.wrappedDek,
             hasTelegram: Boolean(user.session),
+            hasRecovery: Boolean(user.recovery),
         };
+    }
+
+    // ----- recovery code --------------------------------------------------------
+
+    /** The KDF of the recovery code; like prelogin, the same for unknown names. */
+    recoveryInfo(req) {
+        this.preloginByIp.take(req.ip);
+        const name = normalizeUsername(req.body.username);
+        const kdf = this.db.data.users[name]?.recovery?.kdf;
+        if (kdf) return { kdf };
+        const salt = createHmac("sha256", this.pepper)
+            .update(`recovery:${name}`)
+            .digest()
+            .subarray(0, 16);
+        return {
+            kdf: { salt: salt.toString("base64"), iterations: MIN_ITERATIONS },
+        };
+    }
+
+    /** The user whose recovery code gave `loginKey`, rate-limited like login. */
+    async #checkRecovery(req) {
+        this.loginByIp.take(req.ip);
+        const name = normalizeUsername(req.body.username);
+        this.loginByUser.take(name);
+        const loginKey = requireLoginKey(req.body.loginKey);
+        const user = this.db.data.users[name];
+        const verifier = user?.recovery?.verifier ?? {
+            salt: "AAAAAAAAAAAAAAAAAAAAAA==",
+            hash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        };
+        const ok = await checkVerifier(verifier, loginKey);
+        if (!ok || !user?.recovery || !user.verifier)
+            throw new HttpError(401, "bad_recovery");
+        return user;
+    }
+
+    /** Step 1: the code is right; hand back the DEK wrapped under it. */
+    async recoverStart(req) {
+        const user = await this.#checkRecovery(req);
+        return { wrappedDek: user.recovery.wrappedDek };
+    }
+
+    /**
+     * Step 2: a new password and a new code, both wrapping the same DEK. The
+     * old code stops working, and every other device is signed out.
+     */
+    async recover(req, res) {
+        const user = await this.#checkRecovery(req);
+        const kdf = requireKdf(req.body.kdf);
+        const verifier = await makeVerifier(
+            requireLoginKey(req.body.newLoginKey),
+        );
+        const wrappedDek = requireBlob(
+            req.body.wrappedDek,
+            1024,
+            "bad_wrapped_dek",
+        );
+        const recovery = await requireRecovery(req.body.recovery);
+        Object.assign(user, { kdf, verifier, wrappedDek, recovery });
+        this.loginByUser.clear(user.username);
+        this.#dropSessions(user.username);
+        await this.#startSession(
+            res,
+            user.username,
+            req.body.remember,
+            req.headers["user-agent"],
+        );
+        return this.#accountView(user);
+    }
+
+    /** A new recovery code for a signed-in account; the password is asked again. */
+    async setRecovery(req, res) {
+        const { user } = await this.authenticate(req, res);
+        this.loginByUser.take(user.username);
+        if (
+            !(await checkVerifier(
+                user.verifier,
+                requireLoginKey(req.body.loginKey),
+            ))
+        ) {
+            throw new HttpError(401, "bad_credentials");
+        }
+        user.recovery = await requireRecovery(req.body.recovery);
+        await this.db.save();
+        return { ok: true };
     }
 
     async me(req, res) {

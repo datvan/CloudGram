@@ -61,7 +61,9 @@ import {
     ConfirmDialog,
     MoveDialog,
     NameDialog,
+    BackupDialog,
     PasswordDialog,
+    RecoveryDialog,
     ScanDialog,
     UploadConflictDialog,
     UploadElsewhereDialog,
@@ -76,7 +78,14 @@ import {
 import { Store } from "../../redux/store";
 import { activeEntry } from "../../redux/reducers/progressReducer";
 import * as drive from "../../services/drive";
-import { logout, logoutOthers, unlinkTelegram } from "../../services/account";
+import { startTreeBackup, stopTreeBackup } from "../../services/treeBackup";
+import {
+    accountName,
+    hasRecovery,
+    logout,
+    logoutOthers,
+    unlinkTelegram,
+} from "../../services/account";
 import { describeError } from "../../services/api";
 import { importsBusy } from "../../services/dropboxImport";
 import {
@@ -283,6 +292,18 @@ export default function DriveApp({ mode, onToggleMode }) {
             ),
         [items],
     );
+
+    // an account without a recovery code is one forgotten password from losing
+    // its tree: ask for one as soon as the drive opens
+    useEffect(() => {
+        if (!hasRecovery()) setDialog({ type: "recovery", missing: true });
+    }, []);
+
+    // the tree's plain copy in Telegram, every 30 minutes (services/treeBackup)
+    useEffect(() => {
+        startTreeBackup();
+        return stopTreeBackup;
+    }, []);
 
     // a different place starts with nothing selected
     useEffect(() => {
@@ -840,6 +861,8 @@ export default function DriveApp({ mode, onToggleMode }) {
                 });
             });
         } else if (action === "unlink") setDialog({ type: "unlink" });
+        else if (action === "recovery") setDialog({ type: "recovery" });
+        else if (action === "backup") setDialog({ type: "backup" });
     }
 
     // ----- layout ----------------------------------------------------------------------------------
@@ -1557,6 +1580,16 @@ export default function DriveApp({ mode, onToggleMode }) {
                         setDialog(null);
                     })
                 }
+                onClose={() => setDialog(null)}
+            />
+            <BackupDialog
+                open={dialog?.type === "backup"}
+                onClose={() => setDialog(null)}
+            />
+            <RecoveryDialog
+                open={dialog?.type === "recovery"}
+                missing={Boolean(dialog?.missing)}
+                username={accountName()}
                 onClose={() => setDialog(null)}
             />
             <PasswordDialog

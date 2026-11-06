@@ -12,8 +12,9 @@ import {
 } from "@mui/material";
 
 import AuthShell from "./AuthShell";
+import RecoveryCode from "./RecoveryCode";
 import { describeError } from "../../services/api";
-import { completeSetup, setupInfo } from "../../services/account";
+import { completeSetup, prepareSetup, setupInfo } from "../../services/account";
 
 const MIN_LENGTH = 10;
 
@@ -29,6 +30,9 @@ export default function Setup({ token }) {
     const [remember, setRemember] = useState(true);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState(null);
+    // step 2: the keys are made and the recovery code is shown
+    const [prepared, setPrepared] = useState(null);
+    const [saved, setSaved] = useState(false);
 
     useEffect(() => {
         setupInfo(token)
@@ -49,7 +53,18 @@ export default function Setup({ token }) {
         setBusy(true);
         setError(null);
         try {
-            await completeSetup(token, password, remember);
+            setPrepared(await prepareSetup(password));
+        } catch (e) {
+            setError(describeError(e));
+        }
+        setBusy(false);
+    }
+
+    async function create() {
+        setBusy(true);
+        setError(null);
+        try {
+            await completeSetup(token, prepared, remember);
         } catch (e) {
             setError(describeError(e));
             setBusy(false);
@@ -72,14 +87,49 @@ export default function Setup({ token }) {
         );
     }
 
+    if (prepared) {
+        return (
+            <AuthShell title="Cất mã khôi phục">
+                <Stack spacing={2}>
+                    <RecoveryCode
+                        code={prepared.code}
+                        username={username}
+                        saved={saved}
+                        onSaved={setSaved}
+                    />
+                    {error && <Alert severity="error">{error}</Alert>}
+                    <Stack direction="row" justifyContent="space-between">
+                        <Button
+                            onClick={() => {
+                                setPrepared(null);
+                                setSaved(false);
+                            }}
+                            disabled={busy}
+                        >
+                            Quay lại
+                        </Button>
+                        <Button
+                            variant="contained"
+                            onClick={create}
+                            disabled={busy || !saved}
+                            sx={{ px: 3 }}
+                        >
+                            {busy ? "Đang tạo…" : "Tạo tài khoản"}
+                        </Button>
+                    </Stack>
+                </Stack>
+            </AuthShell>
+        );
+    }
+
     return (
         <AuthShell
             title="Đặt mật khẩu"
             subtitle={
                 <>
-                    Tài khoản <b>{username}</b>. Mật khẩu này mã hoá phiên
-                    Telegram và cây thư mục của bạn trên máy chủ; quên nó là
-                    phải đăng nhập Telegram lại từ đầu.
+                    Tài khoản <b>{username}</b>. Mật khẩu này khoá phiên
+                    Telegram và cây thư mục của bạn trên máy chủ. Bước sau sẽ
+                    cho bạn một mã khôi phục, dùng khi quên mật khẩu.
                 </>
             }
         >
@@ -127,7 +177,7 @@ export default function Setup({ token }) {
                             disabled={busy}
                             sx={{ px: 3 }}
                         >
-                            {busy ? "Đang tạo khoá…" : "Tạo tài khoản"}
+                            {busy ? "Đang tạo khoá…" : "Tiếp theo"}
                         </Button>
                     </Stack>
                 </Stack>

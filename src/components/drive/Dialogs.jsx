@@ -26,7 +26,14 @@ import FolderIcon from "@mui/icons-material/Folder";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 
 import { canMove, useDrive } from "../../services/drive";
-import { changePassword } from "../../services/account";
+import { changePassword, newRecoveryCode } from "../../services/account";
+import RecoveryCode from "../../pages/auth/RecoveryCode";
+import {
+    backupNow,
+    importFromTelegram,
+    listBackups,
+    restoreBackup,
+} from "../../services/treeBackup";
 import { describeError } from "../../services/api";
 import { formatSize } from "../../utils/format";
 import { pathTo } from "../../utils/tree";
@@ -379,6 +386,227 @@ PasswordDialog.propTypes = {
     open: PropTypes.bool,
     onClose: PropTypes.func,
     onDone: PropTypes.func,
+};
+
+/**
+ * A new recovery code, after the password. With `missing`, opened by itself
+ * because the account has none yet.
+ */
+export function RecoveryDialog({ open, missing, username, onClose }) {
+    const [password, setPassword] = useState("");
+    const [code, setCode] = useState(null);
+    const [saved, setSaved] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+        if (open) {
+            setPassword("");
+            setCode(null);
+            setSaved(false);
+            setError(null);
+        }
+    }, [open]);
+
+    async function submit(event) {
+        event.preventDefault();
+        setBusy(true);
+        setError(null);
+        try {
+            setCode(await newRecoveryCode(password));
+        } catch (e) {
+            setError(describeError(e));
+        }
+        setBusy(false);
+    }
+
+    return (
+        <Dialog
+            open={open}
+            onClose={busy || (code && !saved) ? undefined : onClose}
+            fullWidth
+            maxWidth="sm"
+        >
+            <form onSubmit={submit}>
+                <DialogTitle>Mã khôi phục</DialogTitle>
+                <DialogContent
+                    sx={{ display: "grid", gap: 2, pt: "8px !important" }}
+                >
+                    {code ? (
+                        <RecoveryCode
+                            code={code}
+                            username={username}
+                            saved={saved}
+                            onSaved={setSaved}
+                        />
+                    ) : (
+                        <>
+                            <Typography variant="body2">
+                                {missing
+                                    ? "Tài khoản chưa có mã khôi phục. Không có nó, quên mật khẩu là mất cây thư mục. Tạo ngay, chỉ mất một phút."
+                                    : "Tạo mã mới; mã cũ sẽ hết hiệu lực."}
+                            </Typography>
+                            <TextField
+                                label="Mật khẩu hiện tại"
+                                type="password"
+                                autoComplete="current-password"
+                                autoFocus
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                required
+                            />
+                        </>
+                    )}
+                    {error && <Alert severity="error">{error}</Alert>}
+                </DialogContent>
+                <DialogActions>
+                    {code ? (
+                        <Button onClick={onClose} disabled={!saved}>
+                            Xong
+                        </Button>
+                    ) : (
+                        <>
+                            <Button onClick={onClose} disabled={busy}>
+                                {missing ? "Để sau" : "Huỷ"}
+                            </Button>
+                            <Button type="submit" disabled={busy}>
+                                {busy ? "Đang tạo…" : "Tạo mã"}
+                            </Button>
+                        </>
+                    )}
+                </DialogActions>
+            </form>
+        </Dialog>
+    );
+}
+
+RecoveryDialog.propTypes = {
+    open: PropTypes.bool,
+    missing: PropTypes.bool,
+    username: PropTypes.string,
+    onClose: PropTypes.func,
+};
+
+/**
+ * The tree's copies in Telegram: make one now, put one back, or bring in
+ * files that are in Saved Messages but nowhere in the tree.
+ */
+export function BackupDialog({ open, onClose }) {
+    const [backups, setBackups] = useState(null);
+    const [busy, setBusy] = useState(null);
+    const [message, setMessage] = useState(null);
+    const [error, setError] = useState(null);
+
+    const load = () =>
+        listBackups().then(setBackups, (e) => setError(describeError(e)));
+
+    useEffect(() => {
+        if (!open) return;
+        setBackups(null);
+        setMessage(null);
+        setError(null);
+        load();
+    }, [open]);
+
+    async function act(what, job) {
+        setBusy(what);
+        setError(null);
+        setMessage(null);
+        try {
+            setMessage(await job());
+        } catch (e) {
+            setError(describeError(e));
+        }
+        setBusy(null);
+    }
+
+    return (
+        <Dialog
+            open={open}
+            onClose={busy ? undefined : onClose}
+            fullWidth
+            maxWidth="sm"
+        >
+            <DialogTitle>Sao lưu cây thư mục</DialogTitle>
+            <DialogContent sx={{ display: "grid", gap: 2 }}>
+                <Typography variant="body2" color="text.secondary">
+                    Cứ 30 phút, nếu có thay đổi, CloudGram gửi một bản sao cây
+                    thư mục (tên, thư mục, vị trí file) vào Saved Messages. Bản
+                    sao không cần mật khẩu để mở, nên mất tài khoản vẫn dựng lại
+                    được. Giữ 10 bản mới nhất.
+                </Typography>
+                {busy && <LinearProgress />}
+                {message && <Alert severity="success">{message}</Alert>}
+                {error && <Alert severity="error">{error}</Alert>}
+                {!backups ? (
+                    !error && <LinearProgress />
+                ) : backups.length === 0 ? (
+                    <Typography variant="body2">
+                        Chưa có bản sao nào.
+                    </Typography>
+                ) : (
+                    <List dense disablePadding>
+                        {backups.map((b) => (
+                            <ListItemButton
+                                key={b.id}
+                                disabled={Boolean(busy)}
+                                onClick={() =>
+                                    act("restore", async () => {
+                                        const n = await restoreBackup(b.id);
+                                        return n
+                                            ? `Đã đưa lại ${n} mục từ bản sao.`
+                                            : "Mọi mục trong bản sao này đều đang có, không có gì để đưa lại.";
+                                    })
+                                }
+                            >
+                                <ListItemText
+                                    primary={b.date.toLocaleString("vi-VN")}
+                                    secondary={`${formatSize(
+                                        b.size,
+                                    )} · bấm để khôi phục những mục bị thiếu`}
+                                />
+                            </ListItemButton>
+                        ))}
+                    </List>
+                )}
+            </DialogContent>
+            <DialogActions sx={{ flexWrap: "wrap", gap: 1 }}>
+                <Button
+                    disabled={Boolean(busy)}
+                    onClick={() =>
+                        act("import", async () => {
+                            const { added } = await importFromTelegram();
+                            return added
+                                ? `Đã nhập ${added} file vào thư mục "Nhập từ Telegram".`
+                                : "Mọi file trong Saved Messages đều đã có trong CloudGram.";
+                        })
+                    }
+                >
+                    Nhập file từ Telegram
+                </Button>
+                <Button
+                    disabled={Boolean(busy)}
+                    onClick={() =>
+                        act("backup", async () => {
+                            await backupNow({ force: true });
+                            await load();
+                            return "Đã gửi một bản sao vào Saved Messages.";
+                        })
+                    }
+                >
+                    Sao lưu ngay
+                </Button>
+                <Button onClick={onClose} disabled={Boolean(busy)}>
+                    Đóng
+                </Button>
+            </DialogActions>
+        </Dialog>
+    );
+}
+
+BackupDialog.propTypes = {
+    open: PropTypes.bool,
+    onClose: PropTypes.func,
 };
 
 const COMPRESS_KEY = "cloudgram.compressMedia";

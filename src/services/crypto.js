@@ -146,3 +146,47 @@ export async function encryptJson(dek, value, label) {
 export async function decryptJson(dek, blob, label) {
     return JSON.parse(decoder.decode(await decryptBytes(dek, blob, label)));
 }
+
+// ----- recovery code ------------------------------------------------------------
+
+// no 0/O or 1/I/L, so it can be read back from paper
+const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const CODE_LENGTH = 24;
+
+/** A fresh recovery code, like `ABCD-EFGH-…` (about 118 random bits). */
+export function newRecoveryCode() {
+    const out = [];
+    while (out.length < CODE_LENGTH) {
+        for (const b of globalThis.crypto.getRandomValues(new Uint8Array(32))) {
+            // 248 = 8 × 31, so every letter is equally likely
+            if (b < 248 && out.length < CODE_LENGTH)
+                out.push(CODE_ALPHABET[b % CODE_ALPHABET.length]);
+        }
+    }
+    return out.join("").replace(/(.{4})(?=.)/g, "$1-");
+}
+
+/** The code as typed: case, spaces and dashes do not matter. */
+export function normalizeRecoveryCode(text) {
+    return String(text ?? "")
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "");
+}
+
+/**
+ * Wrap the DEK (now wrapped under `kek`) a second time under a new recovery
+ * code. Returns the code to show and what the server keeps.
+ */
+export async function makeRecovery(kek, wrappedDek) {
+    const code = newRecoveryCode();
+    const kdf = newKdf();
+    const keys = await deriveKeys(normalizeRecoveryCode(code), kdf);
+    return {
+        code,
+        recovery: {
+            kdf,
+            loginKey: keys.loginKey,
+            wrappedDek: await rewrapDek(kek, wrappedDek, keys.kek),
+        },
+    };
+}

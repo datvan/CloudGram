@@ -53,6 +53,11 @@ export const api = {
     logout: (browserId) => request("POST", "/auth/logout", { browserId }),
     logoutOthers: () => request("POST", "/auth/logout-others", {}),
     changePassword: (body) => request("POST", "/auth/password", body),
+    recoveryInfo: (username) =>
+        request("POST", "/auth/recovery-info", { username }),
+    recoverStart: (body) => request("POST", "/auth/recover-start", body),
+    recover: (body) => request("POST", "/auth/recover", body),
+    setRecovery: (body) => request("POST", "/auth/recovery", body),
     me: () => request("GET", "/me"),
     getSession: () => request("GET", "/vault/session"),
     putSession: (session, browserId) =>
@@ -108,6 +113,7 @@ export function releaseOnUnload(browserId) {
 
 const MESSAGES = {
     bad_credentials: "Sai tên đăng nhập hoặc mật khẩu.",
+    bad_recovery: "Sai tên đăng nhập hoặc mã khôi phục.",
     rate_limited: "Thử quá nhiều lần. Đợi một lúc rồi thử lại.",
     bad_username: "Tên đăng nhập không hợp lệ.",
     token_invalid: "Link thiết lập không hợp lệ hoặc đã hết hạn.",
