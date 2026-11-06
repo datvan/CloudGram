@@ -287,6 +287,24 @@ export async function askToWrite(entries, run) {
 const sameFile = (a, b) =>
     a.size === b.size && a.lastModified === b.lastModified;
 
+// Windows refuses to delete a file something still has open: the player or
+// thumbnail that just read it, an antivirus scan. That ends within seconds, so
+// try again a few times (shortcut: 7.5 s in all, when a longer wait is needed
+// raise it, or add a "try again" button) before giving up with KEPT.locked.
+const LOCKED_WAITS = [500, 1000, 2000, 4000];
+
+async function whenFree(remove) {
+    for (let i = 0; ; i += 1) {
+        try {
+            return await remove();
+        } catch (error) {
+            if (error?.name !== "NoModificationAllowedError") throw error;
+            if (i === LOCKED_WAITS.length) return KEPT.locked;
+            await new Promise((done) => setTimeout(done, LOCKED_WAITS[i]));
+        }
+    }
+}
+
 /**
  * Delete the file a saved handle points at, then the folders that leaves
  * empty, up to and including what was picked. Nothing goes without write
@@ -300,8 +318,7 @@ export async function removePicked(handle, uploaded) {
         return KEPT.permission;
     if (root.kind === "file") {
         if (!sameFile(await root.getFile(), uploaded)) return KEPT.changed;
-        await root.remove();
-        return null;
+        return (await whenFree(() => root.remove())) ?? null;
     }
     const folders = sub.split("/");
     const name = folders.pop();
@@ -311,7 +328,8 @@ export async function removePicked(handle, uploaded) {
     const parent = dirs[dirs.length - 1];
     if (!sameFile(await (await parent.getFileHandle(name)).getFile(), uploaded))
         return KEPT.changed;
-    await parent.removeEntry(name);
+    const locked = await whenFree(() => parent.removeEntry(name));
+    if (locked) return locked;
     if (handle.filesOnly) return null;
     // without `recursive` a folder that still holds anything refuses to go,
     // which is what keeps files not (yet) uploaded
@@ -336,6 +354,7 @@ export const KEPT = {
     notStored:
         "Chưa lưu được vào cây thư mục trên máy chủ, nên giữ lại cho an toàn.",
     trashed: "Tệp bị cho vào thùng rác trong lúc tải, nên giữ lại bản gốc.",
+    locked: "Windows báo tệp đang được chương trình khác mở (trình phát video, ô xem trước của Explorer, phần mềm diệt virus...). Đóng chúng rồi xoá tay.",
     gone: "Tệp đã bị xoá khỏi Drive trong lúc tải, nên giữ lại bản gốc.",
     // files that were not sent at all this time
     skipped:
