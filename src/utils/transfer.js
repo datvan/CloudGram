@@ -97,7 +97,7 @@ async function call(client, request, dcId, stats) {
 const newStats = () => ({ waits: [], reconnects: 0, retries: 0 });
 
 /** At most `size` holders at once; the rest wait their turn in order. */
-function turns(size) {
+export function turns(size) {
     let free = size;
     const waiting = [];
     return {

@@ -138,39 +138,71 @@ function ensureRecord({ id, entry }) {
     return true;
 }
 
+// Saved Messages read back at most this far when looking for sent files
+const LOOK_BACK = 10000;
+
 /**
- * The message an earlier tab sent for this entry, if it got that far: by the
- * id it noted, or else by looking through Saved Messages around the time it
- * started sending.
+ * Finds the messages earlier tabs sent for `entries`, if they got that far:
+ * by the id each noted, or else by looking through Saved Messages around the
+ * time it started sending. Everything is fetched once up front: one request
+ * per entry, hundreds of them after a large folder, ran into Telegram's flood
+ * waits and held the banner at 0 for many minutes.
  */
-async function sentMessage(entry) {
+async function sentFinder(entries) {
     const client = getClient();
-    if (entry.messageId) {
-        const [message] = await client.getMessages("me", {
-            ids: [entry.messageId],
+    const byId = new Map();
+    const noted = entries.filter((e) => e.messageId).map((e) => e.messageId);
+    for (let i = 0; i < noted.length; i += 100) {
+        const messages = await client.getMessages("me", {
+            ids: noted.slice(i, i + 100),
         });
-        if (message) return message;
+        for (const m of messages) if (m) byId.set(m.id, m);
     }
-    if (!entry.sending) return null;
-    const startedAt = entry.sending / 1000;
-    const messages = await client.getMessages("me", {
-        limit: 100,
-        offsetDate: Math.ceil(startedAt) + 600,
-    });
+
+    const starts = entries
+        .filter((e) => e.sending && !byId.has(e.messageId))
+        .map((e) => e.sending / 1000);
+    const recent = [];
+    if (starts.length) {
+        const from = Math.min(...starts) - 5;
+        let read = 0;
+        for await (const m of client.iterMessages("me", {
+            offsetDate: Math.ceil(Math.max(...starts)) + 600,
+        })) {
+            if (m.date < from || ++read > LOOK_BACK) break;
+            recent.push(m);
+        }
+    }
+
     const used = new Set(
         getSnapshot()
             .records.map((r) => r.file_id)
             .filter((x) => x != null),
     );
-    const fits = (m) => {
-        if (used.has(m.id) || m.date < startedAt - 5) return false;
-        if (entry.sentAs === "photo") return Boolean(m.media?.photo);
-        const doc = m.media?.document;
-        if (!doc || Number(doc.size) !== entry.record.size) return false;
-        return doc.attributes?.some((a) => a.fileName === entry.record.name);
+    return (entry) => {
+        const own = byId.get(entry.messageId);
+        if (own) {
+            used.add(own.id);
+            return own;
+        }
+        if (!entry.sending) return null;
+        const startedAt = entry.sending / 1000;
+        const fits = (m) => {
+            if (used.has(m.id) || m.date < startedAt - 5) return false;
+            if (m.date > startedAt + 600) return false;
+            if (entry.sentAs === "photo") return Boolean(m.media?.photo);
+            const doc = m.media?.document;
+            if (!doc || Number(doc.size) !== entry.record.size) return false;
+            return doc.attributes?.some(
+                (a) => a.fileName === entry.record.name,
+            );
+        };
+        const near = (m) => Math.abs(m.date - startedAt);
+        const found = recent.filter(fits).sort((a, b) => near(a) - near(b))[0];
+        // two files of the same name and size must not share one message
+        if (found) used.add(found.id);
+        return found ?? null;
     };
-    const near = (m) => Math.abs(m.date - startedAt);
-    return messages.filter(fits).sort((a, b) => near(a) - near(b))[0] ?? null;
 }
 
 // files opened from their handles at once; each is a few small disk reads
@@ -248,9 +280,28 @@ export async function resume(found, granted, onProgress) {
         onProgress?.({ done, total });
     };
 
+    let sentMessage = () => null;
+    const sent = mine.files
+        .map((item) => item.entry)
+        .filter((entry) => entry?.messageId || entry?.sending);
+    if (sent.length) {
+        try {
+            sentMessage = await sentFinder(sent);
+        } catch (error) {
+            // cannot tell whether they were sent; let the user decide below
+            console.log(error);
+            sentMessage = () => {
+                throw error;
+            };
+        }
+    }
+
     // what can be read from a saved handle; opened together further down
     const toOpen = [];
+    // adopted together, so their vault writes fold into one (drive.js, flush)
+    const adopting = [];
     for (const item of mine.files) {
+        tell(false);
         const { id, entry } = item;
         if (!ensureRecord(item)) {
             dropEntry(id);
@@ -259,16 +310,27 @@ export async function resume(found, granted, onProgress) {
         }
         if (entry?.messageId || entry?.sending) {
             try {
-                const message = await sentMessage(entry);
+                const message = sentMessage(entry);
                 if (message) {
-                    await adoptMessage(
-                        id,
-                        message,
-                        entry.sentAs,
-                        entry.replaces,
+                    adopting.push(
+                        adoptMessage(
+                            id,
+                            message,
+                            entry.sentAs,
+                            entry.replaces,
+                        ).then(
+                            () => {
+                                result.adopted += 1;
+                                done += 1;
+                                tell(false);
+                            },
+                            (error) => {
+                                console.log(error);
+                                result.needsPick.push(item);
+                                done += 1;
+                            },
+                        ),
                     );
-                    result.adopted += 1;
-                    done += 1;
                     continue;
                 }
             } catch (error) {
@@ -334,6 +396,7 @@ export async function resume(found, granted, onProgress) {
     };
     await Promise.all(Array.from({ length: OPEN_AT_ONCE }, lane));
     queueReady();
+    await Promise.all(adopting);
     tell(true);
 
     for (const { link, parentID, asMedia } of links.values()) {
