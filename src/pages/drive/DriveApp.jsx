@@ -113,6 +113,22 @@ const VIEWS = {
     search: { title: "Kết quả tìm kiếm", empty: "Không có kết quả phù hợp." },
 };
 
+/** Where the linked copies live, so "Xoá hết" says what else goes. */
+function linksText(links, byId) {
+    if (!links?.length) return "";
+    const lines = links.slice(0, 3).map((r) => {
+        const folder = r.parent ? byId.get(r.parent)?.name : undefined;
+        const trashed = isHidden(byId, r) ? " (thùng rác)" : "";
+        return `• “${r.name}” trong “${folder ?? "Drive của tôi"}”${trashed}`;
+    });
+    if (links.length > 3) lines.push(`• và ${links.length - 3} bản khác`);
+    return `\n\nCòn ${
+        links.length
+    } bản liên kết dùng chung dữ liệu:\n${lines.join(
+        "\n",
+    )}\n\n“Xoá hết” xoá luôn các bản này và dữ liệu trên Telegram. “Chỉ xoá mục đã chọn” giữ lại chúng.`;
+}
+
 function readPref(key, fallback) {
     try {
         return localStorage.getItem(key) ?? fallback;
@@ -452,10 +468,10 @@ export default function DriveApp({ mode, onToggleMode }) {
         }
     }
 
-    async function confirmForever() {
+    async function confirmForever(withLinks) {
         await run("Xoá thất bại, chưa có gì bị xoá", async () => {
-            if (dialog.all) await emptyTrash();
-            else await deleteForever(dialog.ids);
+            if (dialog.all) await emptyTrash({ withLinks });
+            else await deleteForever(dialog.ids, { withLinks });
             setSelected(new Set());
             setNotice({ severity: "success", text: "Đã xoá vĩnh viễn." });
         });
@@ -1505,13 +1521,24 @@ export default function DriveApp({ mode, onToggleMode }) {
                 title={dialog?.all ? "Dọn sạch thùng rác?" : "Xoá vĩnh viễn?"}
                 body={
                     dialog?.type === "forever"
-                        ? `${dialog.files} tệp và ${dialog.folders} thư mục sẽ bị xoá khỏi Telegram Saved Messages. Không thể hoàn tác.`
+                        ? `${dialog.files} tệp và ${
+                              dialog.folders
+                          } thư mục sẽ bị xoá khỏi Telegram Saved Messages. Không thể hoàn tác.${linksText(
+                              dialog.links,
+                              byId,
+                          )}`
                         : ""
                 }
-                confirmLabel="Xoá vĩnh viễn"
+                confirmLabel={
+                    dialog?.links?.length ? "Xoá hết" : "Xoá vĩnh viễn"
+                }
+                secondaryLabel={
+                    dialog?.links?.length ? "Chỉ xoá mục đã chọn" : undefined
+                }
                 danger
                 busy={busy}
-                onConfirm={confirmForever}
+                onConfirm={() => confirmForever(true)}
+                onSecondary={() => confirmForever(false)}
                 onClose={() => setDialog(null)}
             />
             <ConfirmDialog
