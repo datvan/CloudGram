@@ -148,8 +148,9 @@ const LOOK_BACK = 10000;
  * per entry, hundreds of them after a large folder, ran into Telegram's flood
  * waits and held the banner at 0 for many minutes.
  */
-async function sentFinder(entries) {
+async function sentFinder(entries, onLooked) {
     const client = getClient();
+    onLooked(0);
     const byId = new Map();
     const noted = entries.filter((e) => e.messageId).map((e) => e.messageId);
     for (let i = 0; i < noted.length; i += 100) {
@@ -159,18 +160,26 @@ async function sentFinder(entries) {
         for (const m of messages) if (m) byId.set(m.id, m);
     }
 
+    // Only the stretches of time something was being sent are read: an
+    // entry left from days ago must not mean reading everything since.
+    const spans = [];
     const starts = entries
         .filter((e) => e.sending && !byId.has(e.messageId))
-        .map((e) => e.sending / 1000);
+        .map((e) => e.sending / 1000)
+        .sort((a, b) => b - a);
+    for (const start of starts) {
+        const last = spans[spans.length - 1];
+        if (last && start + 600 >= last.from) last.from = start - 5;
+        else spans.push({ to: Math.ceil(start) + 600, from: start - 5 });
+    }
     const recent = [];
-    if (starts.length) {
-        const from = Math.min(...starts) - 5;
-        let read = 0;
-        for await (const m of client.iterMessages("me", {
-            offsetDate: Math.ceil(Math.max(...starts)) + 600,
-        })) {
-            if (m.date < from || ++read > LOOK_BACK) break;
+    let read = 0;
+    for (const { to, from } of spans) {
+        for await (const m of client.iterMessages("me", { offsetDate: to })) {
+            if (m.date < from || read >= LOOK_BACK) break;
+            read += 1;
             recent.push(m);
+            if (read % 100 === 0) onLooked(read);
         }
     }
 
@@ -251,6 +260,7 @@ export async function resume(found, granted, onProgress) {
 
     // each entry's handle is its own copy out of IndexedDB, so the answer is
     // asked of every root again; a granted one now just says yes
+    onProgress?.({ done: 0, total: found.files.length, asking: true });
     await granted;
     const allowed = new Map();
     const canRead = (handle) => {
@@ -286,7 +296,9 @@ export async function resume(found, granted, onProgress) {
         .filter((entry) => entry?.messageId || entry?.sending);
     if (sent.length) {
         try {
-            sentMessage = await sentFinder(sent);
+            sentMessage = await sentFinder(sent, (looked) =>
+                onProgress?.({ done: 0, total, looked }),
+            );
         } catch (error) {
             // cannot tell whether they were sent; let the user decide below
             console.log(error);
