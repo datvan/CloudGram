@@ -5,6 +5,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 
 import DriveApp from "./pages/drive/DriveApp";
 import SignIn from "./pages/auth/SignIn";
+import Rescue from "./pages/auth/Rescue";
 import Setup from "./pages/auth/Setup";
 import TelegramLink from "./pages/auth/TelegramLink";
 import {
@@ -46,6 +47,9 @@ function DriveRoot({ mode, onToggleMode }) {
     switch (phase) {
         case "setup":
             screen = <Setup token={setupToken} />;
+            break;
+        case "rescue":
+            screen = <Rescue />;
             break;
         case "signedOut":
             screen = <SignIn />;
