@@ -4,7 +4,15 @@ import { getClient } from "../services/telegram";
 import { Store } from "../redux/store";
 import { uploadProgress } from "../redux/actions/progressAction";
 import { fitsAsPhoto, makeThumb, probeVideo, typeOf } from "./thumbnails";
-import { uploadParts } from "./transfer";
+import { turns, uploadParts } from "./transfer";
+
+// Messages being sent at once. The pool frees a file's place once its parts
+// are out, so without a cap a large folder had hundreds of sends waiting on
+// Telegram together: it made them all wait (FLOOD_WAIT), they all asked again
+// at the same moment, and files sat at 100% without their tick for good.
+const sendTurns = turns(4);
+// ms after which a send still waiting lets the next one go anyway
+const SEND_STUCK = 120000;
 
 // what Telegram itself plays inline; other containers go up as files
 const STREAMABLE = ["video/mp4", "video/quicktime", "video/x-m4v"];
@@ -143,18 +151,36 @@ export default async function uploadFile(
         },
     });
 
-    // from here a closed tab may leave a message nobody recorded
-    await onSend?.(kind);
+    await sendTurns.take();
+    let given = false;
+    const give = () => {
+        if (given) return;
+        given = true;
+        sendTurns.give();
+    };
+    // a send that never answers must not hold up every file behind it
+    const stuck = setTimeout(give, SEND_STUCK);
     let message;
+    let sending = false;
     try {
+        // from here a closed tab may leave a message nobody recorded
+        await onSend?.(kind);
+        sending = true;
         message = await client.sendFile("me", {
             file: inputFile,
             ...options,
         });
     } catch (error) {
-        if (!(error instanceof errors.RPCError) && !neverQueued(error))
+        if (
+            sending &&
+            !(error instanceof errors.RPCError) &&
+            !neverQueued(error)
+        )
             error.maybeSent = true;
         throw error;
+    } finally {
+        clearTimeout(stuck);
+        give();
     }
 
     return { message, changes: sentChanges(message, kind, file.size) };
