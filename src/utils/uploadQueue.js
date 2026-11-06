@@ -26,6 +26,7 @@ import {
 import { isFinal } from "./transfer";
 import { removePicked } from "./pickers";
 import uploadFile, { sentChanges } from "./uploadFile";
+import { fromUpload } from "../services/storyboard";
 
 /**
  * One bounded worker pool behind every upload in the app.
@@ -371,6 +372,8 @@ async function run(job, release) {
     // failure here is also not offered as a retry, for the same reason.
     try {
         await settle(id, result, job.replaces, job);
+        // while the file is still at hand, for the player's seek bar
+        if (!job.removeOriginal) fromUpload(id, file);
     } catch (error) {
         console.log(error);
         Store.dispatch(

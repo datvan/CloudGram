@@ -37,8 +37,20 @@ import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import CheckIcon from "@mui/icons-material/Check";
 import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 
-import { setBitrate, stopReadAhead, streamFailed } from "../../services/stream";
+import {
+    setBitrate,
+    stopReadAhead,
+    streamFailed,
+    streamUrl,
+} from "../../services/stream";
 import { isOnline } from "../../services/telegram";
+import {
+    COLS,
+    FRAMES,
+    frameAt,
+    frameTime,
+    useStoryboard,
+} from "../../services/storyboard";
 
 // ----- what the browser remembers --------------------------------------------
 
@@ -131,8 +143,33 @@ Control.propTypes = {
     children: PropTypes.node,
 };
 
+/** One frame of a storyboard, as wide as its box. */
+function Frame({ board, index, sx }) {
+    const col = index % COLS;
+    const row = Math.floor(index / COLS);
+    const at = (n) => `${(n / (COLS - 1)) * 100}%`;
+    return (
+        <Box
+            sx={{
+                aspectRatio: `${board.w} / ${board.h}`,
+                backgroundImage: `url(${board.url})`,
+                backgroundSize: `${COLS * 100}% ${COLS * 100}%`,
+                backgroundPosition: `${at(col)} ${at(row)}`,
+                borderRadius: 1,
+                ...sx,
+            }}
+        />
+    );
+}
+
+Frame.propTypes = {
+    board: PropTypes.object,
+    index: PropTypes.number,
+    sx: PropTypes.object,
+};
+
 /** The bar to seek with: what is buffered, what is played, the time hovered. */
-function SeekBar({ time, duration, buffered, onSeek }) {
+function SeekBar({ time, duration, buffered, onSeek, board }) {
     const bar = useRef(null);
     const [hover, setHover] = useState(null);
     const [dragging, setDragging] = useState(false);
@@ -251,12 +288,28 @@ function SeekBar({ time, duration, buffered, onSeek }) {
                     sx={{
                         position: "absolute",
                         bottom: 22,
-                        left: Math.min(Math.max(hover.x, 28), hover.width - 28),
+                        // kept inside the bar, the picture's half included
+                        left: Math.min(
+                            Math.max(hover.x, board ? 82 : 28),
+                            hover.width - (board ? 82 : 28),
+                        ),
                         transform: "translateX(-50%)",
                         pointerEvents: "none",
                         textAlign: "center",
                     }}
                 >
+                    {board && (
+                        <Frame
+                            board={board}
+                            index={frameAt(hover.time, duration)}
+                            sx={{
+                                width: 160,
+                                mb: 0.5,
+                                border: "2px solid #fff",
+                                bgcolor: "#000",
+                            }}
+                        />
+                    )}
                     <Typography
                         component="div"
                         sx={{
@@ -279,7 +332,13 @@ SeekBar.propTypes = {
     duration: PropTypes.number,
     buffered: PropTypes.array,
     onSeek: PropTypes.func,
+    board: PropTypes.object,
 };
+
+// the frames the grid shows before the video starts: one from each ninth
+const GRID = Array.from({ length: 9 }, (_, k) =>
+    Math.round(((k + 0.5) * FRAMES) / 9 - 0.5),
+);
 
 /**
  * A YouTube-like player for one video streamed from Telegram. The dialog
@@ -485,6 +544,30 @@ const VideoPlayer = forwardRef(function VideoPlayer(
         [flash],
     );
 
+    // made only once the video plays, so drawing it never slows the start
+    const board = useStoryboard(
+        record,
+        () => streamUrl(record, { quiet: true }),
+        started,
+    );
+    const grid = !started && !error && Boolean(board);
+
+    /** Play from `seconds`, also before the video has loaded. */
+    const jump = useCallback(
+        (seconds) => {
+            const v = video.current;
+            if (!v) return;
+            if (v.readyState >= 1) {
+                seek(seconds);
+                play();
+            } else {
+                resumeAt.current = seconds;
+                playAfterLoad.current = true;
+            }
+        },
+        [seek, play],
+    );
+
     const retry = useCallback(() => {
         const v = video.current;
         if (!v) return;
@@ -676,7 +759,77 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                 {...events}
             />
 
-            {waiting && !error && (
+            {grid && (
+                <Stack
+                    alignItems="center"
+                    spacing={1.5}
+                    sx={{
+                        position: "absolute",
+                        inset: 0,
+                        justifyContent: "center",
+                        bgcolor: "rgba(0,0,0,.7)",
+                    }}
+                >
+                    <Box
+                        sx={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(3, 1fr)",
+                            gap: 1,
+                            width: "min(720px, 86%)",
+                        }}
+                    >
+                        {GRID.map((index) => {
+                            const t = frameTime(index, board.duration);
+                            return (
+                                <Box
+                                    key={index}
+                                    component="button"
+                                    onClick={() => jump(t)}
+                                    aria-label={`Xem từ ${formatTime(t)}`}
+                                    sx={{
+                                        position: "relative",
+                                        p: 0,
+                                        border: "2px solid transparent",
+                                        borderRadius: 1.5,
+                                        bgcolor: "#000",
+                                        cursor: "pointer",
+                                        "&:hover": { borderColor: "#fff" },
+                                    }}
+                                >
+                                    <Frame board={board} index={index} />
+                                    <Typography
+                                        component="span"
+                                        sx={{
+                                            ...white,
+                                            position: "absolute",
+                                            right: 6,
+                                            bottom: 4,
+                                            fontSize: 12,
+                                            px: 0.5,
+                                            borderRadius: 0.5,
+                                            bgcolor: "rgba(0,0,0,.7)",
+                                        }}
+                                    >
+                                        {formatTime(t)}
+                                    </Typography>
+                                </Box>
+                            );
+                        })}
+                    </Box>
+                    <Stack direction="row" alignItems="center" spacing={1}>
+                        {waiting && <CircularProgress size={16} sx={white} />}
+                        <Typography
+                            sx={{ ...white, fontSize: 14, opacity: 0.85 }}
+                        >
+                            {waiting
+                                ? "Đang tải… bấm một khung để xem từ đoạn đó"
+                                : "Bấm một khung để xem từ đoạn đó, hoặc bấm Space để phát"}
+                        </Typography>
+                    </Stack>
+                </Stack>
+            )}
+
+            {waiting && !error && !grid && (
                 <CircularProgress
                     sx={{
                         ...white,
@@ -691,7 +844,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                 />
             )}
 
-            {!started && !waiting && !error && paused && (
+            {!started && !waiting && !error && paused && !grid && (
                 <IconButton
                     onClick={play}
                     aria-label="Phát"
@@ -866,6 +1019,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                     duration={duration}
                     buffered={buffered}
                     onSeek={seek}
+                    board={board}
                 />
                 <Stack direction="row" alignItems="center" sx={{ pb: 0.5 }}>
                     <Control
