@@ -220,8 +220,12 @@ export async function uploadParts(client, file, options = {}) {
             throw error;
         }
         done.add(index);
-        sent += bytes.length;
         sentMeter.add(bytes.length);
+        // This attempt already gave up and the queue sends the file again.
+        // A late report would land after that retry finished and bring the
+        // spinner back for good.
+        if (failed) return;
+        sent += bytes.length;
         onProgress?.(sent / Math.max(1, size));
     }
 
@@ -303,6 +307,9 @@ export async function downloadParts(
                 // another lane failed while this one waited for its turn
                 if (failed) return;
                 const bytes = await fetchPart(index);
+                // the download gave up meanwhile; a late report would put
+                // its spinner back after the fallback finished
+                if (failed) return;
                 const expected = Math.min(partSize, size - index * partSize);
                 if (bytes.length !== expected)
                     throw new Error(`Part ${index} came back short`);
