@@ -686,9 +686,15 @@ export default function DriveApp({ mode, onToggleMode }) {
         ]
             .filter(Boolean)
             .join(", ");
+        // nothing is sent for these, so "xoá sau khi tải lên" leaves them
+        const untouched = run.removeOriginal ? linked + skipped : 0;
         setNotice({
             severity: "info",
-            text: `${text[0].toUpperCase()}${text.slice(1)}.`,
+            text:
+                `${text[0].toUpperCase()}${text.slice(1)}.` +
+                (untouched
+                    ? ` ${untouched} tệp bỏ qua hoặc liên kết không được tải lên, nên bản gốc trên máy được giữ nguyên.`
+                    : ""),
         });
     }
 

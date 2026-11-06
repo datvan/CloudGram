@@ -46,9 +46,11 @@ export function errorProgress(id, message) {
 // Reaching 100% used to clear the entry on its own, which hid the gap between
 // the last byte leaving and the record getting its file_id. Whoever started the
 // transfer now says when it is done.
-export function completedProgress(id) {
+// `kept` says why the original asked to be deleted is still on disk
+export function completedProgress(id, kept = null) {
     return {
         id: id,
+        kept: kept,
         type: "COMPLETED",
     };
 }

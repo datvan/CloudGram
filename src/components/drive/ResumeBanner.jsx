@@ -82,7 +82,12 @@ export default function ResumeBanner({ onNotice }) {
     async function onResume() {
         // started inside the click, before any await (pickers.js)
         const roots = handleRoots(found);
-        const granted = askToRead(roots);
+        // a resumed upload that deletes its original needs write access
+        // again, or every original would stay without a word
+        const granted = askToRead(
+            roots,
+            found.files.some((f) => f.entry?.removeOriginal),
+        );
         // Nothing to reopen on its own: the browser kept no folder (Brave
         // does not let a site keep one), so the folder is asked for right
         // away, in the same click, and matched once it is read
