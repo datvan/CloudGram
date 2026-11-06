@@ -3,7 +3,7 @@ import { Api, errors } from "telegram";
 import { getClient } from "../services/telegram";
 import { Store } from "../redux/store";
 import { uploadProgress } from "../redux/actions/progressAction";
-import { fitsAsPhoto, makeThumb, probeVideo } from "./thumbnails";
+import { fitsAsPhoto, makeThumb, probeVideo, typeOf } from "./thumbnails";
 import { uploadParts } from "./transfer";
 
 // what Telegram itself plays inline; other containers go up as files
@@ -18,9 +18,10 @@ async function sendOptions(file, asMedia) {
     if (asMedia && (await fitsAsPhoto(file))) {
         return { kind: "photo", options: { forceDocument: false } };
     }
-    if (asMedia && STREAMABLE.includes(file.type)) {
-        const video = await probeVideo(file);
-        if (video) {
+    const type = typeOf(file);
+    const video = type.startsWith("video/") ? await probeVideo(file) : null;
+    if (asMedia && STREAMABLE.includes(type)) {
+        if (video?.duration !== undefined) {
             return {
                 kind: "video",
                 options: {
@@ -43,8 +44,9 @@ async function sendOptions(file, asMedia) {
         kind: "file",
         options: {
             forceDocument: true,
-            // lets the grid show pictures without downloading the originals
-            thumb: await makeThumb(file),
+            // lets the grid show pictures and videos without downloading
+            // the originals
+            thumb: video ? video.thumb : await makeThumb(file),
         },
     };
 }

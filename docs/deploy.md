@@ -201,7 +201,8 @@ bản sao của `/etc/nginx/sites-available/cloudgram.conf`. Những điểm đ�
 -   Content-Security-Policy chỉ cho script từ chính site và kết nối tới
     `wss://*.web.telegram.org` (nơi GramJS nói MTProto). Thêm thư viện gọi ra
     ngoài thì phải mở thêm ở đây, không thì trình duyệt chặn lặng lẽ — xem
-    console.
+    console. `worker-src blob:` là cho bộ đọc ảnh HEIC (`heic-to/csp`), vốn
+    chạy trong một worker tạo từ blob.
 
 **Đăng nhập SSH chỉ bằng khoá.** Từ 2026-10-24 máy chủ không nhận mật khẩu nữa.
 Ba dòng sau nằm trong `/etc/ssh/sshd_config.d/00-hardening.conf`:
