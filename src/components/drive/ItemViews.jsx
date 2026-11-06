@@ -27,6 +27,40 @@ import { DRAG_TYPE, kindOf } from "./fileTypes";
 import { formatDate, formatSize } from "../../utils/format";
 import { useThumbnail } from "../../utils/thumbnails";
 
+const PAGE = 200;
+
+/**
+ * Big folders render PAGE items at a time; a marker after the last one asks
+ * for the next page when it scrolls near view. Returns the items to draw and
+ * the marker to put after them.
+ */
+function useShown(items) {
+    const [limit, setLimit] = useState(PAGE);
+    const ref = useRef(null);
+    const more = items.length > limit;
+    useEffect(() => {
+        if (!more || !ref.current) return undefined;
+        const observer = new IntersectionObserver(
+            (entries) =>
+                entries.some((e) => e.isIntersecting) &&
+                setLimit((n) => n + PAGE),
+            { rootMargin: "800px" },
+        );
+        observer.observe(ref.current);
+        return () => observer.disconnect();
+    }, [more, limit]);
+    const marker = more ? (
+        <Box ref={ref} sx={{ py: 2, textAlign: "center" }}>
+            <Typography variant="body2" color="text.secondary">
+                Đang hiện {limit.toLocaleString("vi-VN")} /{" "}
+                {items.length.toLocaleString("vi-VN")} mục, cuộn xuống để xem
+                thêm…
+            </Typography>
+        </Box>
+    ) : null;
+    return [more ? items.slice(0, limit) : items, marker];
+}
+
 /** Upload/download state shown next to a name, or nothing when idle. */
 function TransferBadge({ id, pending }) {
     const progress = useSelector((state) => activeEntry(state, id));
@@ -227,7 +261,8 @@ ListRow.propTypes = {
 };
 
 export function ItemList(props) {
-    const { items, selected, sort, onSort, locationOf, dateField } = props;
+    const { selected, sort, onSort, locationOf, dateField } = props;
+    const [items, marker] = useShown(props.items);
     const header = (key, label, sx) => (
         <TableCell sx={sx}>
             {onSort ? (
@@ -244,55 +279,60 @@ export function ItemList(props) {
         </TableCell>
     );
     return (
-        <Table size="small" stickyHeader sx={{ tableLayout: "fixed" }}>
-            <TableHead>
-                <TableRow
-                    sx={{
-                        "& th": {
-                            bgcolor: "background.paper",
-                            borderColor: "divider",
-                            fontWeight: 500,
-                        },
-                    }}
-                >
-                    {header("name", "Tên", { width: "50%" })}
-                    {locationOf && (
-                        <TableCell
-                            sx={{ display: { xs: "none", md: "table-cell" } }}
-                        >
-                            Vị trí
-                        </TableCell>
-                    )}
-                    {header(
-                        "updatedAt",
-                        dateField === "trashedAt"
-                            ? "Ngày xoá"
-                            : "Sửa đổi lần cuối",
-                        {
+        <>
+            <Table size="small" stickyHeader sx={{ tableLayout: "fixed" }}>
+                <TableHead>
+                    <TableRow
+                        sx={{
+                            "& th": {
+                                bgcolor: "background.paper",
+                                borderColor: "divider",
+                                fontWeight: 500,
+                            },
+                        }}
+                    >
+                        {header("name", "Tên", { width: "50%" })}
+                        {locationOf && (
+                            <TableCell
+                                sx={{
+                                    display: { xs: "none", md: "table-cell" },
+                                }}
+                            >
+                                Vị trí
+                            </TableCell>
+                        )}
+                        {header(
+                            "updatedAt",
+                            dateField === "trashedAt"
+                                ? "Ngày xoá"
+                                : "Sửa đổi lần cuối",
+                            {
+                                display: { xs: "none", sm: "table-cell" },
+                                width: 170,
+                            },
+                        )}
+                        {header("size", "Kích cỡ tệp", {
                             display: { xs: "none", sm: "table-cell" },
-                            width: 170,
-                        },
-                    )}
-                    {header("size", "Kích cỡ tệp", {
-                        display: { xs: "none", sm: "table-cell" },
-                        width: 120,
-                    })}
-                    <TableCell padding="checkbox" sx={{ width: 48 }} />
-                </TableRow>
-            </TableHead>
-            <TableBody>
-                {items.map((item, index) => (
-                    <ListRow
-                        key={item.id}
-                        item={item}
-                        index={index}
-                        selected={selected.has(item.id)}
-                        location={locationOf ? locationOf(item) : undefined}
-                        props={props}
-                    />
-                ))}
-            </TableBody>
-        </Table>
+                            width: 120,
+                        })}
+                        <TableCell padding="checkbox" sx={{ width: 48 }} />
+                    </TableRow>
+                </TableHead>
+                <TableBody>
+                    {items.map((item, index) => (
+                        <ListRow
+                            key={item.id}
+                            item={item}
+                            index={index}
+                            selected={selected.has(item.id)}
+                            location={locationOf ? locationOf(item) : undefined}
+                            props={props}
+                        />
+                    ))}
+                </TableBody>
+            </Table>
+            {marker}
+        </>
     );
 }
 
@@ -495,7 +535,8 @@ function FileCard({ item, index, selected, props }) {
 FileCard.propTypes = ListRow.propTypes;
 
 export function ItemGrid(props) {
-    const { items, selected } = props;
+    const { selected } = props;
+    const [items, marker] = useShown(props.items);
     const folders = [];
     const files = [];
     items.forEach((item, index) =>
@@ -544,6 +585,7 @@ export function ItemGrid(props) {
                     </Box>
                 </Box>
             )}
+            {marker}
         </Stack>
     );
 }
