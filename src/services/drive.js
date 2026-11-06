@@ -272,6 +272,31 @@ export function createFile({ id, name, parent, size, mime, createdAt }) {
     return record;
 }
 
+/**
+ * A second file record for bytes already on Telegram: it shares `source`'s
+ * message, so nothing is uploaded. Like a hard link, each can be renamed,
+ * moved or binned on its own, and deleteForever keeps the message while
+ * either is left.
+ */
+export function linkFile(source, parent, name) {
+    const now = Date.now();
+    const record = {
+        ...source,
+        // a share link belongs to the record it was made for
+        starred: undefined,
+        trashedAt: undefined,
+        share: undefined,
+        id: uuid4(),
+        name,
+        parent: parent ?? null,
+        createdAt: now,
+        updatedAt: now,
+    };
+    put(record);
+    markDirty();
+    return record;
+}
+
 export function update(id, changes, { immediate = false } = {}) {
     const record = getRecord(id);
     if (!record) return undefined;

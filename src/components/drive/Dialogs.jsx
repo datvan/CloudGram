@@ -684,6 +684,109 @@ export function UploadConflictDialog({ conflicts, onChoose }) {
     );
 }
 
+/**
+ * Files about to be uploaded that look already uploaded to another folder
+ * (same name and size): link to that copy, or upload them again.
+ */
+export function UploadElsewhereDialog({ found, onChoose }) {
+    const list = found ?? [];
+    const one = list.length === 1 ? list[0] : null;
+    const shown = list.slice(0, 5);
+    const place = (where) => `“${where ?? "Drive của tôi"}”`;
+
+    const options = [
+        {
+            choice: "link",
+            title: "Tạo liên kết tới bản đã có",
+            detail: "Xong ngay, không tải lại, không tốn thêm dung lượng. Hai nơi dùng chung một bản trên Telegram; đổi tên, chuyển hay xoá ở nơi này không ảnh hưởng nơi kia. Tệp gốc trên máy được giữ lại.",
+        },
+        {
+            choice: "upload",
+            title: "Vẫn tải lên",
+            detail: "Gửi lại tệp thành một bản riêng.",
+        },
+    ];
+
+    return (
+        <Dialog
+            open={list.length > 0}
+            onClose={() => onChoose("cancel")}
+            maxWidth="sm"
+            fullWidth
+        >
+            <DialogTitle>
+                {one
+                    ? "Tệp này đã có ở thư mục khác"
+                    : `${list.length} tệp đã có ở thư mục khác`}
+            </DialogTitle>
+            <DialogContent>
+                {one ? (
+                    <Typography variant="body2">
+                        “{one.name}” ({formatSize(one.size)}) đã được tải lên
+                        trong {place(one.where)}, cùng tên và kích thước.
+                    </Typography>
+                ) : (
+                    <>
+                        <Typography variant="body2">
+                            Các tệp này đã được tải lên ở thư mục khác, cùng tên
+                            và kích thước:
+                        </Typography>
+                        <Box
+                            component="ul"
+                            sx={{ my: 1, pl: 3, typography: "body2" }}
+                        >
+                            {shown.map((f) => (
+                                <li key={f.name}>
+                                    {f.name} (trong {place(f.where)})
+                                </li>
+                            ))}
+                            {list.length > shown.length && (
+                                <li>
+                                    và {list.length - shown.length} tệp khác
+                                </li>
+                            )}
+                        </Box>
+                    </>
+                )}
+                <List sx={{ mt: 1 }}>
+                    {options.map((o, i) => (
+                        <ListItemButton
+                            key={o.choice}
+                            autoFocus={i === 0}
+                            onClick={() => onChoose(o.choice)}
+                            sx={{
+                                border: 1,
+                                borderColor: "divider",
+                                borderRadius: 2,
+                                mb: 1,
+                            }}
+                        >
+                            <ListItemText
+                                primary={o.title}
+                                secondary={o.detail}
+                            />
+                        </ListItemButton>
+                    ))}
+                </List>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={() => onChoose("cancel")}>Huỷ tải lên</Button>
+            </DialogActions>
+        </Dialog>
+    );
+}
+
+UploadElsewhereDialog.propTypes = {
+    found: PropTypes.arrayOf(
+        PropTypes.shape({
+            name: PropTypes.string,
+            size: PropTypes.number,
+            where: PropTypes.string,
+        }),
+    ),
+    onChoose: PropTypes.func,
+};
+
 UploadConflictDialog.propTypes = {
     conflicts: PropTypes.arrayOf(
         PropTypes.shape({

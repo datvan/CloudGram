@@ -64,6 +64,7 @@ import {
     PasswordDialog,
     ScanDialog,
     UploadConflictDialog,
+    UploadElsewhereDialog,
     UploadModeDialog,
 } from "../../components/drive/Dialogs";
 import {
@@ -158,6 +159,7 @@ export default function DriveApp({ mode, onToggleMode }) {
     const activeRun = useRef(null);
     // files whose names are taken where they go, waiting for an answer
     const [conflict, setConflict] = useState(null);
+    const [elsewhere, setElsewhere] = useState(null);
     // picked or dropped files still being read or checked (ScanDialog)
     const [scanning, setScanning] = useState(null);
     const [layout, setLayout] = useState(() =>
@@ -513,6 +515,7 @@ export default function DriveApp({ mode, onToggleMode }) {
             asMedia: undefined,
             removeOriginal: false,
             choice: undefined,
+            link: undefined,
             stopped: false,
             stop: null,
             counts: {
@@ -520,6 +523,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                 resumed: 0,
                 replaced: 0,
                 renamed: 0,
+                linked: 0,
                 skipped: 0,
             },
             // batches go one after another, so folders made by one are found
@@ -598,6 +602,16 @@ export default function DriveApp({ mode, onToggleMode }) {
                 if (choice === "cancel") stopAndReport(run);
                 return choice;
             },
+            onElsewhere: async (found) => {
+                if (run.link) return run.link;
+                const link = await new Promise((resolve) =>
+                    setElsewhere({ found, resolve }),
+                );
+                if (run.stopped) return "cancel";
+                run.link = link;
+                if (link === "cancel") stopAndReport(run);
+                return link;
+            },
         });
         for (const key of Object.keys(run.counts))
             run.counts[key] += counts[key];
@@ -612,18 +626,21 @@ export default function DriveApp({ mode, onToggleMode }) {
 
     function finishRun(run) {
         endRun(run);
-        const { queued, resumed, replaced, renamed, skipped } = run.counts;
+        const { queued, resumed, replaced, renamed, linked, skipped } =
+            run.counts;
         const { target } = run;
         // what the banner offered to resume may have just been picked up
         if (resumed || skipped) setResumeScan((n) => n + 1);
         const going = queued + replaced + renamed;
-        if (!going && !resumed && !skipped) return;
-        if (target && !resumed && !skipped && !replaced && !renamed) return;
+        if (!going && !resumed && !skipped && !linked) return;
+        if (target && !resumed && !skipped && !replaced && !renamed && !linked)
+            return;
         const text = [
             going &&
                 `đang tải ${going} tệp lên${target ? "" : " Drive của tôi"}`,
             replaced && `${replaced} tệp sẽ thay bản cũ`,
             renamed && `${renamed} tệp được đổi tên để giữ cả hai`,
+            linked && `liên kết ${linked} tệp tới bản đã có`,
             resumed && `tải tiếp ${resumed} tệp đang dở`,
             skipped && `bỏ qua ${skipped} tệp`,
         ]
@@ -1562,6 +1579,14 @@ export default function DriveApp({ mode, onToggleMode }) {
                 onChoose={(choice) => {
                     conflict?.resolve(choice);
                     setConflict(null);
+                }}
+            />
+
+            <UploadElsewhereDialog
+                found={elsewhere?.found}
+                onChoose={(choice) => {
+                    elsewhere?.resolve(choice);
+                    setElsewhere(null);
                 }}
             />
 
