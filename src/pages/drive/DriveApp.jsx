@@ -170,6 +170,9 @@ function useView() {
     return { kind: "unknown" };
 }
 
+// one collator: localeCompare with a locale builds one per call, slow on big folders
+const byName = new Intl.Collator("vi", { numeric: true });
+
 export default function DriveApp({ mode, onToggleMode }) {
     const navigate = useNavigate();
     const theme = useTheme();
@@ -265,7 +268,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                 return ((a.size ?? 0) - (b.size ?? 0)) * dir;
             if (sort.key === "updatedAt")
                 return ((a[dateKey] ?? 0) - (b[dateKey] ?? 0)) * dir;
-            return a.name.localeCompare(b.name, "vi", { numeric: true }) * dir;
+            return byName.compare(a.name, b.name) * dir;
         });
     }, [
         records,
@@ -906,6 +909,10 @@ export default function DriveApp({ mode, onToggleMode }) {
         />
     );
 
+    // a new folder or search starts again from the first page (ItemViews)
+    const viewKey = `${view.kind}:${folderId}:${
+        view.query ?? ""
+    }:${kindFilter}`;
     const listProps = {
         items,
         selected,
@@ -1308,10 +1315,10 @@ export default function DriveApp({ mode, onToggleMode }) {
                         )}
                         {items.length ? (
                             layout === "list" ? (
-                                <ItemList {...listProps} />
+                                <ItemList key={viewKey} {...listProps} />
                             ) : (
                                 <Box sx={{ px: 1 }}>
-                                    <ItemGrid {...listProps} />
+                                    <ItemGrid key={viewKey} {...listProps} />
                                 </Box>
                             )
                         ) : (
