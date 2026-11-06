@@ -50,6 +50,10 @@ export const canStream = () =>
     typeof navigator !== "undefined" &&
     Boolean(navigator.serviceWorker?.controller);
 
+// why streaming is off, shown under the old player so it can be reported
+let offReason = "đang khởi động";
+export const streamOffReason = () => offReason;
+
 /** The URL a <video> plays `record` from. */
 export function streamUrl(record, { quiet = false } = {}) {
     names.set(record.file_id, record.name);
@@ -277,7 +281,11 @@ async function answer({ fileId, start, end, quiet }) {
 /** Start answering the service worker; called once at start-up. */
 export function startStreaming() {
     const sw = navigator.serviceWorker;
-    if (!sw) return;
+    if (!sw) {
+        // a private window, or the browser turned service workers off
+        offReason = "trình duyệt không cho dùng service worker";
+        return;
+    }
     sw.addEventListener("message", (event) => {
         if (event.data?.type !== "cloudgram-stream") return;
         const port = event.ports[0];
@@ -290,8 +298,23 @@ export function startStreaming() {
                 port.postMessage(reply, reply.bytes ? [reply.bytes] : []),
             );
     });
-    sw.register("/sw.js").catch((error) =>
-        console.log("Video streaming is off:", error),
+    sw.register("/sw.js").then(
+        async (registration) => {
+            await sw.ready;
+            if (sw.controller) return;
+            // a hard reload (Ctrl+F5) leaves the page uncontrolled: ask the
+            // worker to take it over anyway
+            offReason = "service worker chưa nhận trang này";
+            (registration.active ?? sw.controller)?.postMessage({
+                type: "cloudgram-claim",
+            });
+        },
+        (error) => {
+            console.log("Video streaming is off:", error);
+            offReason = `không đăng ký được service worker (${
+                error?.message || error
+            })`;
+        },
     );
 }
 

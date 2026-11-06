@@ -21,6 +21,12 @@ self.addEventListener("activate", (event) =>
     event.waitUntil(self.clients.claim()),
 );
 
+// a page loaded with a hard reload is not controlled until it is claimed
+self.addEventListener("message", (event) => {
+    if (event.data?.type === "cloudgram-claim")
+        event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener("fetch", (event) => {
     const url = new URL(event.request.url);
     if (url.origin !== self.location.origin) return;
