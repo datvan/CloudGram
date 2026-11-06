@@ -55,6 +55,17 @@ export function completedProgress(id, kept = null) {
     };
 }
 
+// A file that was not sent this time (skipped, linked) while its original was
+// to be deleted: the panel lists it with `kept` saying why it stays.
+export function keptProgress(id, name, kept) {
+    return {
+        id: id,
+        name: name,
+        kept: kept,
+        type: "KEPT",
+    };
+}
+
 /** Several of the actions above as one update. */
 export function batchProgress(actions) {
     return {

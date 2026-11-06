@@ -9,7 +9,9 @@
  */
 import { buildTreeFromPaths } from "./buildTreeFromPaths";
 import downloadFile from "./downloadFile";
-import { entriesOf, isAbort } from "./pickers";
+import { KEPT, entriesOf, isAbort } from "./pickers";
+import { Store } from "../redux/store";
+import { keptProgress } from "../redux/actions/progressAction";
 import { collectSubtree, findFolder, messageIdsOf, recordIdsOf } from "./tree";
 import { cancelUploads, enqueueUpload, isQueued } from "./uploadQueue";
 import { storyboardsOf } from "../services/storyboard";
@@ -169,6 +171,15 @@ export async function uploadEntries(
             ...extra,
         });
 
+    // A file not sent leaves its original on disk; with "xoá sau khi tải lên"
+    // that is said in the transfer panel, one row per file, with the reason.
+    const keep = (p, reason) => {
+        if (removeOriginal)
+            Store.dispatch(
+                keptProgress(`kept:${Math.random()}`, p.name, reason),
+            );
+    };
+
     for (const p of placed) {
         const { entry, unfinished, taken } = p;
         if (unfinished) {
@@ -182,6 +193,7 @@ export async function uploadEntries(
                 log?.sending
             ) {
                 counts.skipped += 1;
+                keep(p, KEPT.busy);
                 continue;
             }
             const unchanged =
@@ -202,6 +214,7 @@ export async function uploadEntries(
         } else if (p.elsewhere && link === "link") {
             linkFile(p.elsewhere, p.parent, p.name);
             counts.linked += 1;
+            keep(p, KEPT.linked);
         } else if (!taken) {
             queue(p);
             counts.queued += 1;
@@ -216,6 +229,7 @@ export async function uploadEntries(
             counts.renamed += 1;
         } else {
             counts.skipped += 1;
+            keep(p, KEPT.skipped);
         }
     }
     return counts;
