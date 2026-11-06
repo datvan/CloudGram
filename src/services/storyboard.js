@@ -224,31 +224,41 @@ function load(record) {
 
 /**
  * [the storyboard of `record` once it is at hand or null, whether one is
- * being drawn]. With `streamSrc`
+ * being drawn, why there is none (text) or null]. With `streamSrc`
  * (a function giving a stream URL) and `allowMake`, one is drawn when the
  * video has none yet.
  */
 export function useStoryboard(record, streamSrc, allowMake) {
     const [board, setBoard] = useState(null);
     const [making, setMaking] = useState(false);
+    // why there is none, shown in the player so it can be reported
+    const [problem, setProblem] = useState(null);
     const message = record.storyboard?.message;
     const fileId = record.file_id;
     useEffect(() => {
         setBoard(null);
+        setProblem(null);
         if (!fileId) return undefined;
         let cancelled = false;
+        const fail = (what) => (error) =>
+            !cancelled && setProblem(`${what}: ${error?.message || error}`);
         const show = (r) =>
             load(r).then(
                 (b) => !cancelled && setBoard(b),
-                (error) => console.log("Storyboard not loaded:", error),
+                (error) => {
+                    console.log("Storyboard not loaded:", error);
+                    fail("không tải được")(error);
+                },
             );
         if (message) show(record);
-        else if (allowMake && streamSrc && !failed.has(fileId)) {
+        else if (allowMake && failed.has(fileId))
+            setProblem("video này đã lỗi khi tạo, tải lại trang để thử lại");
+        else if (allowMake && streamSrc) {
             setMaking(true);
             make(fileId, streamSrc)
                 .then(
                     (storyboard) => show({ ...record, storyboard }),
-                    () => {},
+                    fail("không tạo được"),
                 )
                 .finally(() => !cancelled && setMaking(false));
         }
@@ -258,7 +268,7 @@ export function useStoryboard(record, streamSrc, allowMake) {
         // the record object changes on every star or rename
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [message, fileId, allowMake]);
-    return [board, making];
+    return [board, making, problem];
 }
 
 /** Storyboard message ids to delete along with these video messages. */
