@@ -293,32 +293,37 @@ export default function ResumeBanner({ onNotice }) {
         !found.denied &&
         found.files.length > 0 &&
         found.files.every((item) => !item.entry?.handle);
-    const text =
-        opening != null
-            ? `Đang mở lại các tệp trên máy… ${count(opening.done)} / ${count(
-                  opening.total,
-              )}`
-            : reading != null
-            ? `Đang đọc thư mục đã chọn… ${reading} tệp`
-            : confirm
-            ? `Xoá ${
-                  (found?.files.length ?? 0) + (waiting?.length ?? 0)
-              } tệp chưa tải xong khỏi Drive? Tệp gốc trên máy không bị ảnh hưởng.`
-            : found?.denied
-            ? `Trình duyệt chưa cho đọc lại thư mục nên còn ${summary} chưa tải tiếp. Bấm Tiếp tục, và chọn Cho phép nếu trình duyệt hỏi.`
-            : noneKept
-            ? `Còn ${summary} tải lên dở từ lần trước. ${
-                  canKeepHandles
-                      ? "Lần đó trình duyệt chưa nhớ được thư mục"
-                      : isBrave
-                      ? "Brave đang tắt tính năng nhớ thư mục (bật “File System Access API” trong brave://flags để lần sau khỏi chọn lại)"
-                      : "Trình duyệt này không nhớ được thư mục"
-              }, nên bấm Tiếp tục rồi chọn lại đúng thư mục cũ${folderHint} một lần; app tự khớp và tải tiếp, tệp đã lên rồi không gửi lại.`
-            : found
-            ? `Còn ${summary} tải lên dở từ lần trước (tab đã bị đóng giữa chừng).`
-            : `Còn ${list.length} tệp (${formatSize(
-                  bytes,
-              )}) chưa tải lên xong. Chọn lại đúng thư mục cũ${folderHint} hoặc các tệp đã chọn lúc trước để tải tiếp; tệp nào đã lên rồi sẽ không gửi lại.`;
+    const text = opening?.asking
+        ? "Đang chờ trình duyệt cho phép đọc lại thư mục… Nếu trình duyệt hỏi, chọn Cho phép."
+        : opening?.looked != null
+        ? `Đang tìm trong Telegram các tệp đã gửi xong… đã xem ${count(
+              opening.looked,
+          )} tin nhắn`
+        : opening != null
+        ? `Đang mở lại các tệp trên máy… ${count(opening.done)} / ${count(
+              opening.total,
+          )}`
+        : reading != null
+        ? `Đang đọc thư mục đã chọn… ${reading} tệp`
+        : confirm
+        ? `Xoá ${
+              (found?.files.length ?? 0) + (waiting?.length ?? 0)
+          } tệp chưa tải xong khỏi Drive? Tệp gốc trên máy không bị ảnh hưởng.`
+        : found?.denied
+        ? `Trình duyệt chưa cho đọc lại thư mục nên còn ${summary} chưa tải tiếp. Bấm Tiếp tục, và chọn Cho phép nếu trình duyệt hỏi.`
+        : noneKept
+        ? `Còn ${summary} tải lên dở từ lần trước. ${
+              canKeepHandles
+                  ? "Lần đó trình duyệt chưa nhớ được thư mục"
+                  : isBrave
+                  ? "Brave đang tắt tính năng nhớ thư mục (bật “File System Access API” trong brave://flags để lần sau khỏi chọn lại)"
+                  : "Trình duyệt này không nhớ được thư mục"
+          }, nên bấm Tiếp tục rồi chọn lại đúng thư mục cũ${folderHint} một lần; app tự khớp và tải tiếp, tệp đã lên rồi không gửi lại.`
+        : found
+        ? `Còn ${summary} tải lên dở từ lần trước (tab đã bị đóng giữa chừng).`
+        : `Còn ${list.length} tệp (${formatSize(
+              bytes,
+          )}) chưa tải lên xong. Chọn lại đúng thư mục cũ${folderHint} hoặc các tệp đã chọn lúc trước để tải tiếp; tệp nào đã lên rồi sẽ không gửi lại.`;
 
     return (
         <>
