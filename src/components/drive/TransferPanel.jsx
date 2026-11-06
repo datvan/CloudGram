@@ -68,9 +68,10 @@ export default function TransferPanel() {
     }, [moving]);
 
     // a new transfer brings the panel back after it was closed
+    // (so does a file left alone with its original, which has no transfer)
     useEffect(() => {
-        if (active.length) setHidden(false);
-    }, [active.length]);
+        if (active.length || finished.length) setHidden(false);
+    }, [active.length, finished.length]);
 
     if (hidden || (!active.length && !finished.length)) return null;
 
@@ -198,8 +199,8 @@ export default function TransferPanel() {
                     component="div"
                     sx={{ px: 2.5, py: 0.75, color: "warning.main" }}
                 >
-                    {keptCount} tệp đã lên Telegram nhưng bản gốc trên máy chưa
-                    bị xoá. Rê chuột vào dấu cảnh báo để xem lý do.
+                    {keptCount} tệp còn bản gốc trên máy dù đã chọn xoá sau khi
+                    tải lên. Rê chuột vào dấu cảnh báo để xem lý do.
                 </Typography>
             )}
             {!collapsed && (
@@ -233,7 +234,7 @@ export default function TransferPanel() {
                                     />
                                 </Tooltip>
                             )}
-                            {entry.type === "DONE" && (
+                            {entry.type === "DONE" && !entry.unsent && (
                                 <CheckCircleIcon
                                     sx={{ color: "#1e8e3e" }}
                                     fontSize="small"

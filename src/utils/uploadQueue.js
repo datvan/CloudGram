@@ -430,6 +430,7 @@ async function settle(id, result, replaces, job) {
         await getClient().deleteMessages("me", [message.id], {
             revoke: true,
         });
+        if (job?.removeOriginal) kept = KEPT.gone;
     }
 
     jobs.delete(id);

@@ -32,6 +32,21 @@ export default function reducer(
         };
     }
 
+    if (action.type === "KEPT") {
+        return {
+            ...state,
+            finished: [
+                {
+                    id: action.id,
+                    name: action.name,
+                    kept: action.kept,
+                    unsent: true,
+                },
+                ...state.finished.filter((item) => item.id !== action.id),
+            ].slice(0, FINISHED_KEEP),
+        };
+    }
+
     if (action.type === "CLEAR_FINISHED") {
         return { ...state, finished: [] };
     }
