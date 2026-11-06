@@ -18,7 +18,9 @@ import {
     decryptJson,
     deriveKeys,
     encryptJson,
+    makeRecovery,
     newKdf,
+    normalizeRecoveryCode,
     rewrapDek,
     unwrapDek,
 } from "./crypto";
@@ -118,11 +120,21 @@ export async function setupInfo(token) {
     return api.setupInfo(token);
 }
 
-export async function completeSetup(token, password, remember) {
+/**
+ * `prepareSetup` makes the keys and the recovery code, so the code can be
+ * shown and saved before `completeSetup` creates the account with them.
+ */
+export async function prepareSetup(password) {
     const kdf = newKdf();
     const { loginKey, kek } = await deriveKeys(password, kdf);
     const { dek: key, wrappedDek } = await createDek(kek);
-    account = await api.setup({ token, kdf, loginKey, wrappedDek, remember });
+    const { code, recovery } = await makeRecovery(kek, wrappedDek);
+    return { code, key, body: { kdf, loginKey, wrappedDek, recovery } };
+}
+
+export async function completeSetup(token, prepared, remember) {
+    const key = prepared.key;
+    account = await api.setup({ token, ...prepared.body, remember });
     if (remember) await saveKey(account.username, key);
     window.history.replaceState(null, "", "/");
     await enter(key);
@@ -151,6 +163,63 @@ export async function changePassword(oldPassword, newPassword) {
     });
     account = { ...current, kdf, wrappedDek };
 }
+
+/**
+ * Forgotten password: the recovery code opens the DEK, which is sealed under
+ * the new password and a new code. Returns the new code (shown once) and a
+ * function that goes on into the drive.
+ */
+export async function recover(username, typedCode, newPassword, remember) {
+    const { kdf: codeKdf } = await api.recoveryInfo(username);
+    const codeKeys = await deriveKeys(
+        normalizeRecoveryCode(typedCode),
+        codeKdf,
+    );
+    const { wrappedDek: codeWrapped } = await api.recoverStart({
+        username,
+        loginKey: codeKeys.loginKey,
+    });
+    const kdf = newKdf();
+    const newKeys = await deriveKeys(newPassword, kdf);
+    const wrappedDek = await rewrapDek(codeKeys.kek, codeWrapped, newKeys.kek);
+    const { code, recovery } = await makeRecovery(newKeys.kek, wrappedDek);
+    account = await api.recover({
+        username,
+        loginKey: codeKeys.loginKey,
+        newLoginKey: newKeys.loginKey,
+        kdf,
+        wrappedDek,
+        recovery,
+        remember,
+    });
+    const key = await unwrapDek(newKeys.kek, wrappedDek);
+    return {
+        code,
+        enter: async () => {
+            if (remember) await saveKey(account.username, key);
+            else await clearKey();
+            await enter(key);
+        },
+    };
+}
+
+/** A new recovery code for the signed-in account; the old one stops working. */
+export async function newRecoveryCode(password) {
+    const current = await api.me();
+    const { loginKey, kek } = await deriveKeys(password, current.kdf);
+    let made;
+    try {
+        made = await makeRecovery(kek, current.wrappedDek);
+    } catch {
+        throw new Error("Mật khẩu không đúng.");
+    }
+    await api.setRecovery({ loginKey, recovery: made.recovery });
+    account = { ...current, hasRecovery: true };
+    return made.code;
+}
+
+export const hasRecovery = () => Boolean(account?.hasRecovery);
+export const accountName = () => account?.username ?? "";
 
 export function logoutOthers() {
     return api.logoutOthers();

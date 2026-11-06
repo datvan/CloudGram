@@ -233,6 +233,22 @@ function put(record) {
     });
 }
 
+/**
+ * Put back records from a backup (services/treeBackup): those missing or
+ * deleted here come back; a record that is live here is left as it is, since
+ * it may have been edited after the backup. Returns how many came back.
+ */
+export function restoreRecords(list) {
+    let count = 0;
+    for (const record of list) {
+        if (!record?.id || !record.type || getRecord(record.id)) continue;
+        put({ ...record, deleted: undefined });
+        count += 1;
+    }
+    if (count) markDirty(true);
+    return count;
+}
+
 export function createFolder(name, parent, { id, createdAt } = {}) {
     const now = Date.now();
     const record = {

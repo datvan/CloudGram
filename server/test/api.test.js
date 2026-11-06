@@ -248,6 +248,110 @@ test("password change re-wraps the DEK and signs other devices out", async () =>
     assert.deepEqual(await vault.decryptJson(dek2, blob, "t"), { ok: 1 });
 });
 
+test("a recovery code resets the password, keeps the DEK, and is single use", async () => {
+    const a = client();
+    const token = await api.issueSetup("rita");
+    const kdf = { ...vault.newKdf(), ...fast };
+    const { loginKey, kek } = await vault.deriveKeys("first password", kdf);
+    const { dek, wrappedDek } = await vault.createDek(kek);
+    const { code, recovery } = await vault.makeRecovery(kek, wrappedDek);
+    const done = await a("POST", "/api/auth/setup", {
+        token,
+        kdf,
+        loginKey,
+        wrappedDek,
+        recovery,
+        remember: true,
+    });
+    assert.equal(done.body.hasRecovery, true);
+    const other = client();
+    await login(other, "rita", "first password");
+
+    async function start(call, username, typed) {
+        // tries are rate-limited per IP like logins; this test makes many
+        api.loginByIp.hits.clear();
+        const info = await call("POST", "/api/auth/recovery-info", {
+            username,
+        });
+        const keys = await vault.deriveKeys(
+            vault.normalizeRecoveryCode(typed),
+            info.body.kdf,
+        );
+        const res = await call("POST", "/api/auth/recover-start", {
+            username,
+            loginKey: keys.loginKey,
+        });
+        return { res, keys };
+    }
+
+    // a wrong code, and an unknown name, look the same
+    const fresh = client();
+    const wrong = await start(fresh, "rita", vault.newRecoveryCode());
+    assert.equal(wrong.res.status, 401);
+    assert.equal(wrong.res.body.error, "bad_recovery");
+    const nobody = await start(fresh, "nobody", code);
+    assert.equal(nobody.res.status, 401);
+    assert.equal(nobody.res.body.error, "bad_recovery");
+
+    // typed lower case with spaces
+    const typed = code.toLowerCase().replace(/-/g, " ");
+    const { res, keys } = await start(fresh, "rita", typed);
+    assert.equal(res.status, 200);
+    const newKdf = { ...vault.newKdf(), ...fast };
+    const newKeys = await vault.deriveKeys("second password", newKdf);
+    const newWrapped = await vault.rewrapDek(
+        keys.kek,
+        res.body.wrappedDek,
+        newKeys.kek,
+    );
+    const next = await vault.makeRecovery(newKeys.kek, newWrapped);
+    const rec = await fresh("POST", "/api/auth/recover", {
+        username: "rita",
+        loginKey: keys.loginKey,
+        newLoginKey: newKeys.loginKey,
+        kdf: newKdf,
+        wrappedDek: newWrapped,
+        recovery: next.recovery,
+        remember: true,
+    });
+    assert.equal(rec.status, 200);
+    assert.equal((await fresh("GET", "/api/me")).status, 200);
+    // every other device is signed out
+    assert.equal((await a("GET", "/api/me")).status, 401);
+    assert.equal((await other("GET", "/api/me")).status, 401);
+
+    // the old password and the old code no longer work; the new ones do
+    assert.equal(
+        (await login(client(), "rita", "first password")).res.status,
+        401,
+    );
+    assert.equal((await start(client(), "rita", code)).res.status, 401);
+    assert.equal((await start(client(), "rita", next.code)).res.status, 200);
+    const { dek: dek2 } = await login(client(), "rita", "second password");
+    const blob = await vault.encryptJson(dek, { ok: 1 }, "t");
+    assert.deepEqual(await vault.decryptJson(dek2, blob, "t"), { ok: 1 });
+
+    // a new code from settings needs the password
+    const me = await fresh("GET", "/api/me");
+    const third = await vault.makeRecovery(newKeys.kek, me.body.wrappedDek);
+    const badSet = await fresh("POST", "/api/auth/recovery", {
+        loginKey: keys.loginKey,
+        recovery: third.recovery,
+    });
+    assert.equal(badSet.status, 401);
+    const set = await fresh("POST", "/api/auth/recovery", {
+        loginKey: newKeys.loginKey,
+        recovery: third.recovery,
+    });
+    assert.equal(set.status, 200);
+    assert.equal((await start(client(), "rita", next.code)).res.status, 401);
+    assert.equal((await start(client(), "rita", third.code)).res.status, 200);
+
+    // reset drops the code with the vault
+    await api.issueSetup("rita", { reset: true });
+    assert.equal((await start(client(), "rita", third.code)).res.status, 401);
+});
+
 test("writes need JSON and the right origin; logout clears the session", async () => {
     const a = client();
     await login(a, "alice", "battery staple");
