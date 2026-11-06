@@ -20,7 +20,7 @@ export const FRAMES = COLS * COLS;
 const FRAME_W = 160;
 const QUALITY = 0.7;
 // one frame not seeked by then is left out
-const SEEK_TIMEOUT = 15000;
+const SEEK_TIMEOUT = 30000;
 // this many frames left out in a row: the stream is stuck, give up
 const STUCK = 3;
 
@@ -142,8 +142,10 @@ function make(fileId, src) {
             try {
                 drawn = await draw(src());
             } catch (error) {
-                // the browser cannot open this video: not tried again
-                failed.add(fileId);
+                // the browser cannot open this video: not tried again; a slow
+                // stream is tried again the next time it is watched
+                if (!/timed out|stuck|Too few/.test(error?.message ?? ""))
+                    failed.add(fileId);
                 throw error;
             }
             const storyboard = {
@@ -221,12 +223,14 @@ function load(record) {
 }
 
 /**
- * The storyboard of `record` once it is at hand, or null. With `streamSrc`
+ * [the storyboard of `record` once it is at hand or null, whether one is
+ * being drawn]. With `streamSrc`
  * (a function giving a stream URL) and `allowMake`, one is drawn when the
  * video has none yet.
  */
 export function useStoryboard(record, streamSrc, allowMake) {
     const [board, setBoard] = useState(null);
+    const [making, setMaking] = useState(false);
     const message = record.storyboard?.message;
     const fileId = record.file_id;
     useEffect(() => {
@@ -239,18 +243,22 @@ export function useStoryboard(record, streamSrc, allowMake) {
                 (error) => console.log("Storyboard not loaded:", error),
             );
         if (message) show(record);
-        else if (allowMake && streamSrc && !failed.has(fileId))
-            make(fileId, streamSrc).then(
-                (storyboard) => show({ ...record, storyboard }),
-                () => {},
-            );
+        else if (allowMake && streamSrc && !failed.has(fileId)) {
+            setMaking(true);
+            make(fileId, streamSrc)
+                .then(
+                    (storyboard) => show({ ...record, storyboard }),
+                    () => {},
+                )
+                .finally(() => !cancelled && setMaking(false));
+        }
         return () => {
             cancelled = true;
         };
         // the record object changes on every star or rename
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [message, fileId, allowMake]);
-    return board;
+    return [board, making];
 }
 
 /** Storyboard message ids to delete along with these video messages. */
