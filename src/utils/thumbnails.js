@@ -343,6 +343,11 @@ async function fetchBatch(entries) {
         Array.from({ length: CONCURRENCY }, async () => {
             while (next < entries.length) {
                 const entry = entries[next++];
+                // scrolled out of sight since it was asked for
+                if (entry.cancelled) {
+                    pending.delete(entry.key);
+                    continue;
+                }
                 try {
                     const message = byId.get(entry.record.file_id);
                     settle(entry, await thumbFrom(message, entry.record));
@@ -384,9 +389,24 @@ onClientChange((client) => {
     pending.clear();
 });
 
+/** The card went off screen: do not download its thumbnail if not begun. */
+function dropThumb(record) {
+    const key = keyOf(record);
+    const entry = pending.get(key);
+    if (!entry) return;
+    const at = waiting.indexOf(entry);
+    if (at >= 0) {
+        waiting.splice(at, 1);
+        pending.delete(key);
+    } else {
+        entry.cancelled = true; // in a batch already; skipped when its turn comes
+    }
+}
+
 function loadThumb(record) {
     const key = keyOf(record);
     if (cache.has(key)) return Promise.resolve(cache.get(key));
+    if (pending.has(key)) pending.get(key).cancelled = false;
     if (!pending.has(key)) {
         const entry = { key, record, attempts: 0 };
         entry.promise = new Promise((resolve) => {
@@ -416,6 +436,7 @@ export function useThumbnail(record, wanted, visible) {
         loadThumb(record).then((next) => !cancelled && setUrl(next));
         return () => {
             cancelled = true;
+            dropThumb(record);
         };
         // a new file_id means a fresh upload; the record object itself changes
         // on every rename or star and must not refetch
