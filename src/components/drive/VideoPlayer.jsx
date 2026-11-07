@@ -805,6 +805,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                         inset: 0,
                         justifyContent: "center",
                         bgcolor: "rgba(0,0,0,.7)",
+                        // lets the grid size itself by this box's height (cqh)
+                        containerType: "size",
                     }}
                 >
                     <Box
@@ -812,7 +814,12 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                             display: "grid",
                             gridTemplateColumns: "repeat(3, 1fr)",
                             gap: 1,
-                            width: "min(720px, 86%)",
+                            // three rows are as tall as the grid is wide times
+                            // h/w: keep them within 75% of the player, which
+                            // a portrait video or a short window reaches
+                            width: `min(720px, 86%, ${
+                                (75 * board.w) / board.h
+                            }cqh)`,
                         }}
                     >
                         {GRID.map((index) => {
