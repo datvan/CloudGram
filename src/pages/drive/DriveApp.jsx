@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
 import PropTypes from "prop-types";
 import { useSelector } from "react-redux";
 import {
@@ -186,6 +193,8 @@ function useView() {
 
 // one collator: localeCompare with a locale builds one per call, slow on big folders
 const byName = new Intl.Collator("vi", { numeric: true });
+// scroll position of each view, by its viewKey
+const scrollMemo = new Map();
 
 export default function DriveApp({ mode, onToggleMode }) {
     const navigate = useNavigate();
@@ -964,7 +973,14 @@ export default function DriveApp({ mode, onToggleMode }) {
     const viewKey = `${view.kind}:${folderId}:${view.labelKey}:${
         view.query ?? ""
     }:${kindFilter}`;
+    // each view keeps its scroll position: lifting a label filter lands back
+    // where the list was, not at the top
+    useLayoutEffect(() => {
+        const el = marquee.ref.current;
+        if (el) el.scrollTop = scrollMemo.get(viewKey) ?? 0;
+    }, [viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
     const listProps = {
+        memoKey: viewKey,
         items,
         selected,
         sort,
@@ -1343,6 +1359,9 @@ export default function DriveApp({ mode, onToggleMode }) {
                     <Box
                         ref={marquee.ref}
                         onMouseDown={marquee.onMouseDown}
+                        onScroll={(e) =>
+                            scrollMemo.set(viewKey, e.currentTarget.scrollTop)
+                        }
                         sx={{
                             position: "relative",
                             flex: 1,
