@@ -323,6 +323,8 @@ export function linkFile(source, parent, name) {
         // a share link belongs to the record it was made for
         starred: undefined,
         labels: undefined,
+        // the link is not a conversion of anything
+        convertedFrom: undefined,
         trashedAt: undefined,
         share: undefined,
         id: uuid4(),
@@ -441,9 +443,21 @@ export function setLabel(ids, labelId, on) {
     if (changed) markDirty();
 }
 
+/**
+ * `ids` plus the MP4s made from them (previewCache keepMp4 tags each with
+ * `convertedFrom`), which go wherever the original goes.
+ */
+export function withConverted(ids) {
+    const from = new Set(ids);
+    const made = [...records.values()]
+        .filter((r) => from.has(r.convertedFrom) && !from.has(r.id))
+        .map((r) => r.id);
+    return [...ids, ...made];
+}
+
 export function trash(ids) {
     const now = Date.now();
-    for (const id of ids) {
+    for (const id of withConverted(ids)) {
         const record = getRecord(id);
         if (record) put({ ...record, trashedAt: now });
     }
@@ -451,7 +465,7 @@ export function trash(ids) {
 }
 
 export function restore(ids) {
-    for (const id of ids) {
+    for (const id of withConverted(ids)) {
         const record = getRecord(id);
         if (!record) continue;
         const next = { ...record };

@@ -20,6 +20,7 @@ import {
     getSnapshot,
     linkFile,
     removeRecords,
+    withConverted,
 } from "../services/drive";
 import { TAB, liveTabs, readEntries } from "../services/uploadLog";
 import { dropShares } from "../services/shares";
@@ -379,6 +380,7 @@ export function linksOutside(records, ids) {
 /** Everything that would go if these were deleted forever. */
 export function countForever(ids) {
     const { records } = getSnapshot();
+    ids = withConverted(ids);
     let folders = 0;
     let files = 0;
     for (const id of ids) {
@@ -392,6 +394,7 @@ export function countForever(ids) {
 /** withLinks: also delete the linked copies elsewhere, so the message goes too. */
 export async function deleteForever(ids, { withLinks = false } = {}) {
     const { records } = getSnapshot();
+    ids = withConverted(ids);
     if (withLinks)
         ids = [...ids, ...linksOutside(records, ids).map((r) => r.id)];
     const recordIds = new Set();
