@@ -31,6 +31,8 @@ import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import VolumeDownIcon from "@mui/icons-material/VolumeDown";
 import VolumeOffIcon from "@mui/icons-material/VolumeOff";
 import SettingsIcon from "@mui/icons-material/Settings";
+import LabelIcon from "@mui/icons-material/Label";
+import LabelOutlinedIcon from "@mui/icons-material/LabelOutlined";
 import PictureInPictureAltIcon from "@mui/icons-material/PictureInPictureAlt";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
@@ -43,6 +45,8 @@ import {
     streamFailed,
     streamUrl,
 } from "../../services/stream";
+import LabelPicker from "./LabelPicker";
+import { useDrive } from "../../services/drive";
 import { isOnline } from "../../services/telegram";
 import {
     COLS,
@@ -363,6 +367,10 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     const [fullscreen, setFullscreen] = useState(false);
     const [shown, setShown] = useState(true);
     const [menu, setMenu] = useState(null);
+    // where the label box opens (the button it hangs from), or null
+    const [labelAt, setLabelAt] = useState(null);
+    const { byId } = useDrive();
+    const labelled = Boolean((byId.get(record.id) ?? record).labels?.length);
     const [speedMenu, setSpeedMenu] = useState(false);
     const [error, setError] = useState(null);
     const [ended, setEnded] = useState(false);
@@ -763,7 +771,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
         ) : (
             <VolumeUpIcon />
         );
-    const controlsVisible = shown || paused || Boolean(menu);
+    const controlsVisible =
+        shown || paused || Boolean(menu) || Boolean(labelAt);
 
     return (
         <Box
@@ -1151,6 +1160,15 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                         />
                     </Tooltip>
                     <Control
+                        title="Gắn nhãn"
+                        onClick={(e) => {
+                            const box = e.currentTarget.getBoundingClientRect();
+                            setLabelAt({ top: box.top, left: box.left });
+                        }}
+                    >
+                        {labelled ? <LabelIcon /> : <LabelOutlinedIcon />}
+                    </Control>
+                    <Control
                         title="Cài đặt"
                         onClick={(e) => {
                             setSpeedMenu(false);
@@ -1180,6 +1198,13 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                     </Control>
                 </Stack>
             </Box>
+
+            <LabelPicker
+                above
+                position={labelAt}
+                ids={[record.id]}
+                onClose={() => setLabelAt(null)}
+            />
 
             <Menu
                 anchorEl={menu}

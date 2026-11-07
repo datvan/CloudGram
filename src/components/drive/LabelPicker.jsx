@@ -141,15 +141,19 @@ Body.propTypes = { ids: PropTypes.array.isRequired };
 /**
  * "Gắn nhãn" for the selected items, like Keep's label box: search, tick to
  * put a label on or take it off, or make a new one from what was typed.
- * `position` is where the menu it replaces stood; null closes it.
+ * `position` is where the menu it replaces stood; null closes it. `above`
+ * opens it upward from there, for a button at the bottom of the screen.
  */
-export default function LabelPicker({ position, ids, onClose }) {
+export default function LabelPicker({ position, ids, onClose, above }) {
     return (
         <Popover
             open={Boolean(position)}
             onClose={onClose}
             anchorReference="anchorPosition"
             anchorPosition={position ?? undefined}
+            transformOrigin={
+                above ? { vertical: "bottom", horizontal: "left" } : undefined
+            }
         >
             {position && <Body ids={ids} />}
         </Popover>
@@ -160,4 +164,5 @@ LabelPicker.propTypes = {
     position: PropTypes.object,
     ids: PropTypes.array,
     onClose: PropTypes.func,
+    above: PropTypes.bool,
 };

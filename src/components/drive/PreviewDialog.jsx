@@ -338,14 +338,16 @@ export default function PreviewDialog({
         const target = e.target;
         if (
             target.isContentEditable ||
-            ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
+            ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) ||
+            // the label box over the player: its keys are its own
+            target.closest(".MuiPopover-root")
         )
             return;
         // the video player takes its keys first, arrows included
         // (not while a button or menu has the focus: those keys are theirs)
         if (
             fullPlayer &&
-            !target.closest("button, [role=menu]") &&
+            !target.closest("button, [role=menu], .MuiPopover-root") &&
             player.current?.handleKey(e)
         )
             return;
