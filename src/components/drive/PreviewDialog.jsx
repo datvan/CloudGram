@@ -38,6 +38,7 @@ import { fetchFile, saveBlob } from "../../utils/downloadFile";
 import { formatSize } from "../../utils/format";
 import { useThumbnail } from "../../utils/thumbnails";
 import { useDrive } from "../../services/drive";
+import { needsConvert } from "../../services/convert";
 import { canStream, streamOffReason, streamUrl } from "../../services/stream";
 import VideoPlayer from "./VideoPlayer";
 
@@ -155,6 +156,8 @@ export default function PreviewDialog({
     const [loaded, setLoaded] = useState({ id: null, status: "idle" });
     const [percent, setPercent] = useState(null);
     const [size, setSize] = useState(null);
+    // while a video ffmpeg has to convert is converted: percent, or null
+    const [converting, setConverting] = useState(undefined);
     const [info, setInfo] = useState(false);
     const [playing, setPlaying] = useState(false);
     const [fullscreen, setFullscreen] = useState(false);
@@ -164,7 +167,8 @@ export default function PreviewDialog({
     const kind = item ? previewKind(item) : null;
     const isImage = kind === "image";
     // a streamed video plays as it arrives, so its size does not matter
-    const streaming = kind === "video" && canStream();
+    const convert = Boolean(item) && kind === "video" && needsConvert(item);
+    const streaming = kind === "video" && canStream() && !convert;
     const tooLarge = item && kind && !streaming && !fitsPreview(item, kind);
     const index = item ? siblings.findIndex((s) => s.id === item.id) : -1;
     const prev = index > 0 ? siblings[index - 1] : null;
@@ -191,6 +195,7 @@ export default function PreviewDialog({
     useEffect(() => {
         setPercent(null);
         setSize(null);
+        setConverting(undefined);
         pinPreview(item?.id ?? null);
         if (!item) return undefined;
         const id = item.id;
@@ -209,7 +214,9 @@ export default function PreviewDialog({
         }
         let cancelled = false;
         setLoaded({ id, status: "loading" });
-        loadPreview(item, kind)
+        loadPreview(item, kind, {
+            onConvert: (p) => !cancelled && setConverting(p),
+        })
             .then(
                 (entry) =>
                     !cancelled && setLoaded({ id, status: "ready", ...entry }),
@@ -293,7 +300,7 @@ export default function PreviewDialog({
     }
 
     async function download() {
-        if (state.blob) saveBlob(state.blob, item.name);
+        if (state.blob && !convert) saveBlob(state.blob, item.name);
         else saveBlob(await fetchFile(item.id, item.file_id), item.name);
     }
 
@@ -398,6 +405,33 @@ export default function PreviewDialog({
                 </>
             );
         }
+        if (loading && convert)
+            return (
+                <Stack alignItems="center" spacing={2} sx={white}>
+                    <CircularProgress
+                        sx={white}
+                        variant={
+                            typeof converting === "number"
+                                ? "determinate"
+                                : "indeterminate"
+                        }
+                        value={converting ?? 0}
+                    />
+                    <Typography align="center" sx={{ maxWidth: 360 }}>
+                        {converting === undefined
+                            ? "Đang tải tệp…"
+                            : `Đang chuyển sang MP4 để xem${
+                                  typeof converting === "number"
+                                      ? ` (${converting}%)`
+                                      : ""
+                              }…`}
+                    </Typography>
+                    <Typography variant="caption" sx={{ opacity: 0.7 }}>
+                        Trình duyệt không mở được .{item.name.split(".").pop()}{" "}
+                        nên cần chuyển trước. Tệp gốc không bị đổi.
+                    </Typography>
+                </Stack>
+            );
         if (loading) return <CircularProgress sx={white} />;
         if (state.status === "error") {
             return (
@@ -455,6 +489,15 @@ export default function PreviewDialog({
                             onNext={nextVideo && (() => onNavigate(nextVideo))}
                             onPrev={prevVideo && (() => onNavigate(prevVideo))}
                             onDownload={download}
+                        />
+                    );
+                if (convert)
+                    return (
+                        <video
+                            src={state.url}
+                            controls
+                            autoPlay
+                            style={{ ...fit, minHeight: 0 }}
                         />
                     );
                 // no service worker (blocked, or a hard reload): the whole

@@ -1,3 +1,4 @@
+import { convertToMp4, needsConvert } from "../../services/convert";
 import { fetchFile } from "../../utils/downloadFile";
 
 // recent previews kept, so flicking back and forth does not re-download; a
@@ -47,9 +48,10 @@ export function cachedPreview(item) {
 /**
  * The bytes of `item` as `{ blob, url, text }`, fetched once however many
  * ask: the picture on screen and the one fetched ahead of it share a load.
- * `quiet` keeps a fetch ahead of time out of the transfer panel.
+ * `quiet` keeps a fetch ahead of time out of the transfer panel. A video the
+ * browser cannot play is converted to MP4 first (`onConvert` reports how far).
  */
-export function loadPreview(item, kind, { quiet = false } = {}) {
+export function loadPreview(item, kind, { quiet = false, onConvert } = {}) {
     const ready = cachedPreview(item);
     if (ready) return Promise.resolve(ready);
     const key = `${item.id}:${item.file_id}`;
@@ -57,6 +59,11 @@ export function loadPreview(item, kind, { quiet = false } = {}) {
         inflight.set(
             key,
             fetchFile(item.id, item.file_id, { quiet })
+                .then((blob) =>
+                    needsConvert(item)
+                        ? convertToMp4(blob, item.name, onConvert)
+                        : blob,
+                )
                 .then(async (blob) => {
                     const typed =
                         kind === "pdf"
