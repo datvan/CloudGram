@@ -28,7 +28,6 @@ import StarBorderIcon from "@mui/icons-material/StarBorder";
 import PersonAddAltOutlinedIcon from "@mui/icons-material/PersonAddAltOutlined";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import CloudUploadOutlinedIcon from "@mui/icons-material/CloudUploadOutlined";
 
 import { kindOf, previewKind } from "./fileTypes";
 import { FileIcon } from "./FileIcon";
@@ -38,7 +37,6 @@ import { cachedPreview, loadPreview, pinPreview } from "./previewCache";
 import { fetchFile, saveBlob } from "../../utils/downloadFile";
 import { formatSize } from "../../utils/format";
 import { useThumbnail } from "../../utils/thumbnails";
-import { uploadEntries } from "../../utils/driveActions";
 import { useDrive } from "../../services/drive";
 import { needsConvert } from "../../services/convert";
 import { canStream, streamOffReason, streamUrl } from "../../services/stream";
@@ -164,8 +162,6 @@ export default function PreviewDialog({
     const [playing, setPlaying] = useState(false);
     const [fullscreen, setFullscreen] = useState(false);
     const [copied, setCopied] = useState(null);
-    // the file whose converted MP4 was sent to Drive, so it is sent once
-    const [sent, setSent] = useState(null);
     const viewer = useRef(null);
     const player = useRef(null);
     const kind = item ? previewKind(item) : null;
@@ -308,26 +304,6 @@ export default function PreviewDialog({
         else saveBlob(await fetchFile(item.id, item.file_id), item.name);
     }
 
-    /** Upload the converted MP4 next to the original, never over a file. */
-    async function saveMp4() {
-        const file = new File(
-            [state.blob],
-            `${item.name.replace(/\.[^.]+$/, "")}.mp4`,
-            { type: "video/mp4" },
-        );
-        setSent(item.id);
-        try {
-            await uploadEntries([file], item.parent ?? null, {
-                onConflict: async () => "keep",
-            });
-            setCopied("Đang gửi MP4 lên Drive, xem ở bảng tải lên");
-        } catch {
-            setSent(null);
-            setCopied("Không gửi được MP4 lên Drive");
-        }
-        setTimeout(() => setCopied(null), 3000);
-    }
-
     function trash() {
         // the next picture takes its place, as in a photo app
         const after = next ?? prev;
@@ -452,7 +428,8 @@ export default function PreviewDialog({
                     </Typography>
                     <Typography variant="caption" sx={{ opacity: 0.7 }}>
                         Trình duyệt không mở được .{item.name.split(".").pop()}{" "}
-                        nên cần chuyển trước. Tệp gốc không bị đổi.
+                        nên cần chuyển trước. Tệp gốc không bị đổi, bản MP4 sẽ
+                        tự lưu cạnh tệp gốc.
                     </Typography>
                 </Stack>
             );
@@ -765,28 +742,6 @@ export default function PreviewDialog({
                                         aria-label="Sao chép ảnh"
                                     >
                                         <ContentCopyIcon />
-                                    </IconButton>
-                                </span>
-                            </Tooltip>
-                        )}
-                        {convert && ready && onAction && state.blob && (
-                            <Tooltip
-                                title={
-                                    copied ??
-                                    (sent === item.id
-                                        ? "Đã gửi MP4 lên Drive"
-                                        : "Lưu bản MP4 lên Drive")
-                                }
-                                open={copied ? true : undefined}
-                            >
-                                <span>
-                                    <IconButton
-                                        onClick={saveMp4}
-                                        disabled={sent === item.id}
-                                        sx={white}
-                                        aria-label="Lưu bản MP4 lên Drive"
-                                    >
-                                        <CloudUploadOutlinedIcon />
                                     </IconButton>
                                 </span>
                             </Tooltip>
