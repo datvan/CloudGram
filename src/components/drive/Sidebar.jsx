@@ -6,7 +6,6 @@ import {
     Box,
     Button,
     Divider,
-    LinearProgress,
     List,
     ListItemButton,
     ListItemIcon,
@@ -241,16 +240,10 @@ export default function Sidebar({
                 >
                     <CloudOutlinedIcon fontSize="small" /> Bộ nhớ
                 </Typography>
-                <LinearProgress
-                    variant="determinate"
-                    value={Math.min(100, (used / 1024 ** 4) * 100 + 1)}
-                    sx={{ borderRadius: 4, height: 4 }}
-                />
                 <Typography
                     variant="caption"
                     color="text.secondary"
                     display="block"
-                    mt={1}
                 >
                     Đã dùng {formatSize(used)}. Lưu trên Telegram, không giới
                     hạn dung lượng.
