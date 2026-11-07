@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import PropTypes from "prop-types";
 import { useSelector } from "react-redux";
 
@@ -66,6 +66,33 @@ function useShown(items, memoKey) {
         </Box>
     ) : null;
     return [more ? items.slice(0, limit) : items, marker];
+}
+
+const HANDLERS = [
+    "onSelect",
+    "onOpen",
+    "onContextMenu",
+    "onDragStartItem",
+    "onDropOnFolder",
+];
+
+/**
+ * The props rows read, with handlers that never change identity (they call
+ * the latest ones), so memoised rows are not redrawn each time the page is:
+ * with hundreds of items that was most of the lag.
+ */
+function useStable(props) {
+    const latest = useRef(props);
+    latest.current = props;
+    const has = HANDLERS.map((k) => Boolean(props[k])).join();
+    return useMemo(() => {
+        const out = { dateField: props.dateField };
+        for (const k of HANDLERS) {
+            if (props[k]) out[k] = (...args) => latest.current[k]?.(...args);
+        }
+        return out;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [props.dateField, has]);
 }
 
 /** Upload/download state shown next to a name, or nothing when idle. */
@@ -164,7 +191,13 @@ function itemHandlers(item, index, props) {
 
 // ----- list ---------------------------------------------------------------------
 
-function ListRow({ item, index, selected, location, props }) {
+const ListRow = memo(function ListRow({
+    item,
+    index,
+    selected,
+    location,
+    props,
+}) {
     const [dropProps, over] = useDropTarget(item, props.onDropOnFolder);
     return (
         <TableRow
@@ -258,7 +291,7 @@ function ListRow({ item, index, selected, location, props }) {
             </TableCell>
         </TableRow>
     );
-}
+});
 
 ListRow.propTypes = {
     item: PropTypes.object,
@@ -271,7 +304,8 @@ ListRow.propTypes = {
 export function ItemList(props) {
     const { selected, sort, onSort, locationOf, dateField } = props;
     const [items, marker] = useShown(props.items, props.memoKey);
-    const header =(key, label, sx) => (
+    const stable = useStable(props);
+    const header = (key, label, sx) => (
         <TableCell sx={sx}>
             {onSort ? (
                 <TableSortLabel
@@ -334,7 +368,7 @@ export function ItemList(props) {
                             index={index}
                             selected={selected.has(item.id)}
                             location={locationOf ? locationOf(item) : undefined}
-                            props={props}
+                            props={stable}
                         />
                     ))}
                 </TableBody>
@@ -360,7 +394,12 @@ ItemList.propTypes = {
 
 // ----- grid ----------------------------------------------------------------------
 
-function FolderCard({ item, index, selected, props }) {
+const FolderCard = memo(function FolderCard({
+    item,
+    index,
+    selected,
+    props,
+}) {
     const [dropProps, over] = useDropTarget(item, props.onDropOnFolder);
     return (
         <Stack
@@ -411,27 +450,31 @@ function FolderCard({ item, index, selected, props }) {
             </IconButton>
         </Stack>
     );
-}
+});
 
 FolderCard.propTypes = ListRow.propTypes;
 
-/** True once the element has come near the viewport; stays true after. */
+/**
+ * Whether the element is near the viewport right now. A card scrolled past
+ * stops asking for its thumbnail (useThumbnail), so a long fling to the end
+ * does not leave hundreds of downloads queued ahead of what is on screen.
+ */
 function useSeen() {
     const ref = useRef(null);
     const [seen, setSeen] = useState(false);
     useEffect(() => {
-        if (seen || !ref.current) return undefined;
+        if (!ref.current) return undefined;
         const observer = new IntersectionObserver(
-            (entries) => entries.some((e) => e.isIntersecting) && setSeen(true),
+            (entries) => setSeen(entries[entries.length - 1].isIntersecting),
             { rootMargin: "200px" },
         );
         observer.observe(ref.current);
         return () => observer.disconnect();
-    }, [seen]);
+    }, []);
     return [ref, seen];
 }
 
-function FileCard({ item, index, selected, props }) {
+const FileCard = memo(function FileCard({ item, index, selected, props }) {
     const [ref, seen] = useSeen();
     const kind = kindOf(item);
     const thumb = useThumbnail(
@@ -449,6 +492,9 @@ function FileCard({ item, index, selected, props }) {
                 pt: 0.5,
                 userSelect: "none",
                 cursor: "default",
+                // the browser skips layout and paint of cards off screen
+                contentVisibility: "auto",
+                containIntrinsicSize: "auto 240px",
                 bgcolor: selected
                     ? "action.selected"
                     : (t) =>
@@ -544,13 +590,14 @@ function FileCard({ item, index, selected, props }) {
             )}
         </Box>
     );
-}
+});
 
 FileCard.propTypes = ListRow.propTypes;
 
 export function ItemGrid(props) {
     const { selected } = props;
     const [items, marker] = useShown(props.items, props.memoKey);
+    const stable = useStable(props);
     const folders = [];
     const files = [];
     items.forEach((item, index) =>
@@ -575,7 +622,7 @@ export function ItemGrid(props) {
                                 item={item}
                                 index={index}
                                 selected={selected.has(item.id)}
-                                props={props}
+                                props={stable}
                             />
                         ))}
                     </Box>
@@ -593,7 +640,7 @@ export function ItemGrid(props) {
                                 item={item}
                                 index={index}
                                 selected={selected.has(item.id)}
-                                props={props}
+                                props={stable}
                             />
                         ))}
                     </Box>
