@@ -11,6 +11,8 @@ import CodeIcon from "@mui/icons-material/Code";
 import ArticleIcon from "@mui/icons-material/Article";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 
+import { CONVERT_EXT, needsConvert } from "../../services/convert";
+
 /**
  * File kinds by extension, with Drive's colour coding. Icons are bundled MUI
  * glyphs rather than remote images, which the CSP would block anyway.
@@ -38,7 +40,7 @@ export const KINDS = {
         label: "Video",
         icon: MovieIcon,
         color: "#d93025",
-        ext: ["mp4", "webm", "mkv", "mov", "avi", "m4v", "wmv", "flv"],
+        ext: ["mp4", "webm", "mkv", "mov", "m4v", ...CONVERT_EXT],
     },
     audio: {
         label: "Âm thanh",
@@ -152,7 +154,11 @@ export function previewKind(record) {
     const kind = kindOf(record);
     const ext = extensionOf(record.name);
     if (kind === "image" && ext !== "heic") return "image";
-    if (kind === "video" && ["mp4", "webm", "mov", "m4v", "mkv"].includes(ext))
+    if (
+        kind === "video" &&
+        (["mp4", "webm", "mov", "m4v", "mkv"].includes(ext) ||
+            needsConvert(record))
+    )
         return "video";
     if (kind === "audio") return "audio";
     if (kind === "pdf") return "pdf";
