@@ -20,6 +20,7 @@ import {
     batchProgress,
     completedProgress,
     errorProgress,
+    keptProgress,
     queuedProgress,
     retryingProgress,
 } from "../redux/actions/progressAction";
@@ -433,9 +434,47 @@ async function settle(id, result, replaces, job) {
         if (job?.removeOriginal) kept = KEPT.gone;
     }
 
+    // what can be tried again with a click: the browser needs the user to
+    // allow deleting, or something had the file open
+    if (kept && record && job?.handle && RETRYABLE(kept))
+        holdKept(id, job.handle, job.file, record.name);
+
     jobs.delete(id);
     if (stored) dropEntry(id);
     Store.dispatch(completedProgress(id, kept));
+}
+
+/** Originals still on disk that "Xoá lại" can try again, by record id. */
+const keptJobs = new Map();
+const RETRYABLE = (kept) =>
+    kept === KEPT.permission ||
+    kept === KEPT.locked ||
+    kept.startsWith("Không xoá được");
+
+export const canRetryRemove = (id) => keptJobs.has(id);
+export const holdKept = (id, handle, file, name) =>
+    keptJobs.set(id, { handle, file, name });
+
+/**
+ * Ask again for delete rights (one prompt per folder, started inside the
+ * click that calls this) and delete the originals of `ids` that still stand.
+ */
+export async function retryRemoveOriginals(ids) {
+    const list = ids.filter((id) => keptJobs.has(id));
+    const roots = new Set(list.map((id) => keptJobs.get(id).handle.root));
+    await Promise.all(
+        [...roots].map((root) =>
+            root.requestPermission({ mode: "readwrite" }).catch(() => {}),
+        ),
+    );
+    for (const id of list) {
+        const { handle, file, name } = keptJobs.get(id);
+        const kept = await removePicked(handle, file).catch(
+            (error) => `Không xoá được: ${error?.message ?? error}`,
+        );
+        if (!kept) keptJobs.delete(id);
+        Store.dispatch(keptProgress(id, name, kept, false));
+    }
 }
 
 /**

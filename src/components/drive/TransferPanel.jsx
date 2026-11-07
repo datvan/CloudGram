@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from "react-redux";
 
 import {
     Box,
+    Button,
     CircularProgress,
     IconButton,
     Paper,
@@ -23,7 +24,11 @@ import { FileIcon } from "./FileIcon";
 import { getRecord } from "../../services/drive";
 import { formatSpeed } from "../../utils/format";
 import { clearFinished } from "../../redux/actions/progressAction";
-import { retryUpload } from "../../utils/uploadQueue";
+import {
+    canRetryRemove,
+    retryRemoveOriginals,
+    retryUpload,
+} from "../../utils/uploadQueue";
 import { downloadRate, uploadRate } from "../../utils/transfer";
 import { canKeepHandles, isBrave } from "../../utils/pickers";
 
@@ -97,6 +102,10 @@ export default function TransferPanel() {
         : `Đã xong ${finished.length} mục`;
 
     const keptCount = finished.filter((f) => f.kept).length;
+    // kept originals a new click on "Xoá lại" can still delete
+    const retryable = finished
+        .filter((f) => f.kept && canRetryRemove(f.id))
+        .map((f) => f.id);
 
     const nameOf = (entry) => entry.name ?? getRecord(entry.id)?.name ?? "Tệp";
 
@@ -201,6 +210,16 @@ export default function TransferPanel() {
                 >
                     {keptCount} tệp còn bản gốc trên máy dù đã chọn xoá sau khi
                     tải lên. Rê chuột vào dấu cảnh báo để xem lý do.
+                    {retryable.length > 0 && (
+                        <Button
+                            size="small"
+                            color="warning"
+                            sx={{ display: "block", mt: 0.5, ml: -1 }}
+                            onClick={() => retryRemoveOriginals(retryable)}
+                        >
+                            Cho phép và xoá lại ({retryable.length} tệp)
+                        </Button>
+                    )}
                 </Typography>
             )}
             {!collapsed && (
