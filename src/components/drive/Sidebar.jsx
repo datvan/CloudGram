@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
     Box,
     Button,
+    Checkbox,
     CircularProgress,
     Collapse,
     Divider,
@@ -65,6 +66,16 @@ function LabelsNav({ pathname, go }) {
     const { labels } = useDrive();
     const [open, setOpen] = useState(() => pathname.startsWith("/label/"));
     const [editing, setEditing] = useState(false);
+    // /label/<id>,<id>: the labels ticked; an item has to carry all of them
+    const ticked = pathname.startsWith("/label/")
+        ? pathname.slice("/label/".length).split(",").filter(Boolean)
+        : [];
+    const toggle = (id) => {
+        const next = ticked.includes(id)
+            ? ticked.filter((x) => x !== id)
+            : [...ticked, id];
+        go(next.length ? `/label/${next.join(",")}` : "/");
+    };
     return (
         <>
             <ListItemButton
@@ -90,12 +101,21 @@ function LabelsNav({ pathname, go }) {
                     {labels.map((label) => (
                         <ListItemButton
                             key={label.id}
-                            selected={pathname === `/label/${label.id}`}
-                            onClick={() => go(`/label/${label.id}`)}
-                            sx={{ ...rowSx, pl: 4 }}
+                            selected={ticked.includes(label.id)}
+                            onClick={() => toggle(label.id)}
+                            sx={{ ...rowSx, pl: 2 }}
                         >
                             <ListItemIcon sx={{ minWidth: 40 }}>
-                                <LabelOutlinedIcon fontSize="small" />
+                                <Checkbox
+                                    edge="start"
+                                    size="small"
+                                    checked={ticked.includes(label.id)}
+                                    tabIndex={-1}
+                                    disableRipple
+                                    inputProps={{
+                                        "aria-label": `Lọc theo nhãn ${label.name}`,
+                                    }}
+                                />
                             </ListItemIcon>
                             <ListItemText
                                 primary={label.name}
@@ -328,7 +348,8 @@ export default function Sidebar({
                             <LabelsNav
                                 key={item.to}
                                 pathname={pathname}
-                                go={go}
+                                // ticking several labels keeps the menu open on a phone
+                                go={navigate}
                             />
                         );
                     const Icon = item.icon;
