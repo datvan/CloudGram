@@ -103,12 +103,12 @@ function LabelsNav({ pathname, go }) {
                             key={label.id}
                             selected={ticked.includes(label.id)}
                             onClick={() => toggle(label.id)}
-                            sx={{ ...rowSx, pl: 2 }}
+                            sx={{ ...rowSx, pl: 4 }}
                         >
                             <ListItemIcon sx={{ minWidth: 40 }}>
                                 <Checkbox
-                                    edge="start"
                                     size="small"
+                                    sx={{ p: 0.5 }}
                                     checked={ticked.includes(label.id)}
                                     tabIndex={-1}
                                     disableRipple
