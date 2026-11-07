@@ -148,7 +148,7 @@ export default function TopBar({
                         <SearchIcon />
                     </IconButton>
                     <InputBase
-                        placeholder="Tìm trong Drive"
+                        placeholder="Tìm trong Drive (gõ *.avi để tìm theo đuôi)"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         sx={{ flex: 1 }}
