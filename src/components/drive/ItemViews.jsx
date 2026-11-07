@@ -22,6 +22,7 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 
 import { FileIcon } from "./FileIcon";
+import LabelChips from "./LabelChips";
 import { activeEntry } from "../../redux/reducers/progressReducer";
 import { DRAG_TYPE, kindOf } from "./fileTypes";
 import { formatDate, formatSize } from "../../utils/format";
@@ -193,6 +194,7 @@ function ListRow({ item, index, selected, location, props }) {
                             sx={{ fontSize: 16, color: "text.secondary" }}
                         />
                     )}
+                    {item.labels?.length > 0 && <LabelChips item={item} />}
                     <TransferBadge id={item.id} pending={isPending(item)} />
                 </Stack>
             </TableCell>
@@ -390,6 +392,7 @@ function FolderCard({ item, index, selected, props }) {
             {item.starred && (
                 <StarIcon sx={{ fontSize: 16, color: "text.secondary" }} />
             )}
+            {item.labels?.length > 0 && <LabelChips item={item} max={1} />}
             <IconButton
                 size="small"
                 aria-label="Thao tác khác"
@@ -528,6 +531,11 @@ function FileCard({ item, index, selected, props }) {
                         : item.updatedAt,
                 )}
             </Typography>
+            {item.labels?.length > 0 && (
+                <Box sx={{ px: 1, pt: 0.5, overflow: "hidden" }}>
+                    <LabelChips item={item} />
+                </Box>
+            )}
         </Box>
     );
 }

@@ -15,6 +15,7 @@ import DriveFileRenameOutlineIcon from "@mui/icons-material/DriveFileRenameOutli
 import DriveFileMoveOutlinedIcon from "@mui/icons-material/DriveFileMoveOutlined";
 import StarBorderIcon from "@mui/icons-material/StarBorder";
 import StarIcon from "@mui/icons-material/Star";
+import LabelOutlinedIcon from "@mui/icons-material/LabelOutlined";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import RestoreFromTrashOutlinedIcon from "@mui/icons-material/RestoreFromTrashOutlined";
@@ -176,6 +177,12 @@ export default function ItemMenu({
                           }
                           label={allStarred ? "Bỏ gắn dấu sao" : "Gắn dấu sao"}
                           onClick={act(allStarred ? "unstar" : "star")}
+                      />,
+                      <Item
+                          key="labels"
+                          icon={icon(LabelOutlinedIcon)}
+                          label="Gắn nhãn"
+                          onClick={act("labels")}
                       />,
                       showLocate && single && (
                           <Item

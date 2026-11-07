@@ -6,6 +6,7 @@ import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 
 import { kindLabel } from "./fileTypes";
 import { FileIcon } from "./FileIcon";
+import LabelChips from "./LabelChips";
 import { useDrive } from "../../services/drive";
 import { formatDateTime, formatSize } from "../../utils/format";
 import { childrenOf, pathTo } from "../../utils/tree";
@@ -19,6 +20,7 @@ function Row({ label, value }) {
             <Typography
                 variant="body2"
                 color="text.secondary"
+                component="div"
                 sx={{ wordBreak: "break-word" }}
             >
                 {value}
@@ -128,6 +130,18 @@ export default function DetailsPanel({ items, folderName, onClose }) {
                                 ),
                             ].join(" › ")}
                         />
+                        {single.labels?.length > 0 && (
+                            <Row
+                                label="Nhãn"
+                                value={
+                                    <LabelChips
+                                        item={single}
+                                        max={Infinity}
+                                        wrap
+                                    />
+                                }
+                            />
+                        )}
                         <Row
                             label="Sửa đổi"
                             value={formatDateTime(single.updatedAt)}
