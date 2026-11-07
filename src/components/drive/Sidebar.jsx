@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import PropTypes from "prop-types";
 import { useLocation, useNavigate } from "react-router-dom";
 
@@ -62,7 +62,12 @@ const rowSx = {
 };
 
 /** "Nhãn" with an arrow that opens the labels made so far, then "Chỉnh sửa nhãn". */
+// where the user was before the first label was ticked, which unticking the
+// last one goes back to; outside the component so it outlives the menu closing
+let beforeLabels = "/";
+
 function LabelsNav({ pathname, go }) {
+    const { search } = useLocation();
     const { labels } = useDrive();
     const [open, setOpen] = useState(() => pathname.startsWith("/label/"));
     const [editing, setEditing] = useState(false);
@@ -70,11 +75,14 @@ function LabelsNav({ pathname, go }) {
     const ticked = pathname.startsWith("/label/")
         ? pathname.slice("/label/".length).split(",").filter(Boolean)
         : [];
+    useEffect(() => {
+        if (!pathname.startsWith("/label/")) beforeLabels = pathname + search;
+    }, [pathname, search]);
     const toggle = (id) => {
         const next = ticked.includes(id)
             ? ticked.filter((x) => x !== id)
             : [...ticked, id];
-        go(next.length ? `/label/${next.join(",")}` : "/");
+        go(next.length ? `/label/${next.join(",")}` : beforeLabels);
     };
     return (
         <>
