@@ -168,7 +168,13 @@ function useView() {
     if (pathname === "/recent") return { kind: "recent" };
     if (pathname === "/starred") return { kind: "starred" };
     const label = matchPath("/label/:id", pathname);
-    if (label) return { kind: "label", labelId: label.params.id };
+    // /label/<id>,<id>: several labels at once, an item has to carry them all
+    if (label)
+        return {
+            kind: "label",
+            labelKey: label.params.id,
+            labelIds: label.params.id.split(",").filter(Boolean),
+        };
     if (pathname === "/trash") return { kind: "trash" };
     if (pathname === "/search")
         return {
@@ -249,7 +255,8 @@ export default function DriveApp({ mode, onToggleMode }) {
             case "label":
                 list = records.filter(
                     (r) =>
-                        r.labels?.includes(view.labelId) && !isHidden(byId, r),
+                        view.labelIds.every((id) => r.labels?.includes(id)) &&
+                        !isHidden(byId, r),
                 );
                 break;
             case "trash":
@@ -289,7 +296,7 @@ export default function DriveApp({ mode, onToggleMode }) {
         byId,
         view.kind,
         view.query,
-        view.labelId,
+        view.labelKey,
         folderId,
         kindFilter,
         sort,
@@ -328,7 +335,7 @@ export default function DriveApp({ mode, onToggleMode }) {
         setSelected(new Set());
         setAnchorIndex(null);
         setKindFilter(null);
-    }, [view.kind, folderId, view.query, view.labelId]);
+    }, [view.kind, folderId, view.query, view.labelKey]);
 
     // records can vanish under the selection (another delete, a sync)
     useEffect(() => {
@@ -900,12 +907,20 @@ export default function DriveApp({ mode, onToggleMode }) {
     // ----- layout ----------------------------------------------------------------------------------
 
     if (view.kind === "unknown") return <Navigate to="/" replace />;
-    // a label deleted while its page was open
-    if (view.kind === "label" && !labelsById.has(view.labelId))
-        return <Navigate to="/" replace />;
+    // a label deleted while its page was open: carry on with the others
+    if (view.kind === "label") {
+        const alive = view.labelIds.filter((id) => labelsById.has(id));
+        if (alive.length !== view.labelIds.length)
+            return (
+                <Navigate
+                    to={alive.length ? `/label/${alive.join(",")}` : "/"}
+                    replace
+                />
+            );
+    }
     const viewTitle =
         view.kind === "label"
-            ? labelsById.get(view.labelId).name
+            ? view.labelIds.map((id) => labelsById.get(id).name).join(" + ")
             : VIEWS[view.kind].title;
     if (
         view.kind === "folder" &&
@@ -946,7 +961,7 @@ export default function DriveApp({ mode, onToggleMode }) {
     );
 
     // a new folder or search starts again from the first page (ItemViews)
-    const viewKey = `${view.kind}:${folderId}:${view.labelId}:${
+    const viewKey = `${view.kind}:${folderId}:${view.labelKey}:${
         view.query ?? ""
     }:${kindFilter}`;
     const listProps = {
