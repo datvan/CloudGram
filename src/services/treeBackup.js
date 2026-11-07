@@ -74,8 +74,10 @@ export async function listBackups() {
 /** Send a copy now if the tree changed since the last one; true if sent. */
 export function backupNow({ force = false } = {}) {
     running ??= (async () => {
-        const { records } = getSnapshot();
-        if (!records.length || !isOnline()) return false;
+        const { records: files, labels } = getSnapshot();
+        if (!files.length || !isOnline()) return false;
+        // labels are records too, kept apart in the snapshot
+        const records = [...files, ...labels];
         const body = JSON.stringify(records);
         const hash = await hashOf(body);
         let last = null;

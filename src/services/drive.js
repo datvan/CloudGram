@@ -8,7 +8,13 @@
  * Record shape:
  *
  *     { id, type: "folder" | "file", name, parent: id | null,
- *       file_id?, size?, mime?, starred?, trashedAt?, createdAt, updatedAt }
+ *       file_id?, size?, mime?, starred?, labels?: [label id],
+ *       trashedAt?, createdAt, updatedAt }
+ *
+ * A label is a record of its own, { id, type: "label", name, createdAt,
+ * updatedAt }, kept apart from the files and folders in the snapshot.
+ * Deleting one leaves its id on the items that had it; labelsOf() skips ids
+ * with no live label.
  *
  * A deleted record stays behind as a tombstone ({ id, deleted: true,
  * updatedAt }) so a device that has not heard of the delete cannot bring the
@@ -22,6 +28,7 @@ import { v4 as uuid4 } from "uuid";
 
 import { api, ApiError } from "./api";
 import { decryptJson, encryptJson } from "./crypto";
+import { fold } from "../utils/format";
 
 const LABEL = "file-tree";
 const TOMBSTONE_TTL = 90 * 24 * 60 * 60 * 1000;
@@ -33,6 +40,8 @@ let records = new Map();
 let snapshot = {
     records: [],
     byId: new Map(),
+    labels: [],
+    labelsById: new Map(),
     syncing: false,
     dirty: false,
     error: null,
@@ -42,20 +51,33 @@ let pushing = null;
 let pushTimer = null;
 let syncError = null;
 const listeners = new Set();
+const collator = new Intl.Collator("vi", { numeric: true });
 
 // ----- subscription ----------------------------------------------------------
 
 function publish() {
     const live = [];
     const byId = new Map();
+    // labels travel in the same tree but stay out of `records`, which every
+    // folder listing, search and size count reads as files and folders only
+    const labels = [];
+    const labelsById = new Map();
     for (const record of records.values()) {
         if (record.deleted) continue;
+        if (record.type === "label") {
+            labels.push(record);
+            labelsById.set(record.id, record);
+            continue;
+        }
         live.push(record);
         byId.set(record.id, record);
     }
+    labels.sort((a, b) => collator.compare(a.name, b.name));
     snapshot = {
         records: live,
         byId,
+        labels,
+        labelsById,
         syncing: Boolean(pushing),
         dirty,
         error: syncError,
@@ -300,6 +322,7 @@ export function linkFile(source, parent, name) {
         ...source,
         // a share link belongs to the record it was made for
         starred: undefined,
+        labels: undefined,
         trashedAt: undefined,
         share: undefined,
         id: uuid4(),
@@ -331,6 +354,91 @@ export function setStarred(ids, starred) {
         if (record) put({ ...record, starred });
     }
     markDirty();
+}
+
+// ----- labels ----------------------------------------------------------------------
+
+const LABEL_MAX = 50;
+const sameName = (a, b) => fold(a) === fold(b);
+
+/** The live labels on `item`, in the order they were put on. */
+export function labelsOf(item, labelsById) {
+    const ids = item.labels;
+    if (!ids?.length) return [];
+    return ids.map((id) => labelsById.get(id)).filter(Boolean);
+}
+
+/** A label with this name (any case or accents), if there is one. */
+export function findLabel(name) {
+    return snapshot.labels.find((l) => sameName(l.name, name));
+}
+
+/**
+ * Make a label, or return the one that already has the name. Null for an
+ * empty name; a long one is cut to LABEL_MAX.
+ */
+export function createLabel(name) {
+    const clean = String(name ?? "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .slice(0, LABEL_MAX)
+        .trim();
+    if (!clean) return null;
+    const existing = findLabel(clean);
+    if (existing) return existing;
+    const now = Date.now();
+    const record = {
+        id: uuid4(),
+        type: "label",
+        name: clean,
+        createdAt: now,
+        updatedAt: now,
+    };
+    put(record);
+    markDirty();
+    return records.get(record.id);
+}
+
+/** False when the name is empty or another label has it. */
+export function renameLabel(id, name) {
+    const label = getRecord(id);
+    const clean = String(name ?? "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .slice(0, LABEL_MAX)
+        .trim();
+    if (!label || label.type !== "label" || !clean) return false;
+    const other = findLabel(clean);
+    if (other && other.id !== id) return false;
+    if (clean !== label.name) {
+        put({ ...label, name: clean });
+        markDirty();
+    }
+    return true;
+}
+
+/** Only the label goes; the files and folders that had it stay as they are. */
+export function deleteLabel(id) {
+    if (getRecord(id)?.type !== "label") return;
+    put({ id, deleted: true });
+    markDirty();
+}
+
+/** Put label `labelId` on, or take it off, every item in `ids`. */
+export function setLabel(ids, labelId, on) {
+    let changed = false;
+    for (const id of ids) {
+        const record = getRecord(id);
+        if (!record || record.type === "label") continue;
+        const have = record.labels ?? [];
+        if (have.includes(labelId) === on) continue;
+        const labels = on
+            ? [...have, labelId]
+            : have.filter((l) => l !== labelId);
+        put({ ...record, labels: labels.length ? labels : undefined });
+        changed = true;
+    }
+    if (changed) markDirty();
 }
 
 export function trash(ids) {

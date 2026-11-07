@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
     Box,
     Button,
+    Collapse,
     Divider,
     List,
     ListItemButton,
@@ -25,7 +26,12 @@ import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
 import StarBorderIcon from "@mui/icons-material/StarBorder";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CloudOutlinedIcon from "@mui/icons-material/CloudOutlined";
+import LabelOutlinedIcon from "@mui/icons-material/LabelOutlined";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 
+import LabelsDialog from "./LabelsDialog";
 import { useDrive } from "../../services/drive";
 import { formatSize } from "../../utils/format";
 
@@ -38,8 +44,91 @@ const NAV = [
     },
     { to: "/recent", label: "Gần đây", icon: ScheduleOutlinedIcon },
     { to: "/starred", label: "Có gắn dấu sao", icon: StarBorderIcon },
+    // not a page of its own: opens the list of labels
+    { to: "/label", label: "Nhãn", icon: LabelOutlinedIcon, labels: true },
     { to: "/trash", label: "Thùng rác", icon: DeleteOutlineIcon },
 ];
+
+const rowSx = {
+    borderRadius: 999,
+    height: 32,
+    mb: 0.25,
+    "&.Mui-selected": { bgcolor: "action.selected", fontWeight: 600 },
+};
+
+/** "Nhãn" with an arrow that opens the labels made so far, then "Chỉnh sửa nhãn". */
+function LabelsNav({ pathname, go }) {
+    const { labels } = useDrive();
+    const [open, setOpen] = useState(() => pathname.startsWith("/label/"));
+    const [editing, setEditing] = useState(false);
+    return (
+        <>
+            <ListItemButton
+                onClick={() => setOpen(!open)}
+                aria-expanded={open}
+                sx={rowSx}
+            >
+                <ListItemIcon sx={{ minWidth: 40 }}>
+                    <LabelOutlinedIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText
+                    primary="Nhãn"
+                    primaryTypographyProps={{ fontSize: 14 }}
+                />
+                {open ? (
+                    <ExpandLessIcon fontSize="small" />
+                ) : (
+                    <ExpandMoreIcon fontSize="small" />
+                )}
+            </ListItemButton>
+            <Collapse in={open} unmountOnExit>
+                <List dense disablePadding>
+                    {labels.map((label) => (
+                        <ListItemButton
+                            key={label.id}
+                            selected={pathname === `/label/${label.id}`}
+                            onClick={() => go(`/label/${label.id}`)}
+                            sx={{ ...rowSx, pl: 4 }}
+                        >
+                            <ListItemIcon sx={{ minWidth: 40 }}>
+                                <LabelOutlinedIcon fontSize="small" />
+                            </ListItemIcon>
+                            <ListItemText
+                                primary={label.name}
+                                primaryTypographyProps={{
+                                    fontSize: 14,
+                                    noWrap: true,
+                                }}
+                            />
+                        </ListItemButton>
+                    ))}
+                    <ListItemButton
+                        onClick={() => setEditing(true)}
+                        sx={{ ...rowSx, pl: 4 }}
+                    >
+                        <ListItemIcon sx={{ minWidth: 40 }}>
+                            <EditOutlinedIcon fontSize="small" />
+                        </ListItemIcon>
+                        <ListItemText
+                            primary={
+                                labels.length
+                                    ? "Chỉnh sửa nhãn"
+                                    : "Tạo nhãn mới"
+                            }
+                            primaryTypographyProps={{ fontSize: 14 }}
+                        />
+                    </ListItemButton>
+                </List>
+            </Collapse>
+            <LabelsDialog open={editing} onClose={() => setEditing(false)} />
+        </>
+    );
+}
+
+LabelsNav.propTypes = {
+    pathname: PropTypes.string.isRequired,
+    go: PropTypes.func.isRequired,
+};
 
 export function NewMenu({
     anchor,
@@ -168,6 +257,14 @@ export default function Sidebar({
             </Box>
             <List dense disablePadding>
                 {NAV.map((item) => {
+                    if (item.labels)
+                        return (
+                            <LabelsNav
+                                key={item.to}
+                                pathname={pathname}
+                                go={go}
+                            />
+                        );
                     const Icon = item.icon;
                     const active = item.match
                         ? item.match(pathname)

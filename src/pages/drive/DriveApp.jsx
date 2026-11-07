@@ -50,6 +50,7 @@ import TopBar from "../../components/drive/TopBar";
 import Sidebar, { NewMenu } from "../../components/drive/Sidebar";
 import { ItemGrid, ItemList } from "../../components/drive/ItemViews";
 import ItemMenu from "../../components/drive/ItemMenu";
+import LabelPicker from "../../components/drive/LabelPicker";
 import DetailsPanel from "../../components/drive/DetailsPanel";
 import PreviewDialog from "../../components/drive/PreviewDialog";
 import ShareDialog from "../../components/drive/ShareDialog";
@@ -118,6 +119,11 @@ const VIEWS = {
         title: "Có gắn dấu sao",
         empty: "Gắn dấu sao cho những mục bạn muốn tìm nhanh.",
     },
+    // the page's title is the label's own name
+    label: {
+        title: "Nhãn",
+        empty: "Chưa có thư mục hay tệp nào mang nhãn này.",
+    },
     trash: { title: "Thùng rác", empty: "Thùng rác trống." },
     search: { title: "Kết quả tìm kiếm", empty: "Không có kết quả phù hợp." },
 };
@@ -161,6 +167,8 @@ function useView() {
     if (pathname === "/") return { kind: "folder", folderId: null };
     if (pathname === "/recent") return { kind: "recent" };
     if (pathname === "/starred") return { kind: "starred" };
+    const label = matchPath("/label/:id", pathname);
+    if (label) return { kind: "label", labelId: label.params.id };
     if (pathname === "/trash") return { kind: "trash" };
     if (pathname === "/search")
         return {
@@ -178,9 +186,11 @@ export default function DriveApp({ mode, onToggleMode }) {
     const theme = useTheme();
     const desktop = useMediaQuery(theme.breakpoints.up("md"));
     const view = useView();
-    const { records, byId } = drive.useDrive();
+    const { records, byId, labelsById } = drive.useDrive();
 
     const [navOpen, setNavOpen] = useState(false);
+    // where the "Gắn nhãn" box stands and which items it is for
+    const [labelPicker, setLabelPicker] = useState(null);
     // bumped to have the resume banner look again
     const [resumeScan, setResumeScan] = useState(0);
     // the upload of picked or dropped files still scanning or asking
@@ -236,6 +246,12 @@ export default function DriveApp({ mode, onToggleMode }) {
             case "starred":
                 list = records.filter((r) => r.starred && !isHidden(byId, r));
                 break;
+            case "label":
+                list = records.filter(
+                    (r) =>
+                        r.labels?.includes(view.labelId) && !isHidden(byId, r),
+                );
+                break;
             case "trash":
                 // only the top of each trashed subtree, like Drive
                 list = records.filter(
@@ -275,6 +291,7 @@ export default function DriveApp({ mode, onToggleMode }) {
         byId,
         view.kind,
         view.query,
+        view.labelId,
         folderId,
         kindFilter,
         sort,
@@ -313,7 +330,7 @@ export default function DriveApp({ mode, onToggleMode }) {
         setSelected(new Set());
         setAnchorIndex(null);
         setKindFilter(null);
-    }, [view.kind, folderId, view.query]);
+    }, [view.kind, folderId, view.query, view.labelId]);
 
     // records can vanish under the selection (another delete, a sync)
     useEffect(() => {
@@ -458,6 +475,14 @@ export default function DriveApp({ mode, onToggleMode }) {
             case "star":
             case "unstar":
                 drive.setStarred(ids, action === "star");
+                break;
+            case "labels":
+                // opens where the menu it came from stood
+                setLabelPicker({
+                    top: menu?.top ?? 120,
+                    left: Math.max(8, menu?.left ?? 120),
+                    ids,
+                });
                 break;
             case "locate":
                 if (single) {
@@ -877,6 +902,13 @@ export default function DriveApp({ mode, onToggleMode }) {
     // ----- layout ----------------------------------------------------------------------------------
 
     if (view.kind === "unknown") return <Navigate to="/" replace />;
+    // a label deleted while its page was open
+    if (view.kind === "label" && !labelsById.has(view.labelId))
+        return <Navigate to="/" replace />;
+    const viewTitle =
+        view.kind === "label"
+            ? labelsById.get(view.labelId).name
+            : VIEWS[view.kind].title;
     if (
         view.kind === "folder" &&
         folderId &&
@@ -916,7 +948,7 @@ export default function DriveApp({ mode, onToggleMode }) {
     );
 
     // a new folder or search starts again from the first page (ItemViews)
-    const viewKey = `${view.kind}:${folderId}:${
+    const viewKey = `${view.kind}:${folderId}:${view.labelId}:${
         view.query ?? ""
     }:${kindFilter}`;
     const listProps = {
@@ -1059,7 +1091,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                                 >
                                     {view.kind === "search"
                                         ? `Kết quả cho “${view.query}”`
-                                        : VIEWS[view.kind].title}
+                                        : viewTitle}
                                 </Typography>
                             )}
                         </Box>
@@ -1330,6 +1362,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                         ) : (
                             <EmptyState
                                 view={view}
+                                title={viewTitle}
                                 onUpload={() => openPicker(false)}
                             />
                         )}
@@ -1387,10 +1420,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                         >
                             <DetailsPanel
                                 items={selectedItems}
-                                folderName={
-                                    currentFolder?.name ??
-                                    VIEWS[view.kind].title
-                                }
+                                folderName={currentFolder?.name ?? viewTitle}
                                 onClose={() => setDetails(false)}
                             />
                         </Box>
@@ -1408,10 +1438,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                         >
                             <DetailsPanel
                                 items={selectedItems}
-                                folderName={
-                                    currentFolder?.name ??
-                                    VIEWS[view.kind].title
-                                }
+                                folderName={currentFolder?.name ?? viewTitle}
                                 onClose={() => setDetails(false)}
                             />
                         </Drawer>
@@ -1513,6 +1540,15 @@ export default function DriveApp({ mode, onToggleMode }) {
                 canRetry={canRetry}
                 onClose={() => setMenu(null)}
                 onAction={(action) => act(action, menuItems)}
+            />
+            <LabelPicker
+                position={
+                    labelPicker
+                        ? { top: labelPicker.top, left: labelPicker.left }
+                        : null
+                }
+                ids={labelPicker?.ids}
+                onClose={() => setLabelPicker(null)}
             />
 
             <NameDialog
@@ -1813,7 +1849,7 @@ FolderCrumb.propTypes = {
     onMenu: PropTypes.func,
 };
 
-function EmptyState({ view, onUpload }) {
+function EmptyState({ view, title, onUpload }) {
     return (
         <Stack
             alignItems="center"
@@ -1831,9 +1867,7 @@ function EmptyState({ view, onUpload }) {
                 />
             )}
             <Typography variant="h6" fontWeight={400}>
-                {view.kind === "folder"
-                    ? "Chưa có gì ở đây"
-                    : VIEWS[view.kind]?.title}
+                {view.kind === "folder" ? "Chưa có gì ở đây" : title}
             </Typography>
             <Typography color="text.secondary">
                 {VIEWS[view.kind]?.empty}
@@ -1853,5 +1887,6 @@ function EmptyState({ view, onUpload }) {
 
 EmptyState.propTypes = {
     view: PropTypes.object,
+    title: PropTypes.string,
     onUpload: PropTypes.func,
 };
