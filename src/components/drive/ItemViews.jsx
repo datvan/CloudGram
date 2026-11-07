@@ -29,16 +29,22 @@ import { formatDate, formatSize } from "../../utils/format";
 import { useThumbnail } from "../../utils/thumbnails";
 
 const PAGE = 200;
+// how many items each view had drawn, so coming back to it (e.g. after a label
+// filter is lifted) can restore the scroll position instead of starting over
+export const shownMemo = new Map();
 
 /**
  * Big folders render PAGE items at a time; a marker after the last one asks
  * for the next page when it scrolls near view. Returns the items to draw and
  * the marker to put after them.
  */
-function useShown(items) {
-    const [limit, setLimit] = useState(PAGE);
+function useShown(items, memoKey) {
+    const [limit, setLimit] = useState(() => shownMemo.get(memoKey) ?? PAGE);
     const ref = useRef(null);
     const more = items.length > limit;
+    useEffect(() => {
+        shownMemo.set(memoKey, limit);
+    }, [memoKey, limit]);
     useEffect(() => {
         if (!more || !ref.current) return undefined;
         const observer = new IntersectionObserver(
@@ -264,8 +270,8 @@ ListRow.propTypes = {
 
 export function ItemList(props) {
     const { selected, sort, onSort, locationOf, dateField } = props;
-    const [items, marker] = useShown(props.items);
-    const header = (key, label, sx) => (
+    const [items, marker] = useShown(props.items, props.memoKey);
+    const header =(key, label, sx) => (
         <TableCell sx={sx}>
             {onSort ? (
                 <TableSortLabel
@@ -544,7 +550,7 @@ FileCard.propTypes = ListRow.propTypes;
 
 export function ItemGrid(props) {
     const { selected } = props;
-    const [items, marker] = useShown(props.items);
+    const [items, marker] = useShown(props.items, props.memoKey);
     const folders = [];
     const files = [];
     items.forEach((item, index) =>
