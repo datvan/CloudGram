@@ -40,7 +40,7 @@ export default function reducer(
                     id: action.id,
                     name: action.name,
                     kept: action.kept,
-                    unsent: true,
+                    unsent: action.unsent,
                 },
                 ...state.finished.filter((item) => item.id !== action.id),
             ].slice(0, FINISHED_KEEP),

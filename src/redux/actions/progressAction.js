@@ -57,11 +57,13 @@ export function completedProgress(id, kept = null) {
 
 // A file that was not sent this time (skipped, linked) while its original was
 // to be deleted: the panel lists it with `kept` saying why it stays.
-export function keptProgress(id, name, kept) {
+// `unsent` is false for a file that did go up and whose original is tried again
+export function keptProgress(id, name, kept, unsent = true) {
     return {
         id: id,
         name: name,
         kept: kept,
+        unsent: unsent,
         type: "KEPT",
     };
 }
