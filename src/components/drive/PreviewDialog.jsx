@@ -169,13 +169,15 @@ export default function PreviewDialog({
     // a streamed video plays as it arrives, so its size does not matter
     const convert = Boolean(item) && kind === "video" && needsConvert(item);
     const streaming = kind === "video" && canStream() && !convert;
+    // the full player: for a stream, and for a video converted in this tab
+    const fullPlayer = streaming || convert;
     const tooLarge = item && kind && !streaming && !fitsPreview(item, kind);
     const index = item ? siblings.findIndex((s) => s.id === item.id) : -1;
     const prev = index > 0 ? siblings[index - 1] : null;
     const next =
         index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : null;
     // the player moves on to the next video, skipping other files
-    const videos = streaming
+    const videos = fullPlayer
         ? siblings.filter(
               (s) => s.file_id != null && previewKind(s) === "video",
           )
@@ -342,7 +344,7 @@ export default function PreviewDialog({
         // the video player takes its keys first, arrows included
         // (not while a button or menu has the focus: those keys are theirs)
         if (
-            streaming &&
+            fullPlayer &&
             !target.closest("button, [role=menu]") &&
             player.current?.handleKey(e)
         )
@@ -476,7 +478,7 @@ export default function PreviewDialog({
         const fit = { maxWidth: "100%", maxHeight: "100%" };
         switch (kind) {
             case "video":
-                if (streaming)
+                if (fullPlayer)
                     return (
                         <VideoPlayer
                             // a fresh player per video, so the last one's
@@ -485,20 +487,13 @@ export default function PreviewDialog({
                             ref={player}
                             record={item}
                             src={state.url}
+                            // not streamed: already whole in this tab
+                            local={convert}
                             poster={placeholder}
                             next={nextVideo}
                             onNext={nextVideo && (() => onNavigate(nextVideo))}
                             onPrev={prevVideo && (() => onNavigate(prevVideo))}
                             onDownload={download}
-                        />
-                    );
-                if (convert)
-                    return (
-                        <video
-                            src={state.url}
-                            controls
-                            autoPlay
-                            style={{ ...fit, minHeight: 0 }}
                         />
                     );
                 // no service worker (blocked, or a hard reload): the whole
@@ -777,7 +772,7 @@ export default function PreviewDialog({
                                 display: "flex",
                                 alignItems: "center",
                                 justifyContent: "center",
-                                p: isImage || streaming ? 0 : { xs: 1, md: 4 },
+                                p: isImage || fullPlayer ? 0 : { xs: 1, md: 4 },
                                 position: "relative",
                             }}
                             onClick={(e) =>

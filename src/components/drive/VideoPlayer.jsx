@@ -345,7 +345,7 @@ const GRID = Array.from({ length: 9 }, (_, k) =>
  * around it passes keys on through `handleKey` (the ref).
  */
 const VideoPlayer = forwardRef(function VideoPlayer(
-    { record, src, poster, next, onNext, onPrev, onDownload },
+    { record, src, local, poster, next, onNext, onPrev, onDownload },
     ref,
 ) {
     const box = useRef(null);
@@ -548,7 +548,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     // made only once the video plays, so drawing it never slows the start
     const [board, making, problem] = useStoryboard(
         record,
-        () => streamUrl(record, { quiet: true }),
+        // a converted video is drawn from the bytes already in this tab
+        () => (local ? src : streamUrl(record, { quiet: true })),
         started,
     );
     const grid = !started && !error && Boolean(board);
@@ -684,7 +685,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
         onLoadedMetadata: () => {
             const v = video.current;
             setDuration(v.duration);
-            if (Number.isFinite(v.duration) && v.duration > 0)
+            if (!local && Number.isFinite(v.duration) && v.duration > 0)
                 setBitrate(record.file_id, record.size / v.duration);
             const at = resumeAt.current;
             resumeAt.current = 0;
@@ -1236,6 +1237,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
 VideoPlayer.propTypes = {
     record: PropTypes.object.isRequired,
     src: PropTypes.string.isRequired,
+    // src is a blob in this tab, not a stream from Telegram
+    local: PropTypes.bool,
     poster: PropTypes.string,
     next: PropTypes.object,
     onNext: PropTypes.func,
