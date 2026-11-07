@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import {
     Box,
     Button,
+    CircularProgress,
     Collapse,
     Divider,
     List,
@@ -30,9 +31,12 @@ import LabelOutlinedIcon from "@mui/icons-material/LabelOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import BackupOutlinedIcon from "@mui/icons-material/BackupOutlined";
 
 import LabelsDialog from "./LabelsDialog";
-import { useDrive } from "../../services/drive";
+import { describeError } from "../../services/api";
+import { flush, useDrive } from "../../services/drive";
+import { backupNow } from "../../services/treeBackup";
 import { formatSize } from "../../utils/format";
 
 const NAV = [
@@ -182,6 +186,68 @@ NewMenu.propTypes = {
     onUploadFolder: PropTypes.func,
     onImportDropbox: PropTypes.func,
 };
+
+/**
+ * Sends a copy of the tree (files, folders, labels) to Saved Messages now,
+ * instead of waiting for the 30-minute one (services/treeBackup).
+ */
+function BackupNow() {
+    const [state, setState] = useState({ busy: false, text: null });
+
+    async function run() {
+        setState({ busy: true, text: null });
+        try {
+            // the server has the latest too, not only Telegram
+            await flush();
+            const sent = await backupNow({ force: true });
+            setState({
+                busy: false,
+                text: sent
+                    ? `Đã sao lưu lúc ${new Date().toLocaleTimeString("vi-VN", {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                      })}.`
+                    : "Chưa sao lưu được: chưa có gì để lưu hoặc máy đang mất mạng.",
+                error: !sent,
+            });
+        } catch (error) {
+            setState({
+                busy: false,
+                text: `Sao lưu thất bại: ${describeError(error)}`,
+                error: true,
+            });
+        }
+    }
+
+    return (
+        <>
+            <Button
+                size="small"
+                startIcon={
+                    state.busy ? (
+                        <CircularProgress size={14} />
+                    ) : (
+                        <BackupOutlinedIcon fontSize="small" />
+                    )
+                }
+                disabled={state.busy}
+                onClick={run}
+                sx={{ mt: 1, ml: -1, textTransform: "none" }}
+            >
+                Sao lưu ngay lên Telegram
+            </Button>
+            {state.text && (
+                <Typography
+                    variant="caption"
+                    display="block"
+                    color={state.error ? "error" : "text.secondary"}
+                >
+                    {state.text}
+                </Typography>
+            )}
+        </>
+    );
+}
 
 export default function Sidebar({
     onNewFolder,
@@ -345,6 +411,7 @@ export default function Sidebar({
                     Đã dùng {formatSize(used)}. Lưu trên Telegram, không giới
                     hạn dung lượng.
                 </Typography>
+                <BackupNow />
             </Box>
         </Box>
     );
