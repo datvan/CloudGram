@@ -97,7 +97,7 @@ import {
     readDrop,
     uploadEntries,
 } from "../../utils/driveActions";
-import { fold } from "../../utils/format";
+import { nameMatcher } from "../../utils/format";
 import {
     askToWrite,
     canKeepHandles,
@@ -261,12 +261,10 @@ export default function DriveApp({ mode, onToggleMode }) {
                 );
                 break;
             case "search": {
-                const q = fold(view.query.trim());
-                list = q
-                    ? records.filter(
-                          (r) => fold(r.name).includes(q) && !isHidden(byId, r),
-                      )
-                    : [];
+                const matches = nameMatcher(view.query);
+                list = records.filter(
+                    (r) => matches(r.name) && !isHidden(byId, r),
+                );
                 break;
             }
             default:
