@@ -43,6 +43,13 @@ flow. A request already dispatched to Telegram cannot be recalled by a flag or
 logout; it remains associated with the original client. Reconnect or lease
 reacquisition without logout preserves the account session and normal retries.
 
+If saving the uploaded message ID fails, the original is kept and the transfer
+panel offers **Lưu lại và thử xoá bản gốc**. This action retries tree persistence
+before deletion, verifies the same message ID is still on a live record outside
+the trash, and retains the original if saving fails again. Account scope and
+local file identity/permission checks still apply. Retry does not upload a
+second Telegram copy. The handle is held in this tab; keep the tab open to retry.
+
 ## Validation status
 
 Regression cases live in `server/test/security.test.js` and
@@ -52,7 +59,7 @@ account switching before queued upload, dialogs, Dropbox resolution or media pre
 deferred log ownership. Browser tests use isolated substitutes for Telegram,
 IndexedDB and service-worker events; they do not prove real browser playback.
 
-Development validation: 32/32 tests passed with dummy fixtures, along with lint,
+Development validation: 40/40 tests passed with dummy fixtures, along with lint,
 production build, static JavaScript syntax and `git diff --check`. Independent
 Standards and Spec reviews found no required changes. The earlier security
 audit was source-only; these development checks do not retroactively confirm
