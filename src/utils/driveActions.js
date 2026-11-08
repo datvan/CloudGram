@@ -213,7 +213,8 @@ export async function uploadEntries(
             });
             counts.resumed += 1;
         } else if (p.elsewhere && link === "link") {
-            linkFile(p.elsewhere, p.parent, p.name);
+            // p.parent is MISSING for a folder made only just now
+            linkFile(p.elsewhere, parentOf(entry), p.name);
             counts.linked += 1;
             keep(p, KEPT.linked);
         } else if (!taken) {
@@ -223,9 +224,9 @@ export async function uploadEntries(
             queue(p, { replaces: taken.id });
             counts.replaced += 1;
         } else if (choice === "keep") {
-            const name = freeName(named, p.parent, p.name);
+            const name = freeName(named, parentOf(entry), p.name);
             // taken from now on, for the next file of this batch
-            named.set(nameKey(p.parent, name), [{ name }]);
+            named.set(nameKey(parentOf(entry), name), [{ name }]);
             queue(p, { name });
             counts.renamed += 1;
         } else {
