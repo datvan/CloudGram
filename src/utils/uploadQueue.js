@@ -480,7 +480,7 @@ async function settle(id, result, replaces, job) {
     // what can be tried again with a click: the browser needs the user to
     // allow deleting, or something had the file open
     if (kept && record && job?.handle && RETRYABLE(kept))
-        holdKept(id, job.handle, job.file, record.name);
+        holdKept(id, job.handle, job.file, record.name, message.id);
 
     jobs.delete(id);
     if (stored) dropEntry(id);
@@ -490,6 +490,7 @@ async function settle(id, result, replaces, job) {
 /** Originals still on disk that "Xoá lại" can try again, by record id. */
 const keptJobs = new Map();
 const RETRYABLE = (kept) =>
+    kept === KEPT.notStored ||
     kept === KEPT.permission ||
     kept === KEPT.locked ||
     kept.startsWith("Không xoá được");
@@ -497,8 +498,8 @@ const RETRYABLE = (kept) =>
 export const canRetryRemove = (id) =>
     keptJobs.has(id) &&
     (!UPLOAD_OWNER || keptJobs.get(id).scope === uploadScope());
-export const holdKept = (id, handle, file, name) =>
-    keptJobs.set(id, { handle, file, name, scope: uploadScope() });
+export const holdKept = (id, handle, file, name, messageId) =>
+    keptJobs.set(id, { handle, file, name, messageId, scope: uploadScope() });
 
 /**
  * Ask again for delete rights (one prompt per folder, started inside the
@@ -507,19 +508,43 @@ export const holdKept = (id, handle, file, name) =>
 export async function retryRemoveOriginals(ids) {
     const scope = uploadScope();
     const list = ids.filter(canRetryRemove);
+    if (!list.length) return;
     const roots = new Set(list.map((id) => keptJobs.get(id).handle.root));
     await Promise.all(
         [...roots].map((root) =>
             root.requestPermission({ mode: "readwrite" }).catch(() => {}),
         ),
     );
+    if (UPLOAD_OWNER && scope !== uploadScope()) return;
+    // A failed save keeps the original; retry the vault before retrying deletion.
+    const stored = await flush().then(
+        () => true,
+        () => false,
+    );
     for (const id of list) {
         if (UPLOAD_OWNER && scope !== uploadScope()) return;
-        const { handle, file, name } = keptJobs.get(id);
-        const kept = await removePicked(handle, file).catch(
-            (error) => `Không xoá được: ${error?.message ?? error}`,
-        );
-        if (!kept) keptJobs.delete(id);
+        const job = keptJobs.get(id);
+        if (!job) continue;
+        const { handle, file, name, messageId } = job;
+        const record = getRecord(id);
+        let kept;
+        if (!record || messageId == null || record.file_id !== messageId)
+            kept = KEPT.gone;
+        else if (
+            record.trashedAt ||
+            foldersAbove(record).some(
+                (folder) => getRecord(folder.id)?.trashedAt,
+            )
+        )
+            kept = KEPT.trashed;
+        else if (!stored) kept = KEPT.notStored;
+        else
+            kept = await removePicked(handle, file).catch(
+                (error) => `Không xoá được: ${error?.message ?? error}`,
+            );
+        if (UPLOAD_OWNER && scope !== uploadScope()) return;
+        if (!kept || !RETRYABLE(kept)) keptJobs.delete(id);
+        if (stored && record?.file_id === messageId) dropEntry(id);
         Store.dispatch(keptProgress(id, name, kept, false));
     }
 }
