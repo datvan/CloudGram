@@ -248,9 +248,27 @@ export default function DriveApp({ mode, onToggleMode }) {
         let list;
         switch (view.kind) {
             case "folder":
-                list = records.filter(
-                    (r) => (r.parent ?? null) === folderId && !r.trashedAt,
-                );
+                // with a type filter on, everything under this folder, not
+                // only what sits directly in it
+                list = kindFilter
+                    ? records.filter((r) => {
+                          if (isHidden(byId, r)) return false;
+                          if (folderId === null) return true;
+                          const seen = new Set();
+                          for (
+                              let p = r.parent;
+                              p && !seen.has(p);
+                              p = byId.get(p)?.parent
+                          ) {
+                              if (p === folderId) return true;
+                              seen.add(p);
+                          }
+                          return false;
+                      })
+                    : records.filter(
+                          (r) =>
+                              (r.parent ?? null) === folderId && !r.trashedAt,
+                      );
                 break;
             case "recent":
                 list = records
@@ -942,7 +960,7 @@ export default function DriveApp({ mode, onToggleMode }) {
 
     const crumbs = view.kind === "folder" ? pathTo(byId, folderId) : [];
     const locationOf =
-        view.kind === "folder"
+        view.kind === "folder" && !kindFilter
             ? undefined
             : (item) =>
                   item.parent
