@@ -217,7 +217,7 @@ export default function TransferPanel() {
                             sx={{ display: "block", mt: 0.5, ml: -1 }}
                             onClick={() => retryRemoveOriginals(retryable)}
                         >
-                            Cho phép và xoá lại ({retryable.length} tệp)
+                            Lưu lại và thử xoá bản gốc ({retryable.length} tệp)
                         </Button>
                     )}
                 </Typography>
