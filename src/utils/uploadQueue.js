@@ -14,7 +14,9 @@ import {
     patchEntry,
     saveHandle,
     settleWrites,
+    uploadScope,
 } from "../services/uploadLog";
+import { UPLOAD_OWNER } from "../config/security";
 import { Store } from "../redux/store";
 import {
     batchProgress,
@@ -62,6 +64,15 @@ const cancelled = new Set();
 const failed = new Map();
 /** Every job not finished yet, by record id, so none is queued twice. */
 const jobs = new Map();
+const owns = (job) =>
+    !UPLOAD_OWNER || (job.scope !== null && job.scope === uploadScope());
+function forget(job) {
+    if (jobs.get(job.id) !== job) return;
+    jobs.delete(job.id);
+    failed.delete(job.id);
+    cancelled.delete(job.id);
+    Store.dispatch(completedProgress(job.id));
+}
 let running = 0;
 /** Files queued since the page last heard, announced together. */
 let announce = [];
@@ -128,6 +139,7 @@ export function enqueueUpload({
     replaces,
     removeOriginal = false,
 }) {
+    if (UPLOAD_OWNER && !uploadScope()) return undefined;
     if (recordId && jobs.has(recordId)) {
         // only a job waiting for Retry takes new bytes; a live one is left be
         if (!failed.has(recordId)) return getRecord(recordId);
@@ -152,6 +164,7 @@ export function enqueueUpload({
         });
     announce.push(queuedProgress(record.id, record.name));
     const job = {
+        scope: uploadScope(),
         id: record.id,
         file,
         asMedia,
@@ -215,6 +228,7 @@ export function cancelUploads(ids) {
 export function retryUpload(id) {
     const job = failed.get(id);
     if (!job) return;
+    if (!owns(job)) return forget(job);
     failed.delete(id);
     job.attempts = 0;
     // no name here: the reducer keeps the one the entry was created with
@@ -227,6 +241,12 @@ let offlineCheck = null;
 
 // back to work as soon as the session is live here again
 onClientChange((client) => {
+    if (UPLOAD_OWNER) {
+        for (const job of jobs.values()) if (!owns(job)) forget(job);
+        for (const [id, kept] of keptJobs) {
+            if (kept.scope !== uploadScope()) keptJobs.delete(id);
+        }
+    }
     if (client) pump();
 });
 
@@ -244,6 +264,10 @@ function pump() {
     }
     while (running < MAX_CONCURRENT && waiting.length) {
         const job = waiting.shift();
+        if (!owns(job)) {
+            forget(job);
+            continue;
+        }
         if (cancelled.delete(job.id)) {
             jobs.delete(job.id);
             Store.dispatch(completedProgress(job.id));
@@ -287,9 +311,13 @@ async function run(job, release) {
     job.attempts ??= 0;
     // pump() only starts a job while Telegram is connected
     const client = getClient();
+    const assertCurrent = () => {
+        if (!owns(job)) throw new Error("Upload account changed");
+    };
 
     let saved = job.resume.done?.size ?? 0;
     const saver = setInterval(() => {
+        if (!owns(job)) return;
         const done = job.resume.done?.size ?? 0;
         if (done === saved) return;
         saved = done;
@@ -300,11 +328,13 @@ async function run(job, release) {
     try {
         // the file is read here, inside the worker, not when it was queued
         result = await uploadFile(id, file, {
+            ...(UPLOAD_OWNER ? { client, assertCurrent } : {}),
             asMedia,
             resume: job.resume,
             // on disk before the message goes, so a reopened tab knows to
             // look for it in Saved Messages before sending another copy
             onSend: (kind) => {
+                assertCurrent();
                 // every part is out; what is left does not use the pool
                 release();
                 patchEntry(id, {
@@ -316,6 +346,7 @@ async function run(job, release) {
             },
         });
     } catch (error) {
+        if (!owns(job)) return forget(job);
         console.log(error);
         if (partsLost(error)) job.resume = {};
         // Telegram refused it, so nothing went out
@@ -356,6 +387,7 @@ async function run(job, release) {
             ),
         );
         setTimeout(() => {
+            if (!owns(job)) return forget(job);
             waiting.push(job);
             pump();
         }, seconds * 1000);
@@ -364,6 +396,7 @@ async function run(job, release) {
         clearInterval(saver);
     }
 
+    if (!owns(job)) return forget(job);
     // the message exists now; if the tab closes before the vault has its id,
     // the reopened tab attaches this message instead of sending again
     patchEntry(id, { messageId: result.message.id });
@@ -373,6 +406,7 @@ async function run(job, release) {
     // failure here is also not offered as a retry, for the same reason.
     try {
         await settle(id, result, job.replaces, job);
+        if (!owns(job)) return forget(job);
         // while the file is still at hand, for the player's seek bar
         if (!job.removeOriginal) fromUpload(id, file);
     } catch (error) {
@@ -394,7 +428,13 @@ async function run(job, release) {
  * one place that still knows which message belongs to the record.
  */
 async function settle(id, result, replaces, job) {
+    const scope = uploadScope();
+    const current = () =>
+        !UPLOAD_OWNER ||
+        (scope !== null && scope === uploadScope() && (!job || owns(job)));
+    if (!current()) return;
     const record = cancelled.delete(id) ? undefined : await fileOps.getByID(id);
+    if (!current()) return;
 
     const { message, changes } = result;
     let stored = true;
@@ -407,10 +447,12 @@ async function settle(id, result, replaces, job) {
             extra.name = record.name.replace(/\.[^.]*$/, "") + ".jpg";
         }
         await fileOps.setFileId(id, message.id, extra);
+        if (!current()) return;
         stored = await flush().then(
             () => true,
             () => false,
         );
+        if (!current()) return;
         const old = replaces && getRecord(replaces);
         if (stored && old && !old.trashedAt) trash([replaces]);
         // a file put in the trash meanwhile may be emptied out of it next,
@@ -434,6 +476,7 @@ async function settle(id, result, replaces, job) {
         if (job?.removeOriginal) kept = KEPT.gone;
     }
 
+    if (!current()) return;
     // what can be tried again with a click: the browser needs the user to
     // allow deleting, or something had the file open
     if (kept && record && job?.handle && RETRYABLE(kept))
@@ -451,16 +494,19 @@ const RETRYABLE = (kept) =>
     kept === KEPT.locked ||
     kept.startsWith("Không xoá được");
 
-export const canRetryRemove = (id) => keptJobs.has(id);
+export const canRetryRemove = (id) =>
+    keptJobs.has(id) &&
+    (!UPLOAD_OWNER || keptJobs.get(id).scope === uploadScope());
 export const holdKept = (id, handle, file, name) =>
-    keptJobs.set(id, { handle, file, name });
+    keptJobs.set(id, { handle, file, name, scope: uploadScope() });
 
 /**
  * Ask again for delete rights (one prompt per folder, started inside the
  * click that calls this) and delete the originals of `ids` that still stand.
  */
 export async function retryRemoveOriginals(ids) {
-    const list = ids.filter((id) => keptJobs.has(id));
+    const scope = uploadScope();
+    const list = ids.filter(canRetryRemove);
     const roots = new Set(list.map((id) => keptJobs.get(id).handle.root));
     await Promise.all(
         [...roots].map((root) =>
@@ -468,6 +514,7 @@ export async function retryRemoveOriginals(ids) {
         ),
     );
     for (const id of list) {
+        if (UPLOAD_OWNER && scope !== uploadScope()) return;
         const { handle, file, name } = keptJobs.get(id);
         const kept = await removePicked(handle, file).catch(
             (error) => `Không xoá được: ${error?.message ?? error}`,

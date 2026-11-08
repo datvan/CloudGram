@@ -12,6 +12,8 @@
  * Nothing else goes through here: every other request is left to the network.
  */
 const PREFIX = "/stream/";
+const STREAM_GUARD =
+    new URL(self.location.href).searchParams.get("streamGuard") !== "0";
 // a range the page has not answered by then is reported as failed, so the
 // player can say so instead of spinning
 const ANSWER_TIMEOUT = 60000;
@@ -31,6 +33,15 @@ self.addEventListener("fetch", (event) => {
     const url = new URL(event.request.url);
     if (url.origin !== self.location.origin) return;
     if (!url.pathname.startsWith(PREFIX)) return;
+    if (
+        STREAM_GUARD &&
+        (event.request.method !== "GET" ||
+            !["audio", "video"].includes(event.request.destination) ||
+            !event.clientId)
+    ) {
+        event.respondWith(new Response("Forbidden", { status: 403 }));
+        return;
+    }
     event.respondWith(serve(event, url));
 });
 
@@ -66,6 +77,8 @@ async function serve(event, url) {
     const own = event.clientId && (await self.clients.get(event.clientId));
     const clients = own
         ? [own]
+        : STREAM_GUARD
+        ? []
         : await self.clients.matchAll({ type: "window" });
     let reply = { error: "no page" };
     // without the asking tab (rare), any tab that holds Telegram may answer
@@ -94,7 +107,17 @@ async function serve(event, url) {
     return new Response(reply.bytes, {
         status: 206,
         headers: {
-            "Content-Type": reply.type,
+            "Content-Type": STREAM_GUARD
+                ? /^(audio|video)\/[a-z0-9.+-]+$/i.test(reply.type)
+                    ? reply.type
+                    : "application/octet-stream"
+                : reply.type,
+            ...(STREAM_GUARD
+                ? {
+                      "Content-Security-Policy": "default-src 'none'; sandbox",
+                      "X-Content-Type-Options": "nosniff",
+                  }
+                : {}),
             "Content-Length": String(reply.bytes.byteLength),
             "Content-Range": `bytes ${reply.start}-${last}/${reply.size}`,
             "Accept-Ranges": "bytes",

@@ -231,6 +231,8 @@ export function logoutOthers() {
  * which is what unlinkTelegram() is for.
  */
 export async function logout() {
+    // Invalidate in-memory uploads before any asynchronous logout work.
+    const logClosed = closeUploadLog().catch(console.error);
     try {
         // give a pending tree write a moment so it is not lost
         await Promise.race([flush(), new Promise((r) => setTimeout(r, 4000))]);
@@ -247,7 +249,7 @@ export async function logout() {
     }
     await clearKey();
     closeDrive();
-    closeUploadLog();
+    await logClosed;
     dek = null;
     account = null;
     set({ phase: "signedOut", username: null, me: null, notice: null });

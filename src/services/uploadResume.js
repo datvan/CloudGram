@@ -31,7 +31,9 @@ import {
     exclusively,
     liveTabs,
     readEntries,
+    uploadScope,
 } from "./uploadLog";
+import { UPLOAD_OWNER } from "../config/security";
 import { isHidden, pathTo } from "../utils/tree";
 import { fileOpener } from "../utils/pickers";
 import {
@@ -48,8 +50,11 @@ const lastName = (path) => path.split("/").filter(Boolean).pop() ?? "";
  * when there is one) and `imports` (Dropbox links still being read).
  */
 export async function scan() {
+    const scope = uploadScope();
     const entries = await readEntries();
     const live = await liveTabs();
+    if (UPLOAD_OWNER && (scope === null || scope !== uploadScope()))
+        return { files: [], imports: [], scope };
     const logged = new Set(entries.map((e) => e.id));
     const files = [];
     const imports = [];
@@ -96,7 +101,7 @@ export async function scan() {
         files.push({ id: record.id, name: record.name, size: record.size });
     }
 
-    return { files, imports };
+    return { files: files.map((item) => ({ ...item, scope })), imports, scope };
 }
 
 /** Roots to ask read access for, one per pick, before anything is awaited. */
@@ -230,6 +235,10 @@ const QUEUE_EVERY = 200;
  * which another click on "Tiếp tục" asks for again.
  */
 export async function resume(found, granted, onProgress) {
+    const scope = uploadScope();
+    const current = () =>
+        !UPLOAD_OWNER ||
+        (scope !== null && scope === uploadScope() && found.scope === scope);
     const result = {
         adopted: 0,
         queued: 0,
@@ -242,6 +251,7 @@ export async function resume(found, granted, onProgress) {
     const mine = await exclusively(async () => {
         const live = await liveTabs();
         const now = new Map((await readEntries()).map((e) => [e.id, e]));
+        if (!current()) return { files: [], imports: [] };
         // still left behind: its entry is there and no other open tab owns
         // it (this one does when "Tiếp tục" is clicked a second time)
         const still = (logged) => {
@@ -262,6 +272,7 @@ export async function resume(found, granted, onProgress) {
     // asked of every root again; a granted one now just says yes
     onProgress?.({ done: 0, total: found.files.length, asking: true });
     await granted;
+    if (!current()) return result;
     const allowed = new Map();
     const canRead = (handle) => {
         if (!allowed.has(handle.rootId))
@@ -308,6 +319,7 @@ export async function resume(found, granted, onProgress) {
         }
     }
 
+    if (!current()) return result;
     // what can be read from a saved handle; opened together further down
     const toOpen = [];
     // adopted together, so their vault writes fold into one (drive.js, flush)
@@ -375,6 +387,10 @@ export async function resume(found, granted, onProgress) {
     const open = fileOpener();
     let ready = [];
     const queueReady = () => {
+        if (!current()) {
+            ready = [];
+            return;
+        }
         for (const [item, file, unchanged] of ready)
             queue(item, file, item.entry.handle, item.entry.path, unchanged);
         result.queued += ready.length;
@@ -389,7 +405,9 @@ export async function resume(found, granted, onProgress) {
             try {
                 if (!(await canRead(handle))) result.denied.push(item);
                 else {
+                    if (!current()) return;
                     const file = await open(handle);
+                    if (!current()) return;
                     if (file.size === getRecord(item.id)?.size) {
                         // touched since (a photo app, a sync client) but the
                         // same size: sent again whole, without asking
@@ -409,6 +427,7 @@ export async function resume(found, granted, onProgress) {
     await Promise.all(Array.from({ length: OPEN_AT_ONCE }, lane));
     queueReady();
     await Promise.all(adopting);
+    if (!current()) return result;
     tell(true);
 
     for (const { link, parentID, asMedia } of links.values()) {
@@ -428,6 +447,7 @@ function sameBytes(item, file) {
 }
 
 function queue(item, file, handle, path, unchanged) {
+    if (UPLOAD_OWNER && item.scope !== uploadScope()) return;
     const record = getRecord(item.id);
     enqueueUpload({
         file,
@@ -454,6 +474,7 @@ export function matchPicked(waiting, picked) {
     const keyOf = (name, size) => `${size}
 ${name}`;
     for (const item of waiting) {
+        if (UPLOAD_OWNER && item.scope !== uploadScope()) continue;
         if (!getRecord(item.id)) continue;
         const key = keyOf(item.name, item.size);
         if (!pool.has(key)) pool.set(key, []);
@@ -492,12 +513,15 @@ ${name}`;
  * message a closed tab sent for them that never reached the vault.
  */
 export async function discard(found) {
+    const scope = uploadScope();
+    if (UPLOAD_OWNER && (scope === null || found.scope !== scope)) return;
     const messages = found.files
         .map((item) => item.entry?.messageId)
         .filter((id) => id != null);
     if (messages.length) {
         await getClient().deleteMessages("me", messages, { revoke: true });
     }
+    if (UPLOAD_OWNER && scope !== uploadScope()) return;
     const ids = found.files
         .map((item) => item.id)
         .filter((id) => getRecord(id));
