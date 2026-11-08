@@ -337,3 +337,5 @@ separately, so it does not have that problem.
 
 Security fixes have five default-on feature flags. See
 [configuration and rollback](security-flags.md) before disabling a fix.
+
+For CSP or Cloudflare changes, see [nonce policy and nginx deployment](csp.md).
