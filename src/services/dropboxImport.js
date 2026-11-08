@@ -16,7 +16,9 @@ import { v4 as uuid4 } from "uuid";
 
 import { api, describeError } from "./api";
 import { createFolder, getSnapshot } from "./drive";
-import { dropEntry, entryOf, logEntry } from "./uploadLog";
+import { dropEntry, entryOf, logEntry, uploadScope } from "./uploadLog";
+import { UPLOAD_OWNER } from "../config/security";
+import { onClientChange } from "./telegram";
 import { ZipError, ZipReader } from "./zipStream";
 import { findFolder } from "../utils/tree";
 import { enqueueUpload, isQueued } from "../utils/uploadQueue";
@@ -67,6 +69,15 @@ let jobs = [];
 let nextId = 1;
 let running = false;
 const listeners = new Set();
+const owns = (job) =>
+    !UPLOAD_OWNER || (job.scope !== null && job.scope === uploadScope());
+
+onClientChange(() => {
+    if (!UPLOAD_OWNER) return;
+    for (const job of jobs) if (!owns(job)) job.abort.abort();
+    jobs = jobs.filter(owns);
+    publish();
+});
 
 function publish() {
     jobs = [...jobs];
@@ -93,13 +104,15 @@ export const importsBusy = () =>
 
 export function clearFinished() {
     // a failed link cleared away is not offered for resuming either
-    for (const job of jobs) if (job.status === "error") dropEntry(job.logId);
+    for (const job of jobs)
+        if (job.status === "error" && owns(job)) dropEntry(job.logId);
     jobs = jobs.filter((j) => j.status === "waiting" || j.status === "working");
     publish();
 }
 
 /** Queue links for import under `parentID` (null is My Drive). */
 export function startImport(links, parentID, { asMedia = false } = {}) {
+    if (UPLOAD_OWNER && !uploadScope()) return;
     for (const link of links) {
         // logged until the link has been read to the end, so a tab closed
         // while the ZIP is still coming down can run the link again
@@ -112,6 +125,7 @@ export function startImport(links, parentID, { asMedia = false } = {}) {
             queuedAt: Date.now(),
         });
         jobs.push({
+            scope: uploadScope(),
             id: nextId++,
             logId,
             link: link.trim(),
@@ -138,15 +152,19 @@ async function pump() {
         for (;;) {
             const job = jobs.find((j) => j.status === "waiting");
             if (!job) break;
+            if (!owns(job)) {
+                patch(job, { status: "cancelled" });
+                continue;
+            }
             patch(job, { status: "working" });
             try {
                 await run(job);
                 patch(job, { status: "done" });
-                dropEntry(job.logId);
+                if (owns(job)) dropEntry(job.logId);
             } catch (error) {
-                if (job.abort.signal.aborted) {
+                if (!owns(job) || job.abort.signal.aborted) {
                     patch(job, { status: "cancelled" });
-                    dropEntry(job.logId);
+                    if (owns(job)) dropEntry(job.logId);
                 } else patch(job, { status: "error", error: explain(error) });
             }
         }
@@ -253,10 +271,16 @@ function collector() {
 }
 
 async function run(job) {
+    const assertCurrent = () => {
+        if (!owns(job)) throw new Error("Import account changed");
+    };
+    assertCurrent();
     const { url } = await api.resolveDropbox(job.link);
+    assertCurrent();
     const { signal } = job.abort;
     signal.throwIfAborted();
     const res = await fetch(url, { signal });
+    assertCurrent();
     if (!res.ok) throw new Error(`Dropbox trả lỗi ${res.status}.`);
     const total = Number(res.headers.get("content-length")) || 0;
     const isFolder = FOLDER_LINK.test(job.link);
@@ -332,6 +356,7 @@ async function run(job) {
     try {
         for (;;) {
             const { done, value } = await reader.read();
+            assertCurrent();
             if (done) break;
             onBytes(value);
             job.received += value.length;

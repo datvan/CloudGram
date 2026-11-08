@@ -20,6 +20,8 @@ const api = new CloudGramApi({
     db,
     pepper: process.env.CLOUDGRAM_PEPPER,
     shareQuota: Number(process.env.CLOUDGRAM_SHARE_QUOTA_GB ?? 20) * 1024 ** 3,
+    credentialGuard: process.env.CLOUDGRAM_SECURITY_CREDENTIAL_GUARD !== "0",
+    shareQuotaGuard: process.env.CLOUDGRAM_SECURITY_SHARE_QUOTA !== "0",
 });
 
 const server = createApiServer(api, {

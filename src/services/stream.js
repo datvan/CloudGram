@@ -12,6 +12,7 @@ import { getClient, isOnline, onClientChange } from "./telegram";
 import { locate } from "../utils/downloadFile";
 import { filePart } from "../utils/transfer";
 import { typeOf } from "../utils/thumbnails";
+import { STREAM_GUARD } from "../config/security";
 
 const MB = 1024 * 1024;
 const PART = MB;
@@ -298,7 +299,7 @@ export function startStreaming() {
                 port.postMessage(reply, reply.bytes ? [reply.bytes] : []),
             );
     });
-    sw.register("/sw.js").then(
+    sw.register(`/sw.js?streamGuard=${STREAM_GUARD ? "1" : "0"}`).then(
         async (registration) => {
             await sw.ready;
             if (sw.controller) return;

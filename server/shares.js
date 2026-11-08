@@ -74,11 +74,12 @@ export class Window {
 }
 
 export class Shares {
-    constructor({ db, authenticate, now, quota }) {
+    constructor({ db, authenticate, now, quota, quotaGuard = true }) {
         this.db = db;
         this.authenticate = authenticate;
         this.now = now;
         this.quota = quota;
+        this.quotaGuard = quotaGuard;
         this.metaByIp = new Window(300, 15 * 60 * 1000);
         this.chunkByIp = new Window(3000, 15 * 60 * 1000);
     }
@@ -159,6 +160,10 @@ export class Shares {
             throw new HttpError(400, "bad_meta");
         }
 
+        // Keep the final quota check and reservation in one synchronous turn.
+        const disk = this.quotaGuard
+            ? await statfs(this.db.dir).catch(() => null)
+            : null;
         const mine = Object.values(this.#all).filter(
             (s) => s.owner === user.username,
         );
@@ -170,10 +175,13 @@ export class Shares {
                 quota: this.quota,
                 used,
             });
-        const disk = await statfs(this.db.dir).catch(() => null);
+        const available = this.quotaGuard
+            ? disk
+            : await statfs(this.db.dir).catch(() => null);
         if (
-            disk &&
-            disk.bavail * disk.bsize < bytes + SHARE_LIMITS.diskReserve
+            available &&
+            available.bavail * available.bsize <
+                bytes + SHARE_LIMITS.diskReserve
         ) {
             throw new HttpError(507, "disk_full");
         }
