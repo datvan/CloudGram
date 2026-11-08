@@ -23,6 +23,159 @@ async function load(path, globals, exports) {
     return vm.runInContext(`${source}\n;({${exports.join(",")}})`, context);
 }
 
+for (const state of [
+    "live",
+    "trashed",
+    "parent-trashed",
+    "deleted",
+    "replaced",
+    "switched",
+    "switch-during-save",
+]) {
+    test(`original retry rechecks persisted tree: ${state}`, async () => {
+        let unavailable = true;
+        let savedMessage = null;
+        let nextRecord = 0;
+        let afterSave = () => {};
+        const drive = await load(
+            "../../src/services/drive.js",
+            {
+                uuid4: () => (nextRecord++ === 0 ? "upload" : "folder"),
+                api: {
+                    getTree: async () => ({ version: 0 }),
+                    putTree: async (blob) => {
+                        if (unavailable) throw new Error("offline");
+                        savedMessage = blob.records.find(
+                            (record) => record.id === "upload",
+                        )?.file_id;
+                        afterSave();
+                        return { version: 1 };
+                    },
+                },
+                encryptJson: async (_, value) => value,
+                setTimeout: () => 0,
+            },
+            [
+                "openDrive",
+                "getRecord",
+                "createFile",
+                "createFolder",
+                "update",
+                "trash",
+                "removeRecords",
+                "fileOps",
+                "flush",
+            ],
+        );
+        await drive.openDrive({});
+        let scope = {};
+        let removed = 0;
+        let dropped = false;
+        let completed;
+        const finished = new Promise((resolve) => {
+            completed = resolve;
+        });
+        const actions = [];
+        const queue = await load(
+            "../../src/utils/uploadQueue.js",
+            {
+                ...drive,
+                UPLOAD_OWNER: true,
+                uploadScope: () => scope,
+                onClientChange() {},
+                isOnline: () => true,
+                getClient: () => ({}),
+                helpers: {},
+                Store: {
+                    dispatch(action) {
+                        actions.push(action);
+                        if (action?.type === "COMPLETED") completed(action);
+                    },
+                },
+                batchProgress() {},
+                queuedProgress() {},
+                completedProgress: (id, kept) => ({
+                    type: "COMPLETED",
+                    id,
+                    kept,
+                }),
+                keptProgress: (id, name, kept) => ({
+                    type: "KEPT",
+                    id,
+                    name,
+                    kept,
+                }),
+                logEntry() {},
+                patchEntry() {},
+                saveHandle() {},
+                dropEntry() {
+                    dropped = true;
+                },
+                settleWrites: async () => {},
+                uploadFile: async () => ({ message: { id: 42 }, changes: {} }),
+                fromUpload() {},
+                KEPT: {
+                    notStored: "not stored",
+                    permission: "permission",
+                    locked: "locked",
+                    trashed: "trashed",
+                    gone: "gone",
+                },
+                removePicked: async () => {
+                    assert.equal(
+                        savedMessage,
+                        42,
+                        "server must acknowledge message before deletion",
+                    );
+                    removed++;
+                    return null;
+                },
+            },
+            ["enqueueUpload", "canRetryRemove", "retryRemoveOriginals"],
+        );
+        const record = queue.enqueueUpload({
+            file: { name: "original", size: 1 },
+            removeOriginal: true,
+            handle: { root: { requestPermission: async () => "granted" } },
+        });
+        assert.equal((await finished).kept, "not stored");
+        assert.equal(removed, 0);
+        assert.equal(queue.canRetryRemove(record.id), true);
+        await queue.retryRemoveOriginals([record.id]);
+        assert.equal(removed, 0, "a failed save must keep the original");
+        unavailable = false;
+        if (state === "trashed") drive.trash([record.id]);
+        if (state === "parent-trashed") {
+            const folder = drive.createFolder("folder");
+            drive.update(record.id, { parent: folder.id });
+            drive.trash([folder.id]);
+        }
+        if (state === "deleted") await drive.removeRecords([record.id]);
+        if (state === "replaced") drive.update(record.id, { file_id: 99 });
+        if (state === "switched") scope = {};
+        if (state === "switch-during-save")
+            afterSave = () => {
+                scope = {};
+            };
+        await queue.retryRemoveOriginals([record.id]);
+        if (state !== "live") {
+            assert.equal(removed, 0, "unsafe originals must be retained");
+            assert.equal(queue.canRetryRemove(record.id), false);
+            if (state !== "switched" && state !== "switch-during-save") {
+                assert.equal(
+                    actions.at(-1).kept,
+                    state.includes("trashed") ? "trashed" : "gone",
+                );
+            }
+            return;
+        }
+        assert.equal(removed, 1);
+        assert.equal(dropped, true);
+        assert.equal(actions.at(-1).kept, null);
+        assert.equal(queue.canRetryRemove(record.id), false);
+    });
+}
+
 for (const enabled of [true, false]) {
     test(`deferred log writes stay with original owner: flag=${enabled}`, async () => {
         const rows = new Map();
