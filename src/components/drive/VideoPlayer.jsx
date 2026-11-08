@@ -560,7 +560,28 @@ const VideoPlayer = forwardRef(function VideoPlayer(
         () => (local ? src : streamUrl(record, { quiet: true })),
         started,
     );
-    const grid = !started && !error && Boolean(board);
+    // paused for a moment part-way through: the same grid offers other places
+    // to go on from. Not at once, so a quick pause does not flash it, and it
+    // goes when the video is moved (seek, arrow keys) or "Ẩn" is pressed.
+    const [rest, setRest] = useState(false);
+    const timeNow = useRef(0);
+    timeNow.current = time;
+    const restAt = useRef(0);
+    useEffect(() => {
+        if (!started || !paused || ended) {
+            setRest(false);
+            return undefined;
+        }
+        const timer = setTimeout(() => {
+            restAt.current = timeNow.current;
+            setRest(true);
+        }, 800);
+        return () => clearTimeout(timer);
+    }, [started, paused, ended]);
+    useEffect(() => {
+        if (rest && Math.abs(time - restAt.current) > 0.5) setRest(false);
+    }, [time, rest]);
+    const grid = !error && Boolean(board) && (!started || rest);
 
     // say so while one is drawn and once it is ready, or nothing seems to
     // happen; after the "Tiếp tục từ" notice, which must not be covered
@@ -810,6 +831,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                 <Stack
                     alignItems="center"
                     spacing={1.5}
+                    // the dark around the frames plays on, as the video would
+                    onClick={(e) => e.target === e.currentTarget && play()}
                     sx={{
                         position: "absolute",
                         inset: 0,
@@ -879,6 +902,24 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                                 ? "Đang tải… bấm một khung để xem từ đoạn đó"
                                 : "Bấm một khung để xem từ đoạn đó, hoặc bấm Space để phát"}
                         </Typography>
+                        {started && (
+                            <Box
+                                component="button"
+                                onClick={() => setRest(false)}
+                                sx={{
+                                    ...white,
+                                    fontSize: 14,
+                                    px: 1,
+                                    border: 1,
+                                    borderColor: "rgba(255,255,255,.5)",
+                                    borderRadius: 1,
+                                    bgcolor: "transparent",
+                                    cursor: "pointer",
+                                }}
+                            >
+                                Ẩn
+                            </Box>
+                        )}
                     </Stack>
                 </Stack>
             )}
