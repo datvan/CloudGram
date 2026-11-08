@@ -171,12 +171,15 @@ export class CloudGramApi {
         now = () => Date.now(),
         shareQuota = 20 * 1024 * 1024 * 1024,
         dropboxFetch = globalThis.fetch,
+        credentialGuard = true,
+        shareQuotaGuard = true,
     }) {
         if (!pepper || pepper.length < 32)
             throw new Error("CLOUDGRAM_PEPPER must be set (32+ chars)");
         this.db = db;
         this.pepper = pepper;
         this.now = now;
+        this.credentialGuard = credentialGuard;
         this.leases = new Map();
         this.loginByIp = new RateLimiter(10, 15 * 60 * 1000);
         this.loginByUser = new RateLimiter(20, 15 * 60 * 1000);
@@ -186,6 +189,7 @@ export class CloudGramApi {
             db,
             now,
             quota: shareQuota,
+            quotaGuard: shareQuotaGuard,
             authenticate: (req, res) => this.authenticate(req, res),
         });
         this.dropbox = new Dropbox({
@@ -345,7 +349,14 @@ export class CloudGramApi {
             hash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         };
         const ok = await checkVerifier(verifier, loginKey);
-        if (!ok || !user?.verifier) throw new HttpError(401, "bad_credentials");
+        if (
+            !ok ||
+            !user?.verifier ||
+            (this.credentialGuard &&
+                (this.db.data.users[name] !== user ||
+                    user.verifier !== verifier))
+        )
+            throw new HttpError(401, "bad_credentials");
         this.loginByUser.clear(name);
         await this.#startSession(
             res,

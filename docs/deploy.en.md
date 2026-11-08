@@ -334,3 +334,6 @@ A difference worth remembering between the two: on Pages, the
 `public/_redirects` rule (`/* /index.html 200`) catches **every** path, so a
 missing asset also returns 200 with HTML. The nginx setup handles `/assets/`
 separately, so it does not have that problem.
+
+Security fixes have five default-on feature flags. See
+[configuration and rollback](security-flags.md) before disabling a fix.

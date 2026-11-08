@@ -21,6 +21,7 @@
 import { v4 as uuid4 } from "uuid";
 
 import { decryptJson, encryptJson } from "./crypto";
+import { LOG_OWNER } from "../config/security";
 
 const DB = "CloudGramUploads";
 const ENTRIES = "entries";
@@ -38,6 +39,8 @@ navigator.locks
 
 let username = null;
 let key = null;
+let scope = null;
+export const uploadScope = () => scope;
 /** What this tab has written, so a change does not have to read first. */
 const mine = new Map();
 /** Writes waiting to go out: an entry, or null for a delete. */
@@ -84,14 +87,19 @@ const request = (req) =>
 
 /** Called once the vault key is open; entries are per account. */
 export function openUploadLog(name, dek) {
+    if (LOG_OWNER && username) closeUploadLog().catch(console.error);
     username = name;
     key = dek;
+    scope = {};
 }
 
 export function closeUploadLog() {
+    const settled = LOG_OWNER ? settleWrites() : Promise.resolve();
     username = null;
     key = null;
+    scope = null;
     mine.clear();
+    return settled;
 }
 
 // ----- writing ----------------------------------------------------------------
@@ -99,17 +107,42 @@ export function closeUploadLog() {
 function schedule() {
     clearTimeout(timer);
     timer = setTimeout(() => {
-        writing = writing.then(writeOut, writeOut);
+        queueWrite();
+        writing.catch(console.error);
     }, WRITE_DELAY);
 }
 
-async function writeOut() {
+function queueWrite() {
+    if (!LOG_OWNER) {
+        const write = () => writeOut();
+        writing = writing.then(write, write);
+        return;
+    }
     if (!key || (!pending.size && !handleWrites.size)) return;
-    const owner = username;
-    const batch = [...pending];
-    const handles = [...handleWrites];
+    const context = {
+        owner: username,
+        encryptionKey: key,
+        batch: [...pending],
+        handles: [...handleWrites],
+    };
     pending.clear();
     handleWrites.clear();
+    const write = () => writeOut(context);
+    writing = writing.then(write, write);
+}
+
+async function writeOut(context) {
+    if (!context && (!key || (!pending.size && !handleWrites.size))) return;
+    const { owner, encryptionKey, batch, handles } = context ?? {
+        owner: username,
+        encryptionKey: key,
+        batch: [...pending],
+        handles: [...handleWrites],
+    };
+    if (!context) {
+        pending.clear();
+        handleWrites.clear();
+    }
     // encrypted before the transaction opens: an IndexedDB transaction
     // commits on its own as soon as it is left waiting on anything else
     const sealed = await Promise.all(
@@ -117,7 +150,7 @@ async function writeOut() {
             id,
             entry && {
                 username: owner,
-                blob: await encryptJson(key, entry, LABEL),
+                blob: await encryptJson(encryptionKey, entry, LABEL),
             },
         ]),
     );
@@ -159,6 +192,7 @@ export function patchEntry(id, changes) {
 export const entryOf = (id) => mine.get(id);
 
 export function dropEntry(id) {
+    if (LOG_OWNER && !username) return;
     mine.delete(id);
     pending.set(id, null);
     schedule();
@@ -177,11 +211,14 @@ const foldersKey = () => `originals:${username}`;
 /** The folders picked for deleting originals (pickers.js askToWrite). */
 export async function loadFolders() {
     if (!username) return [];
+    const readingScope = scope;
+    const id = foldersKey();
     try {
         const row = await transact("readonly", (_, handles) =>
-            request(handles.get(foldersKey())),
+            request(handles.get(LOG_OWNER ? id : foldersKey())),
         );
-        return (await row)?.folders ?? [];
+        const folders = (await row)?.folders ?? [];
+        return LOG_OWNER && readingScope !== scope ? [] : folders;
     } catch {
         return [];
     }
@@ -192,7 +229,7 @@ export async function saveFolders(folders) {
     const owner = username;
     try {
         await transact("readwrite", (_, handles) =>
-            handles.put({ username: owner, folders }, foldersKey()),
+            handles.put({ username: owner, folders }, `originals:${owner}`),
         );
     } catch (error) {
         console.log(error);
@@ -202,7 +239,7 @@ export async function saveFolders(folders) {
 /** Let queued writes reach the disk, e.g. before reading the log back. */
 export async function settleWrites() {
     clearTimeout(timer);
-    writing = writing.then(writeOut, writeOut);
+    queueWrite();
     await writing;
 }
 
@@ -211,6 +248,9 @@ export async function settleWrites() {
 /** Every entry of this account, with its file handle when there is one. */
 export async function readEntries() {
     if (!key) return [];
+    const readingScope = scope;
+    const owner = username;
+    const decryptionKey = key;
     await settleWrites();
     let rows;
     try {
@@ -232,22 +272,26 @@ export async function readEntries() {
     }
     const handleOf = new Map();
     rows.handleKeys.forEach((id, i) => {
-        if (rows.handles[i].username === username)
+        if (rows.handles[i].username === (LOG_OWNER ? owner : username))
             handleOf.set(id, rows.handles[i]);
     });
     const result = [];
     for (let i = 0; i < rows.keys.length; i += 1) {
         const row = rows.entries[i];
-        if (row.username !== username) continue;
+        if (row.username !== (LOG_OWNER ? owner : username)) continue;
         try {
-            const entry = await decryptJson(key, row.blob, LABEL);
+            const entry = await decryptJson(
+                LOG_OWNER ? decryptionKey : key,
+                row.blob,
+                LABEL,
+            );
             result.push({ ...entry, handle: handleOf.get(rows.keys[i]) });
         } catch {
             // sealed under an older key (another account on this browser
             // under the same name, recreated); nothing can read it
         }
     }
-    return result;
+    return LOG_OWNER && readingScope !== scope ? [] : result;
 }
 
 /** Ids of the tabs open right now, this one included. */

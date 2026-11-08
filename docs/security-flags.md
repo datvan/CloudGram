@@ -1,0 +1,83 @@
+# Security fixes and rollback
+
+All five fixes default to enabled. Only the exact value `0` disables a fix;
+unset, `1`, and other values keep it enabled. No database migration or dependency
+change is needed. Disable only the affected fix: rollback restores its previous
+security exposure.
+
+| Flag                                  | Configuration              | Protection                                                                                                                                                                        |
+| ------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VITE_SECURITY_STREAM_GUARD`          | Frontend build environment | Stream requests require a requesting tab and audio/video destination; responses carry restrictive CSP and nosniff, with passive MIME fallback                                     |
+| `VITE_SECURITY_UPLOAD_OWNER`          | Frontend build environment | Queued, retrying and in-flight uploads remain bound to their original account session; stale dialogs, resume and Dropbox producers stop before enqueuing into a different account |
+| `VITE_SECURITY_LOG_OWNER`             | Frontend build environment | Pending upload-log batches capture owner and key before logout; reads discard results after an account switch                                                                     |
+| `CLOUDGRAM_SECURITY_CREDENTIAL_GUARD` | API environment            | Login cannot issue a session using a verifier superseded during password verification                                                                                             |
+| `CLOUDGRAM_SECURITY_SHARE_QUOTA`      | API environment            | Share count and quota checks run immediately before reservation without an intervening await                                                                                      |
+
+## Frontend rollback
+
+Set the affected `VITE_SECURITY_*` value to `0` in the build environment and
+rebuild with `npm run build`. Publish the resulting frontend using the normal
+deployment process. Changing the VPS API environment alone does not change
+frontend flags. To restore protection, remove the override or set it to `1`,
+then rebuild and publish again.
+
+Close existing app tabs and reopen after either change. Streaming uses the flag
+in the service-worker script registration URL. An already loaded tab or active
+worker can retain the previous policy until worker activation and page reload;
+verify the active worker URL in browser developer tools. Flag values in a page
+URL or localStorage do not configure these fixes.
+
+## API rollback
+
+Set the affected `CLOUDGRAM_SECURITY_*` value to `0` in
+`/etc/cloudgram-api.env`, then restart `cloudgram-api`. Remove the override or
+set it to `1` and restart to restore protection. Keep all other environment
+values unchanged. Each API process must use the same settings.
+
+## Upload behavior
+
+Logout invalidates the tab's upload session before asynchronous logout work.
+The browser stops stale jobs instead of sending them through another account.
+Existing upload-log records stay under their original account for its resume
+flow. A request already dispatched to Telegram cannot be recalled by a flag or
+logout; it remains associated with the original client. Reconnect or lease
+reacquisition without logout preserves the account session and normal retries.
+
+## Validation status
+
+Regression cases live in `server/test/security.test.js` and
+`server/test/browser-security.test.js`. They cover enabled and disabled policy,
+quota concurrency, a superseded credential snapshot, blocked stream navigation,
+account switching before queued upload, dialogs, Dropbox resolution or media preparation completes, and
+deferred log ownership. Browser tests use isolated substitutes for Telegram,
+IndexedDB and service-worker events; they do not prove real browser playback.
+
+Development validation: 32/32 tests passed with dummy fixtures, along with lint,
+production build, static JavaScript syntax and `git diff --check`. Independent
+Standards and Spec reviews found no required changes. The earlier security
+audit was source-only; these development checks do not retroactively confirm
+its production exploit hypotheses. Whole-repository Prettier reports existing
+formatting debt; formatting is checked separately for changed files.
+
+Live playback with Telegram (including seeking and storyboards), account
+switch/resume and service-worker rollback still need browser validation.
+
+## Agent maintenance checklist
+
+1. Keep all five flags default-on and operator-controlled. Frontend flags are
+   compiled by Vite; API flags are read at process startup. Use the names in the
+   table above and the exact `0` opt-out convention.
+2. Preserve both enabled and disabled paths. Update regression tests when a
+   guarded behavior changes; disabled behavior intentionally restores the old
+   exposure, so document the risk before using rollback.
+3. Bind async upload producers, queue jobs and completion work to the original
+   `uploadScope()` object. Logout invalidates it; same-account connection/lease
+   changes preserve it. Keep pending log batches under their captured owner/key.
+4. Keep quota recount and reservation in the same synchronous turn, and check
+   the current user/verifier after asynchronous credential verification.
+5. Run the package's API tests, lint and production build; check formatting on
+   changed files. Report fixture checks separately from real Telegram/browser
+   checks. Verify the active service-worker registration after flag changes.
+6. Update this canonical document, environment examples and both agent pointers
+   together when the flag contract changes. Publish and deploy only with user
+   authorization; verify deployed assets and API health after deployment.
