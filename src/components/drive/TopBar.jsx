@@ -33,6 +33,10 @@ import TelegramIcon from "@mui/icons-material/Telegram";
 
 import { useDrive } from "../../services/drive";
 
+// where the user was before searching, which clearing the box goes back to;
+// outside the component so it outlives re-renders
+let beforeSearch = "/";
+
 function SyncState() {
     const { syncing, dirty, error } = useDrive();
     if (error) {
@@ -73,8 +77,11 @@ export default function TopBar({
 
     // leaving search clears the box, like Drive does
     useEffect(() => {
-        if (location.pathname !== "/search") setQuery("");
-    }, [location.pathname]);
+        if (location.pathname !== "/search") {
+            setQuery("");
+            beforeSearch = location.pathname + location.search;
+        }
+    }, [location.pathname, location.search]);
 
     function submit(event) {
         event.preventDefault();
@@ -160,7 +167,7 @@ export default function TopBar({
                             onClick={() => {
                                 setQuery("");
                                 if (location.pathname === "/search")
-                                    navigate("/");
+                                    navigate(beforeSearch);
                             }}
                         >
                             <CloseIcon />
