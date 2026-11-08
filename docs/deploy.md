@@ -309,3 +309,6 @@ npx wrangler pages project delete cloudgram
 Khác biệt đáng nhớ giữa hai nơi: trên Pages, luật `public/_redirects`
 (`/* /index.html 200`) bắt **mọi** đường dẫn, nên asset thiếu cũng trả 200 kèm
 HTML. Bản nginx tách riêng `/assets/` nên không bị vậy.
+
+Các bản sửa bảo mật có 5 feature flag mặc định bật. Xem
+[cấu hình và rollback](security-flags.md) trước khi tắt từng bản sửa.

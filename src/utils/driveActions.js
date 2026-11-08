@@ -22,7 +22,8 @@ import {
     removeRecords,
     withConverted,
 } from "../services/drive";
-import { TAB, liveTabs, readEntries } from "../services/uploadLog";
+import { TAB, liveTabs, readEntries, uploadScope } from "../services/uploadLog";
+import { UPLOAD_OWNER } from "../config/security";
 import { dropShares } from "../services/shares";
 import { getClient } from "../services/telegram";
 
@@ -57,6 +58,7 @@ export async function uploadEntries(
     parentID,
     { asMedia = false, removeOriginal = false, onConflict, onElsewhere } = {},
 ) {
+    const scope = uploadScope();
     const tree = buildTreeFromPaths(entries);
     const records = getSnapshot().records;
     const realId = new Map();
@@ -154,7 +156,11 @@ export async function uploadEntries(
               })),
           )) ?? "upload"
         : null;
-    if (link === "cancel") return counts;
+    if (
+        link === "cancel" ||
+        (UPLOAD_OWNER && (scope === null || scope !== uploadScope()))
+    )
+        return counts;
 
     for (const folder of missing) {
         const record = createFolder(folder.name, parentOf(folder));

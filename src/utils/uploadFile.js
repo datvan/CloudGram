@@ -129,10 +129,17 @@ function speedMeter() {
 export default async function uploadFile(
     id,
     file,
-    { asMedia = false, resume, onSend } = {},
+    {
+        asMedia = false,
+        resume,
+        onSend,
+        client: boundClient,
+        assertCurrent,
+    } = {},
 ) {
     const { kind, options } = await sendOptions(file, asMedia);
-    const client = getClient();
+    assertCurrent?.();
+    const client = boundClient ?? getClient();
 
     const speed = speedMeter();
     let told = 0;
@@ -165,6 +172,7 @@ export default async function uploadFile(
     try {
         // from here a closed tab may leave a message nobody recorded
         await onSend?.(kind);
+        assertCurrent?.();
         sending = true;
         message = await client.sendFile("me", {
             file: inputFile,
