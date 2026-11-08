@@ -312,3 +312,5 @@ HTML. Bản nginx tách riêng `/assets/` nên không bị vậy.
 
 Các bản sửa bảo mật có 5 feature flag mặc định bật. Xem
 [cấu hình và rollback](security-flags.md) trước khi tắt từng bản sửa.
+
+Khi đổi CSP hoặc tích hợp Cloudflare, xem [nonce và triển khai nginx](csp.md).
