@@ -282,7 +282,10 @@ export default function DriveApp({ mode, onToggleMode }) {
             case "label":
                 list = records.filter(
                     (r) =>
-                        view.labelIds.every((id) => r.labels?.includes(id)) &&
+                        view.labelKey
+                            .split(",")
+                            .filter(Boolean)
+                            .every((id) => r.labels?.includes(id)) &&
                         !isHidden(byId, r),
                 );
                 break;
@@ -931,6 +934,17 @@ export default function DriveApp({ mode, onToggleMode }) {
         else if (action === "backup") setDialog({ type: "backup" });
     }
 
+    // a new folder or search starts again from the first page (ItemViews)
+    const viewKey = `${view.kind}:${folderId}:${view.labelKey}:${
+        view.query ?? ""
+    }:${kindFilter}`;
+    // each view keeps its scroll position: lifting a label filter lands back
+    // where the list was, not at the top
+    useLayoutEffect(() => {
+        const el = marquee.ref.current;
+        if (el) el.scrollTop = scrollMemo.get(viewKey) ?? 0;
+    }, [viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
     // ----- layout ----------------------------------------------------------------------------------
 
     if (view.kind === "unknown") return <Navigate to="/" replace />;
@@ -987,16 +1001,6 @@ export default function DriveApp({ mode, onToggleMode }) {
         />
     );
 
-    // a new folder or search starts again from the first page (ItemViews)
-    const viewKey = `${view.kind}:${folderId}:${view.labelKey}:${
-        view.query ?? ""
-    }:${kindFilter}`;
-    // each view keeps its scroll position: lifting a label filter lands back
-    // where the list was, not at the top
-    useLayoutEffect(() => {
-        const el = marquee.ref.current;
-        if (el) el.scrollTop = scrollMemo.get(viewKey) ?? 0;
-    }, [viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
     const listProps = {
         memoKey: viewKey,
         items,

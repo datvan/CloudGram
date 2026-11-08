@@ -31,7 +31,7 @@ import { useThumbnail } from "../../utils/thumbnails";
 const PAGE = 200;
 // how many items each view had drawn, so coming back to it (e.g. after a label
 // filter is lifted) can restore the scroll position instead of starting over
-export const shownMemo = new Map();
+const shownMemo = new Map();
 
 /**
  * Big folders render PAGE items at a time; a marker after the last one asks
