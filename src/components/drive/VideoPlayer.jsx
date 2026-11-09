@@ -45,6 +45,7 @@ import {
     streamFailed,
     streamUrl,
 } from "../../services/stream";
+import { probeLength } from "../../services/partProbe";
 import LabelPicker from "./LabelPicker";
 import { useDrive } from "../../services/drive";
 import { isOnline } from "../../services/telegram";
@@ -113,6 +114,7 @@ const HIDE_AFTER = 2500;
 // seconds of "next video in…"
 const COUNTDOWN = 5;
 const white = { color: "#fff" };
+const NO_RECORD = {};
 
 function formatTime(seconds) {
     if (!Number.isFinite(seconds)) return "0:00";
@@ -349,11 +351,42 @@ const GRID = Array.from({ length: 9 }, (_, k) =>
  * around it passes keys on through `handleKey` (the ref).
  */
 const VideoPlayer = forwardRef(function VideoPlayer(
-    { record, src, local, poster, next, onNext, onPrev, onDownload },
+    {
+        record,
+        src,
+        local,
+        poster,
+        next,
+        onNext,
+        onPrev,
+        onDownload,
+        parts,
+        startAt = 0,
+    },
     ref,
 ) {
     const box = useRef(null);
+    // The video being watched. Parts of one video (`parts`: the records, in
+    // order) play through two <video> elements: while one plays the other
+    // holds the next part, so the switch has no pause and the seek bar spans
+    // the whole video. `video.current` is always the one on screen.
     const video = useRef(null);
+    const vids = useRef([null, null]);
+    const chain = parts ?? [record];
+    const grouped = chain.length > 1;
+    const [slots, setSlots] = useState(() => ({
+        active: 0,
+        at: [grouped ? startAt : 0, null],
+    }));
+    const slotsRef = useRef(slots);
+    slotsRef.current = slots;
+    const part = slots.at[slots.active];
+    // a part's length by index, as the browser reported it
+    const [lens, setLens] = useState({});
+    // a jump to a part not loaded yet: { k: element, p: part, local, play }
+    const pending = useRef(null);
+    // what the callbacks below need and must not go stale on; set each render
+    const g = useRef({});
     const [prefs, setPrefsState] = useState(() =>
         readJson(PREFS, DEFAULT_PREFS),
     );
@@ -381,6 +414,106 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     const resumeAt = useRef(0);
     // "Thử lại" plays on, whatever the autostart setting
     const playAfterLoad = useRef(false);
+
+    // ----- the parts of one video, laid end to end ---------------------------
+    // A part not measured yet counts as long as its size says, going by one
+    // that was; the seek bar settles as the others are measured.
+    const lenOf = (i) => {
+        if (lens[i] > 0) return lens[i];
+        const k = Object.keys(lens).find((x) => lens[x] > 0);
+        return k == null
+            ? 0
+            : (lens[k] * (chain[i].size || 1)) / (chain[k].size || 1);
+    };
+    const offsetOf = (i) =>
+        chain.slice(0, i).reduce((sum, _, j) => sum + lenOf(j), 0);
+    // Put the part held by element `k` on screen, `local` seconds in.
+    const activate = (k, local, playNow) => {
+        const s = slotsRef.current;
+        const old = vids.current[s.active];
+        const el = vids.current[k];
+        if (!el) return;
+        if (old) {
+            // where the part just left was, or that it was finished
+            const done = old.ended;
+            keepPlace(
+                chain[s.at[s.active]].id,
+                done ? 0 : old.currentTime,
+                done ? 0 : old.duration,
+            );
+            old.pause();
+        }
+        if (local > 0) el.currentTime = local;
+        el.playbackRate = rate;
+        video.current = el;
+        slotsRef.current = { ...s, active: k };
+        setSlots(slotsRef.current);
+        setTime(offsetOf(s.at[k]) + local);
+        setBuffered([]);
+        setWaiting(el.readyState < 3);
+        setEnded(false);
+        setCountdown(null);
+        if (playNow) el.play().catch(() => {});
+    };
+    // Go to part `p`: at once when the spare element has it, else load it there.
+    const goto = (p, local, playNow) => {
+        const s = slotsRef.current;
+        const k = 1 - s.active;
+        const el = vids.current[k];
+        if (s.at[k] === p && el && el.readyState >= 1) {
+            activate(k, local, playNow);
+            return;
+        }
+        pending.current = { k, p, local, play: playNow };
+        setWaiting(true);
+        if (s.at[k] !== p) {
+            slotsRef.current = {
+                ...s,
+                at: s.at.map((x, i) => (i === k ? p : x)),
+            };
+            setSlots(slotsRef.current);
+        }
+    };
+    g.current = {
+        chain,
+        grouped,
+        lenOf,
+        measured: (i) => lens[i] > 0,
+        activate,
+        goto,
+        total: () =>
+            grouped ? offsetOf(chain.length) : video.current?.duration ?? 0,
+        now: () => {
+            const v = video.current;
+            if (!v) return 0;
+            return grouped
+                ? offsetOf(slotsRef.current.at[slotsRef.current.active]) +
+                      v.currentTime
+                : v.currentTime;
+        },
+        seekTo: (seconds) => {
+            const v = video.current;
+            if (!v) return;
+            const t = Math.min(Math.max(0, seconds), offsetOf(chain.length));
+            let p = chain.length - 1;
+            for (let i = 0; i < chain.length; i += 1) {
+                if (t < offsetOf(i) + lenOf(i)) {
+                    p = i;
+                    break;
+                }
+            }
+            const local = Math.min(
+                Math.max(0, t - offsetOf(p)),
+                Math.max(0, lenOf(p) - 0.1),
+            );
+            setEnded(false);
+            setCountdown(null);
+            if (p === slotsRef.current.at[slotsRef.current.active]) {
+                v.currentTime = local;
+                setTime(t);
+            } else goto(p, local, !paused);
+        },
+    };
 
     const setPrefs = useCallback((change) => {
         setPrefsState((before) => {
@@ -415,19 +548,30 @@ const VideoPlayer = forwardRef(function VideoPlayer(
         setError(null);
         setEnded(false);
         setCountdown(null);
-        resumeAt.current = placeOf(record.id);
-        const v = video.current;
+        setLens({});
+        resumeAt.current = placeOf(chain[grouped ? startAt : 0].id);
+        const els = [...vids.current];
         return () => {
+            const s = slotsRef.current;
+            const v = els[grouped ? s.active : 0];
             if (v && v.currentTime > 0)
-                keepPlace(record.id, v.currentTime, v.duration);
+                keepPlace(
+                    chain[grouped ? s.at[s.active] : 0].id,
+                    v.currentTime,
+                    v.duration,
+                );
         };
-    }, [record.id, src]);
+        // Parts of one video are one player: moving to another part of it
+        // changes `record` and `src` but must not start over.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [grouped ? chain[0].id : record.id, grouped ? null : src]);
 
     useEffect(() => {
-        const v = video.current;
-        if (!v) return;
-        v.volume = prefs.volume;
-        v.muted = prefs.muted;
+        for (const v of vids.current) {
+            if (!v) continue;
+            v.volume = prefs.volume;
+            v.muted = prefs.muted;
+        }
     }, [prefs.volume, prefs.muted]);
 
     useEffect(() => {
@@ -441,12 +585,14 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     useEffect(() => {
         const save = () => {
             const v = video.current;
+            const { chain: all } = g.current;
+            const s = slotsRef.current;
             if (v && v.currentTime > 0)
-                keepPlace(record.id, v.currentTime, v.duration);
+                keepPlace(all[s.at[s.active]].id, v.currentTime, v.duration);
         };
         window.addEventListener("pagehide", save);
         return () => window.removeEventListener("pagehide", save);
-    }, [record.id]);
+    }, []);
 
     const poke = useCallback(() => {
         setShown(true);
@@ -498,6 +644,10 @@ const VideoPlayer = forwardRef(function VideoPlayer(
 
     const seek = useCallback((seconds) => {
         const v = video.current;
+        if (v && g.current.grouped) {
+            g.current.seekTo(seconds);
+            return;
+        }
         if (!v || !Number.isFinite(v.duration)) return;
         v.currentTime = Math.min(Math.max(0, seconds), v.duration);
         setTime(v.currentTime);
@@ -507,9 +657,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
 
     const skip = useCallback(
         (seconds) => {
-            const v = video.current;
-            if (!v) return;
-            seek(v.currentTime + seconds);
+            if (!video.current) return;
+            seek(g.current.now() + seconds);
             flash(seconds > 0 ? `+${seconds} giây` : `${seconds} giây`);
         },
         [seek, flash],
@@ -555,7 +704,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
 
     // made only once the video plays, so drawing it never slows the start
     const [board, making, problem] = useStoryboard(
-        record,
+        // one picture per part would not line up with the whole video's bar
+        grouped ? NO_RECORD : record,
         // a converted video is drawn from the bytes already in this tab
         () => (local ? src : streamUrl(record, { quiet: true })),
         started,
@@ -651,7 +801,6 @@ const VideoPlayer = forwardRef(function VideoPlayer(
             /** Act on a key from the dialog; true when it was the player's. */
             handleKey(e) {
                 if (e.ctrlKey || e.metaKey || e.altKey) return false;
-                const v = video.current;
                 const step = SPEEDS.indexOf(rate);
                 const keys = {
                     " ": toggle,
@@ -665,7 +814,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                     m: toggleMute,
                     f: toggleFullscreen,
                     Home: () => seek(0),
-                    End: () => seek(v?.duration ?? 0),
+                    End: () => seek(g.current.total()),
                     N: e.shiftKey ? onNext : null,
                     P: e.shiftKey ? onPrev : null,
                     ">": () =>
@@ -676,7 +825,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                 };
                 if (/^[0-9]$/.test(e.key))
                     keys[e.key] = () =>
-                        seek(((v?.duration ?? 0) * Number(e.key)) / 10);
+                        seek((g.current.total() * Number(e.key)) / 10);
                 const run = keys[e.key] ?? keys[e.key.toLowerCase()];
                 if (!run) return false;
                 e.preventDefault();
@@ -704,28 +853,49 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     const readBuffered = () => {
         const v = video.current;
         if (!v) return;
+        const at = grouped ? g.current.now() - v.currentTime : 0;
         const ranges = [];
         for (let i = 0; i < v.buffered.length; i += 1)
-            ranges.push([v.buffered.start(i), v.buffered.end(i)]);
+            ranges.push([at + v.buffered.start(i), at + v.buffered.end(i)]);
         setBuffered(ranges);
     };
 
+    // The spare element's events do not concern the picture, except when it
+    // has just loaded the part a jump was waiting for.
+    const live = (run) => (e) => {
+        if (e.currentTarget === video.current) run(e);
+    };
+
     const events = {
-        onLoadedMetadata: () => {
-            const v = video.current;
-            setDuration(v.duration);
+        onLoadedMetadata: (e) => {
+            const el = e.currentTarget;
+            const k = vids.current.indexOf(el);
+            const idx = slotsRef.current.at[k];
+            if (grouped && el.duration > 0)
+                setLens((l) => (l[idx] > 0 ? l : { ...l, [idx]: el.duration }));
+            const wait = pending.current;
+            if (grouped && wait && wait.k === k && wait.p === idx) {
+                pending.current = null;
+                g.current.activate(k, wait.local, wait.play);
+                return;
+            }
+            if (el !== video.current) return;
+            const v = el;
+            if (!grouped) setDuration(v.duration);
             if (!local && Number.isFinite(v.duration) && v.duration > 0)
-                setBitrate(record.file_id, record.size / v.duration);
+                setBitrate(chain[idx].file_id, chain[idx].size / v.duration);
             const at = resumeAt.current;
             resumeAt.current = 0;
             const retrying = playAfterLoad.current;
             if (at > 0 && (retrying || at < v.duration * 0.95)) {
                 v.currentTime = at;
-                setTime(at);
+                setTime(grouped ? g.current.now() : at);
             }
             if (at > 0 && !retrying && at < v.duration * 0.95) {
                 setNotice({
-                    text: `Tiếp tục từ ${formatTime(at)}`,
+                    text: `Tiếp tục từ ${formatTime(
+                        grouped ? g.current.now() : at,
+                    )}`,
                     key: Date.now(),
                     long: true,
                     fromStart: true,
@@ -735,54 +905,110 @@ const VideoPlayer = forwardRef(function VideoPlayer(
             if (prefs.autoStart || retrying) play();
             playAfterLoad.current = false;
         },
-        onCanPlay: () => setWaiting(false),
-        onWaiting: () => setWaiting(true),
-        onPlaying: () => {
+        onCanPlay: live(() => setWaiting(false)),
+        onWaiting: live(() => setWaiting(true)),
+        onPlaying: live(() => {
             setWaiting(false);
             setStarted(true);
-        },
-        onPlay: () => {
+        }),
+        onPlay: live(() => {
             setPaused(false);
             setStarted(true);
             poke();
-        },
-        onPause: () => {
+        }),
+        onPause: live(() => {
             setPaused(true);
             setShown(true);
             const v = video.current;
-            keepPlace(record.id, v.currentTime, v.duration);
-        },
-        onTimeUpdate: () => {
+            keepPlace(chain[part].id, v.currentTime, v.duration);
+        }),
+        onTimeUpdate: live(() => {
             const v = video.current;
-            setTime(v.currentTime);
+            setTime(g.current.now());
             const now = Date.now();
             if (now - lastSave.current > 5000) {
                 lastSave.current = now;
-                keepPlace(record.id, v.currentTime, v.duration);
+                keepPlace(chain[part].id, v.currentTime, v.duration);
             }
-        },
-        onProgress: readBuffered,
-        onDurationChange: () => setDuration(video.current.duration),
-        onEnded: () => {
+        }),
+        onProgress: live(readBuffered),
+        onDurationChange: live(() => {
+            if (!grouped) setDuration(video.current.duration);
+        }),
+        onEnded: live(() => {
+            // the next part is already waiting: no pause between them
+            if (grouped && part < chain.length - 1) {
+                g.current.goto(part + 1, 0, true);
+                return;
+            }
             setPaused(true);
             setEnded(true);
             setShown(true);
-            keepPlace(record.id, 0, 0);
+            keepPlace(chain[part].id, 0, 0);
             if (prefs.autoNext && next) setCountdown(COUNTDOWN);
-        },
-        onError: () => {
+        }),
+        onError: (e) => {
+            const k = vids.current.indexOf(e.currentTarget);
+            const wait = pending.current;
+            if (wait && wait.k === k) pending.current = null;
+            else if (e.currentTarget !== video.current) return;
             setWaiting(false);
-            const code = video.current?.error?.code;
+            const code = e.currentTarget.error?.code;
             setError(
                 !isOnline()
                     ? "offline"
-                    : !streamFailed(record.file_id) &&
+                    : !streamFailed(chain[part].file_id) &&
                       (code === 3 || code === 4)
                     ? "format"
                     : "network",
             );
         },
     };
+
+    // ----- more about the parts of one video -----------------------------------
+    // the whole video's length follows what is known of its parts
+    useEffect(() => {
+        if (grouped) setDuration(g.current.total());
+    }, [grouped, lens]);
+
+    // Once playing, the spare element takes the next part, so it is ready
+    // when this one ends (and not before, so the first part loads first).
+    useEffect(() => {
+        if (!grouped || !started || pending.current) return;
+        const k = 1 - slots.active;
+        const want = slots.at[slots.active] + 1;
+        const have = want < g.current.chain.length ? want : null;
+        if (slots.at[k] !== have)
+            setSlots((s) => ({
+                ...s,
+                at: s.at.map((x, i) => (i === k ? have : x)),
+            }));
+    }, [grouped, started, slots]);
+
+    // the other parts are measured one at a time, out of the way
+    useEffect(() => {
+        if (!grouped || !started) return undefined;
+        let alive = true;
+        (async () => {
+            for (let i = 0; alive && i < g.current.chain.length; i += 1) {
+                if (g.current.measured(i)) continue;
+                const seconds = await probeLength(
+                    streamUrl(g.current.chain[i], { quiet: true }),
+                );
+                if (alive && seconds > 0)
+                    setLens((l) => (l[i] > 0 ? l : { ...l, [i]: seconds }));
+            }
+        })();
+        return () => {
+            alive = false;
+        };
+    }, [grouped, started]);
+
+    // another part of the same video was opened: go there
+    useEffect(() => {
+        if (grouped && startAt !== slotsRef.current.at[slotsRef.current.active])
+            g.current.goto(startAt, 0, true);
+    }, [grouped, startAt]);
 
     const volumeIcon =
         prefs.muted || prefs.volume === 0 ? (
@@ -810,22 +1036,42 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                 userSelect: "none",
             }}
         >
-            <video
-                ref={video}
-                src={src}
-                poster={poster ?? undefined}
-                preload="auto"
-                playsInline
-                onClick={toggle}
-                onDoubleClick={toggleFullscreen}
-                style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "contain",
-                    display: "block",
-                }}
-                {...events}
-            />
+            {(grouped ? [0, 1] : [0]).map((k) => (
+                <video
+                    key={k}
+                    ref={(el) => {
+                        vids.current[k] = el;
+                        if (k === slotsRef.current.active) video.current = el;
+                    }}
+                    src={
+                        grouped
+                            ? slots.at[k] == null
+                                ? undefined
+                                : streamUrl(chain[slots.at[k]])
+                            : src
+                    }
+                    poster={
+                        k === slots.active ? poster ?? undefined : undefined
+                    }
+                    preload="auto"
+                    playsInline
+                    onClick={toggle}
+                    onDoubleClick={toggleFullscreen}
+                    style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "contain",
+                        display: "block",
+                        ...(grouped && {
+                            position: "absolute",
+                            inset: 0,
+                            visibility:
+                                k === slots.active ? "visible" : "hidden",
+                        }),
+                    }}
+                    {...events}
+                />
+            ))}
 
             {grid && (
                 <Stack
@@ -1178,6 +1424,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                         }}
                     >
                         {formatTime(time)} / {formatTime(duration)}
+                        {grouped && ` · phần ${part + 1}/${chain.length}`}
                     </Typography>
                     <Box sx={{ flex: 1 }} />
                     <Tooltip
@@ -1310,6 +1557,10 @@ VideoPlayer.propTypes = {
     onNext: PropTypes.func,
     onPrev: PropTypes.func,
     onDownload: PropTypes.func,
+    // the records of one video cut into parts, in order, and which one was
+    // opened; without them the player plays `record` alone
+    parts: PropTypes.array,
+    startAt: PropTypes.number,
 };
 
 export default VideoPlayer;

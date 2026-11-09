@@ -134,6 +134,15 @@ Trang web không tự chạy được chương trình trên máy, nên có thêm
 -   **Cờ bật tắt:** `VITE_FEATURE_LOCAL_HELPER=0` rồi build lại, hộp thoại quay về chỉ hiện lệnh (giai đoạn 1). Cần thêm `http://127.0.0.1:47633` vào `connect-src` của nginx ([csp.md](csp.md)); file mẫu đã sửa trong `deploy/nginx/cloudgram.conf`, chưa cài lên VPS. Quay lại: khôi phục bản sao lưu cấu hình nginx cũ.
 -   Đã thử: chạy thật với ffmpeg 8.1 (cắt tệp 22 MB thành 4 phần từ trang chạy ở localhost:5173), kiểm tra từ chối sai Origin/Host. **Chưa thử:** tệp thật vài GB; trang HTTPS thật gọi vào 127.0.0.1 (Chrome có thể hiện hộp xin quyền truy cập mạng nội bộ; Safari chặn); mã hoá không tương thích mp4 (ví dụ một số âm thanh trong mkv) làm ffmpeg báo lỗi; huỷ giữa chừng. Cần khoảng 2 lần dung lượng tệp trống trên ổ đĩa (tệp tạm của chương trình, rồi các phần nằm trong trình duyệt). Các phần tải lên từ trình duyệt không có tay cầm tệp nên **không tiếp tục được sau khi tải lại trang**.
 
+## 8c. Giai đoạn 3: phát liền mạch các phần (đã làm, chưa kiểm với Telegram thật)
+
+-   Các phần vẫn là các tệp riêng trong thư mục, nhận ra nhau **chỉ bằng tên** `ten.part001.mp4`, `ten.part002.mp4`... cùng thư mục, đã tải xong, liền số ([partGroup.js](../src/utils/partGroup.js)). Không đổi cách lưu dữ liệu, nên quay lại rất dễ. Đổi tên một phần thì phần đó rời khỏi nhóm.
+-   Mở một phần, [trình phát](../src/components/drive/VideoPlayer.jsx) phát cả video: thanh tua và thời gian tính cho cả video, ghi "phần 2/5", tua qua phần khác được, phím tắt (Home, End, 0-9) tính theo cả video. Dùng 2 phần tử video: lúc phát phần này thì phần kế đã tải sẵn ở phần tử kia, hết phần là bật phần kế ngay. Đo thử: khoảng trống giữa hai phần khoảng 15 ms; phần phát tiếp không thoát toàn màn hình.
+-   Độ dài các phần được đo lần lượt (`partProbe.js`); phần chưa đo tạm tính theo dung lượng, nên thanh tua có thể nhích nhẹ lúc đầu.
+-   Phát tiếp "video kế" chỉ tính sau phần cuối của nhóm. Dùng chung cờ `VITE_FEATURE_LOCAL_HELPER`: đặt `0` thì các phần phát lần lượt như trước.
+-   Chưa có: hình xem trước (storyboard) cho video gộp, nhãn/tải xuống/xoá cho cả nhóm (chúng vẫn tác động từng phần), gộp các phần thành một dòng trong danh sách.
+-   Hai tốc độ/âm lượng áp cho cả hai phần tử. Phát qua Telegram thật chưa thử: bản thử dùng tệp cục bộ (3 phần ~8 giây).
+
 ## 9. Chưa biết, chưa kiểm
 
 -   Giá trị thật của `upload_max_fileparts_premium` cho tài khoản của bạn (R1). Mình lấy 8000 từ tài liệu Telegram, chưa gọi API.

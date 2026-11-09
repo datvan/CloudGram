@@ -40,6 +40,8 @@ import { useThumbnail } from "../../utils/thumbnails";
 import { useDrive } from "../../services/drive";
 import { needsConvert } from "../../services/convert";
 import { canStream, streamOffReason, streamUrl } from "../../services/stream";
+import { LOCAL_HELPER } from "../../config/features";
+import { partChain } from "../../utils/partGroup";
 import VideoPlayer from "./VideoPlayer";
 
 // GramJS buffers the whole file in memory, so the preview stays within what a
@@ -182,9 +184,28 @@ export default function PreviewDialog({
               (s) => s.file_id != null && previewKind(s) === "video",
           )
         : [];
+    // the parts of one cut video play as one, so "next" skips the others
+    const group =
+        item && streaming && LOCAL_HELPER ? partChain(item, siblings) : null;
+    const firstAt = group
+        ? videos.findIndex((s) => s.id === group.chain[0].id)
+        : -1;
+    const lastAt = group
+        ? videos.findIndex((s) => s.id === group.chain.at(-1).id)
+        : -1;
     const videoAt = videos.findIndex((s) => s.id === item?.id);
-    const nextVideo = videoAt >= 0 ? videos[videoAt + 1] ?? null : null;
-    const prevVideo = videoAt > 0 ? videos[videoAt - 1] : null;
+    const nextVideo = group
+        ? videos[lastAt + 1] ?? null
+        : videoAt >= 0
+        ? videos[videoAt + 1] ?? null
+        : null;
+    const prevVideo = group
+        ? firstAt > 0
+            ? videos[firstAt - 1]
+            : null
+        : videoAt > 0
+        ? videos[videoAt - 1]
+        : null;
     const placeholder = useThumbnail(
         item ?? NONE,
         isImage || kind === "video",
@@ -485,8 +506,10 @@ export default function PreviewDialog({
                         <VideoPlayer
                             // a fresh player per video, so the last one's
                             // events cannot touch this one's saved place
-                            key={item.id}
+                            key={group ? group.chain[0].id : item.id}
                             ref={player}
+                            parts={group?.chain}
+                            startAt={group?.index}
                             record={item}
                             src={state.url}
                             // not streamed: already whole in this tab
