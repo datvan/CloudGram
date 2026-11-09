@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
+import { partsOf } from "../../src/utils/partGroup.js";
+
 async function load(path, globals, exports) {
     const source = (await readFile(new URL(path, import.meta.url), "utf8"))
         .replace(/^import [\s\S]*?;\r?\n/gm, "")
@@ -520,11 +522,19 @@ test("a file over Telegram's limit is reported, not queued", async () => {
             KEPT: {},
             uploadScope: () => ({}),
             uploadLimit: () => 10,
+            partsOf,
             buildTreeFromPaths: () => ({
                 folders: [],
                 files: [{ file: big }, { file: small }],
             }),
-            getSnapshot: () => ({ records: [] }),
+            getSnapshot: () => ({
+                records: [1, 2].map((n) => ({
+                    type: "file",
+                    name: `big.part00${n}.mp4`,
+                    parent: null,
+                    file_id: n,
+                })),
+            }),
             enqueueUpload: ({ file }) => queued.push(file.name),
         },
         ["uploadEntries"],
@@ -541,6 +551,7 @@ test("a file over Telegram's limit is reported, not queued", async () => {
         reported[0].files.map((f) => [f.name, f.size]),
         [["big.mkv", 11]],
     );
+    assert.equal(reported[0].files[0].parts, 2);
 });
 
 test("Dropbox import stops when account changes during resolution", async () => {

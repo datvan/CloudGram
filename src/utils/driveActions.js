@@ -10,6 +10,7 @@
 import { buildTreeFromPaths } from "./buildTreeFromPaths";
 import downloadFile from "./downloadFile";
 import { KEPT, entriesOf, isAbort } from "./pickers";
+import { partsOf } from "./partGroup";
 import { Store } from "../redux/store";
 import { keptProgress } from "../redux/actions/progressAction";
 import { collectSubtree, findFolder, messageIdsOf, recordIdsOf } from "./tree";
@@ -53,7 +54,8 @@ import { getClient } from "../services/telegram";
  * - one bigger than Telegram takes (uploadLimit) is not uploaded and counts
  *   as skipped. `onTooBig(files, limit)` is told, without being waited for,
  *   so the rest of the upload carries on. Each file comes with its
- *   `parentID` and `asMedia`, for sending the pieces it is cut into.
+ *   `parentID` and `asMedia`, for sending the pieces it is cut into, and
+ *   `parts`, how many of those pieces the folder already holds.
  *
  * Resolves to how many files were `queued`, `resumed`, `replaced`,
  * `renamed`, `linked` and `skipped`.
@@ -137,6 +139,11 @@ export async function uploadEntries(
                 // to the folder the whole upload was aimed at
                 parentID: p.parent === MISSING ? parentID : p.parent,
                 asMedia,
+                // parts of it already in that folder: it was cut before
+                parts:
+                    p.parent === MISSING
+                        ? 0
+                        : partsOf(p.name, p.parent, records),
             })),
             limit,
         );

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { partChain } from "../../src/utils/partGroup.js";
+import { partChain, partsOf } from "../../src/utils/partGroup.js";
 
 const file = (name, extra = {}) => ({
     id: name,
@@ -54,4 +54,18 @@ test("a gap ends the chain", () => {
     ];
     assert.equal(partChain(list[0], list).chain.length, 2);
     assert.equal(partChain(list[3], list).chain.length, 2);
+});
+
+test("partsOf counts the finished parts a video was cut into", () => {
+    const f = (name, extra) => file(name, { type: "file", ...extra });
+    const list = [
+        f("a.part001.mp4"),
+        f("a.part002.mp4"),
+        f("a.part003.mp4", { trashedAt: 1 }),
+        f("a.part004.mp4", { file_id: null }),
+        f("a.part005.mp4", { parent: "other" }),
+        f("b.part001.mp4"),
+    ];
+    assert.equal(partsOf("a.mkv", "f", list), 2);
+    assert.equal(partsOf("c.mkv", "f", list), 0);
 });

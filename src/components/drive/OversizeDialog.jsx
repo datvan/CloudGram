@@ -160,6 +160,7 @@ function Row({ item, limit, onSend }) {
     // undefined while the length is being read, null when it cannot be
     const [duration, setDuration] = useState(video ? undefined : null);
     const [copied, setCopied] = useState(false);
+    const [again, setAgain] = useState(false);
 
     useEffect(() => {
         if (!video) return undefined;
@@ -183,6 +184,23 @@ function Row({ item, limit, onSend }) {
             // no clipboard here: the command can still be selected by hand
         }
     };
+
+    if (item.parts > 0 && !again)
+        return (
+            <Box sx={{ mb: 2 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    {item.name} ({formatSize(item.size)})
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                    Thư mục này đã có {item.parts} phần của tệp này (
+                    {item.name.replace(/\.[^.]+$/, "")}.part001...), không cần
+                    cắt và tải lại.
+                </Typography>
+                <Button size="small" onClick={() => setAgain(true)}>
+                    Vẫn muốn cắt lại
+                </Button>
+            </Box>
+        );
 
     return (
         <Box sx={{ mb: 2 }}>
@@ -290,6 +308,7 @@ Row.propTypes = {
         name: PropTypes.string,
         size: PropTypes.number,
         file: PropTypes.object,
+        parts: PropTypes.number,
     }),
     limit: PropTypes.number,
     onSend: PropTypes.func,
