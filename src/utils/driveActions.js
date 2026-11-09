@@ -52,7 +52,8 @@ import { getClient } from "../services/telegram";
  *   never read, so nothing shows they are the ones Telegram has.
  * - one bigger than Telegram takes (uploadLimit) is not uploaded and counts
  *   as skipped. `onTooBig(files, limit)` is told, without being waited for,
- *   so the rest of the upload carries on.
+ *   so the rest of the upload carries on. Each file comes with its
+ *   `parentID` and `asMedia`, for sending the pieces it is cut into.
  *
  * Resolves to how many files were `queued`, `resumed`, `replaced`,
  * `renamed`, `linked` and `skipped`.
@@ -131,6 +132,11 @@ export async function uploadEntries(
                 name: p.name,
                 size: p.entry.file.size,
                 file: p.entry.file,
+                // where the cut pieces should go, and how
+                // a folder still to be made is not there yet: the pieces go
+                // to the folder the whole upload was aimed at
+                parentID: p.parent === MISSING ? parentID : p.parent,
+                asMedia,
             })),
             limit,
         );

@@ -30,6 +30,8 @@ test("nginx permits Cloudflare integrations without arbitrary inline scripts", a
             .get("connect-src")
             .includes("https://cloudflareinsights.com"),
     );
+    // the local video-cutting helper, loopback only
+    assert.ok(directives.get("connect-src").includes("http://127.0.0.1:47633"));
     assert.ok(
         directives
             .get("font-src")
