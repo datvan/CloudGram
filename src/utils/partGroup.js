@@ -39,3 +39,26 @@ export function partChain(item, siblings) {
     for (let n = first; n <= last; n += 1) chain.push(found.get(n));
     return { chain, index: at - first };
 }
+
+/**
+ * How many finished, not trashed parts "base.partNNN.ext" of the video `name`
+ * already sit in `parent`. Tells the oversize dialog it was cut before.
+ * shortcut: by name only, and it does not check the run is complete.
+ */
+export function partsOf(name, parent, records) {
+    const base = name.replace(/\.[^.]+$/, "");
+    const numbers = new Set();
+    for (const r of records) {
+        const m = PART.exec(r.name);
+        if (
+            m &&
+            m[1] === base &&
+            (r.parent ?? null) === (parent ?? null) &&
+            r.type === "file" &&
+            r.file_id != null &&
+            !r.trashedAt
+        )
+            numbers.add(Number(m[2]));
+    }
+    return numbers.size;
+}
