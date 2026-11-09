@@ -64,6 +64,7 @@ import ShareDialog from "../../components/drive/ShareDialog";
 import DropboxDialog from "../../components/drive/DropboxDialog";
 import ResumeBanner from "../../components/drive/ResumeBanner";
 import TransferPanel from "../../components/drive/TransferPanel";
+import OversizeDialog from "../../components/drive/OversizeDialog";
 import useMarquee from "../../components/drive/useMarquee";
 import {
     ConfirmDialog,
@@ -213,6 +214,7 @@ export default function DriveApp({ mode, onToggleMode }) {
     // files whose names are taken where they go, waiting for an answer
     const [conflict, setConflict] = useState(null);
     const [elsewhere, setElsewhere] = useState(null);
+    const [oversize, setOversize] = useState(null);
     // picked or dropped files still being read or checked (ScanDialog)
     const [scanning, setScanning] = useState(null);
     const [layout, setLayout] = useState(() =>
@@ -702,6 +704,12 @@ export default function DriveApp({ mode, onToggleMode }) {
                 if (choice === "cancel") stopAndReport(run);
                 return choice;
             },
+            // not waited for: the rest of the batch uploads meanwhile
+            onTooBig: (files, limit) =>
+                setOversize((now) => ({
+                    files: [...(now?.files ?? []), ...files],
+                    limit,
+                })),
             onElsewhere: async (found) => {
                 if (run.link) return run.link;
                 const link = await new Promise((resolve) =>
@@ -1743,6 +1751,12 @@ export default function DriveApp({ mode, onToggleMode }) {
                     conflict?.resolve(choice);
                     setConflict(null);
                 }}
+            />
+
+            <OversizeDialog
+                files={oversize?.files}
+                limit={oversize?.limit}
+                onClose={() => setOversize(null)}
             />
 
             <UploadElsewhereDialog

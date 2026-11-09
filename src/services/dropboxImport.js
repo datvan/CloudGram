@@ -21,12 +21,16 @@ import { UPLOAD_OWNER } from "../config/security";
 import { onClientChange } from "./telegram";
 import { ZipError, ZipReader } from "./zipStream";
 import { findFolder } from "../utils/tree";
+import { formatSize } from "../utils/format";
+import { uploadLimit } from "../utils/uploadLimit";
 import { enqueueUpload, isQueued } from "../utils/uploadQueue";
 
 // file bytes are folded into a Blob every few MB so they leave the JS heap
 const MERGE_BYTES = 8 * 1024 * 1024;
-// the most Telegram takes in one file (with Premium)
+// the most a file may weigh: what this account can send, and never past 4 GiB
+// (uploadLimit is unlimited with the feature switched off, which leaves 4 GiB)
 const MAX_FILE = 4 * 1024 * 1024 * 1024;
+const maxFile = () => Math.min(MAX_FILE, uploadLimit());
 
 const LINK = /^https:\/\/(www\.)?dropbox\.com\/(scl\/f[oi]|sh|s)\/\S+$/;
 const FOLDER_LINK = /^https:\/\/(www\.)?dropbox\.com\/(scl\/fo|sh)\//;
@@ -250,7 +254,7 @@ function collector() {
     return {
         add(bytes) {
             size += bytes.length;
-            if (size > MAX_FILE) return;
+            if (size > maxFile()) return;
             pending.push(bytes.slice());
             pendingBytes += bytes.length;
             if (pendingBytes >= MERGE_BYTES) {
@@ -292,8 +296,11 @@ async function run(job) {
 
     const deliver = (parentID, fileName, bytes) => {
         const existing = sameFile(parentID, fileName, bytes.size);
-        if (bytes.size > MAX_FILE) {
-            job.skipped.push({ name: fileName, reason: "quá 4 GB" });
+        if (bytes.size > maxFile()) {
+            job.skipped.push({
+                name: fileName,
+                reason: `quá giới hạn ${formatSize(maxFile())} của Telegram`,
+            });
         } else if (existing?.file_id != null) {
             job.skipped.push({ name: fileName, reason: "đã có" });
         } else if (existing && isQueued(existing.id)) {

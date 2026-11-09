@@ -402,6 +402,8 @@ async function describeMe(client) {
                 "Telegram",
             username: me.username ?? null,
             phone: me.phone ?? null,
+            // decides how big a file Telegram takes (utils/uploadLimit.js)
+            premium: Boolean(me.premium),
         };
     } catch {
         return { name: "Telegram" };
