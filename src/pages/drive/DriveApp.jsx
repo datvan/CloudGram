@@ -832,6 +832,29 @@ export default function DriveApp({ mode, onToggleMode }) {
         });
     }
 
+    /**
+     * The pieces a file too big for Telegram was cut into, sent like picked
+     * files into the folder it was meant for. The original is never removed.
+     * False when another upload is running (it says so).
+     */
+    function sendPieces(item, files) {
+        if (!canStartRun()) return false;
+        const run = newRun();
+        run.target = item.parentID;
+        // already asked when the big file was picked
+        run.asMedia = item.asMedia;
+        run.scanned = true;
+        activeRun.current = run;
+        addBatch(
+            run,
+            files.map((file) => ({ file })),
+        );
+        run.chain.then(() => {
+            if (!run.stopped) finishRun(run);
+        });
+        return true;
+    }
+
     // Chrome and Edge get the File System Access pickers, whose handles let a
     // closed tab resume without picking again; others keep the <input>
     function openPicker(folder) {
@@ -1756,6 +1779,7 @@ export default function DriveApp({ mode, onToggleMode }) {
             <OversizeDialog
                 files={oversize?.files}
                 limit={oversize?.limit}
+                onSend={sendPieces}
                 onClose={() => setOversize(null)}
             />
 

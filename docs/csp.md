@@ -12,6 +12,7 @@ access through a font exception.
 | `https://static.cloudflareinsights.com` | Cloudflare Web Analytics script                                          | `script-src`  |
 | `https://cloudflareinsights.com`        | Analytics reports (same-origin reports are already allowed)              | `connect-src` |
 | `https://fonts.gstatic.com/s/roboto/`   | Roboto font versions requested by the browser                            | `font-src`    |
+| `http://127.0.0.1:47633`                | Local helper that cuts videos over Telegram's limit (`public/helper`)    | `connect-src` |
 
 Scripts still require an allowed origin or matching nonce. Arbitrary inline
 scripts remain blocked; do not replace the nonce with `unsafe-inline`, a fixed

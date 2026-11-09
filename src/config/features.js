@@ -2,3 +2,7 @@
 // VITE_FEATURE_SPLIT_LARGE=0 and a rebuild: files over Telegram's limit are
 // no longer caught before upload (the behavior from before this feature).
 export const SPLIT_LARGE = import.meta.env.VITE_FEATURE_SPLIT_LARGE !== "0";
+
+// VITE_FEATURE_LOCAL_HELPER=0 and a rebuild: the dialog for a file over the
+// limit only shows the command to cut it by hand, with no helper program.
+export const LOCAL_HELPER = import.meta.env.VITE_FEATURE_LOCAL_HELPER !== "0";
