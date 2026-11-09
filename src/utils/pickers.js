@@ -360,6 +360,7 @@ export const KEPT = {
     skipped:
         "Tên này đã có trên Drive nên bỏ qua, không tải lại. Bản gốc được giữ nguyên.",
     linked: "Đã có tệp giống hệt ở thư mục khác nên chỉ liên kết, không tải lại. Bản gốc được giữ nguyên.",
+    tooBig: "Tệp quá lớn để tải lên Telegram nên chưa gửi. Bản gốc được giữ nguyên.",
     busy: "Tệp này đang được tải dở (ở tab khác hoặc lần trước), nên chưa xoá bản gốc.",
 };
 

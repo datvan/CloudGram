@@ -480,6 +480,7 @@ test("upload dialog cannot enqueue into a later account", async () => {
         {
             UPLOAD_OWNER: true,
             uploadScope: () => scope,
+            uploadLimit: () => Infinity,
             buildTreeFromPaths: () => ({ folders: [], files: [{ file }] }),
             getSnapshot: () => ({
                 records: [
@@ -507,6 +508,41 @@ test("upload dialog cannot enqueue into a later account", async () => {
     assert.equal(queued, 0);
 });
 
+test("a file over Telegram's limit is reported, not queued", async () => {
+    const big = { name: "big.mkv", size: 11 };
+    const small = { name: "small.txt", size: 5 };
+    const queued = [];
+    const reported = [];
+    const actions = await load(
+        "../../src/utils/driveActions.js",
+        {
+            UPLOAD_OWNER: false,
+            KEPT: {},
+            uploadScope: () => ({}),
+            uploadLimit: () => 10,
+            buildTreeFromPaths: () => ({
+                folders: [],
+                files: [{ file: big }, { file: small }],
+            }),
+            getSnapshot: () => ({ records: [] }),
+            enqueueUpload: ({ file }) => queued.push(file.name),
+        },
+        ["uploadEntries"],
+    );
+    const counts = await actions.uploadEntries([], null, {
+        onTooBig: (files, limit) => reported.push({ files, limit }),
+    });
+    assert.deepEqual(queued, ["small.txt"]);
+    assert.equal(counts.queued, 1);
+    assert.equal(counts.skipped, 1);
+    assert.equal(reported.length, 1);
+    assert.equal(reported[0].limit, 10);
+    assert.deepEqual(
+        reported[0].files.map((f) => [f.name, f.size]),
+        [["big.mkv", 11]],
+    );
+});
+
 test("Dropbox import stops when account changes during resolution", async () => {
     let scope = {};
     let resolveLink;
@@ -519,6 +555,8 @@ test("Dropbox import stops when account changes during resolution", async () => 
         {
             UPLOAD_OWNER: true,
             uploadScope: () => scope,
+            uploadLimit: () => Infinity,
+            formatSize: String,
             api: { resolveDropbox: () => resolution },
             onClientChange() {},
             uuid4: () => "import",

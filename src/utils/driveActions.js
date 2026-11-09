@@ -24,6 +24,7 @@ import {
 } from "../services/drive";
 import { TAB, liveTabs, readEntries, uploadScope } from "../services/uploadLog";
 import { UPLOAD_OWNER } from "../config/security";
+import { uploadLimit } from "./uploadLimit";
 import { dropShares } from "../services/shares";
 import { getClient } from "../services/telegram";
 
@@ -49,6 +50,9 @@ import { getClient } from "../services/telegram";
  *   "upload" sends it anyway, "cancel" uploads nothing. Without it they are
  *   uploaded. A linked file's original is never deleted: its bytes were
  *   never read, so nothing shows they are the ones Telegram has.
+ * - one bigger than Telegram takes (uploadLimit) is not uploaded and counts
+ *   as skipped. `onTooBig(files, limit)` is told, without being waited for,
+ *   so the rest of the upload carries on.
  *
  * Resolves to how many files were `queued`, `resumed`, `replaced`,
  * `renamed`, `linked` and `skipped`.
@@ -56,7 +60,13 @@ import { getClient } from "../services/telegram";
 export async function uploadEntries(
     entries,
     parentID,
-    { asMedia = false, removeOriginal = false, onConflict, onElsewhere } = {},
+    {
+        asMedia = false,
+        removeOriginal = false,
+        onConflict,
+        onElsewhere,
+        onTooBig,
+    } = {},
 ) {
     const scope = uploadScope();
     const tree = buildTreeFromPaths(entries);
@@ -91,7 +101,7 @@ export async function uploadEntries(
             uploaded.set(sizeKey(record.name, record.size), record);
     }
 
-    const placed = tree.files.map((entry) => {
+    let placed = tree.files.map((entry) => {
         const parent = parentOf(entry);
         const name = entry.name ?? entry.file.name;
         const there =
@@ -110,6 +120,21 @@ export async function uploadEntries(
                 : uploaded.get(sizeKey(name, entry.file.size)),
         };
     });
+
+    // what Telegram would refuse after hours of sending is stopped here
+    const limit = uploadLimit();
+    const oversize = placed.filter((p) => p.entry.file.size > limit);
+    if (oversize.length) {
+        placed = placed.filter((p) => !oversize.includes(p));
+        onTooBig?.(
+            oversize.map((p) => ({
+                name: p.name,
+                size: p.entry.file.size,
+                file: p.entry.file,
+            })),
+            limit,
+        );
+    }
 
     // unfinished matches may have a log entry: the parts already sent, and
     // whether another open tab is uploading the file right now
@@ -139,7 +164,7 @@ export async function uploadEntries(
         replaced: 0,
         renamed: 0,
         linked: 0,
-        skipped: 0,
+        skipped: oversize.length,
     };
     if (choice === "cancel") return counts;
 
@@ -186,6 +211,8 @@ export async function uploadEntries(
                 keptProgress(`kept:${Math.random()}`, p.name, reason),
             );
     };
+
+    for (const p of oversize) keep(p, KEPT.tooBig);
 
     for (const p of placed) {
         const { entry, unfinished, taken } = p;
