@@ -37,6 +37,7 @@ async function serve(made, record, size, state) {
         if (next.index === null) continue;
         const start = next.index * made.chunk;
         const began = Date.now();
+        state.reading.set(next.index, began);
         try {
             const { bytes } = await readRange(
                 record,
@@ -45,6 +46,7 @@ async function serve(made, record, size, state) {
             );
             const read = Date.now() - began;
             await putPlayChunk(made.id, next.index, bytes);
+            state.sent += 1;
             console.log(
                 `relay chunk ${next.index}: read ${read} ms, sent ${
                     Date.now() - began - read
@@ -52,9 +54,12 @@ async function serve(made, record, size, state) {
             );
         } catch (error) {
             console.log(error);
+            state.error = String(error.errorMessage ?? error.message);
             if (error.status === 404 || error.status === 401) return;
             // tell the server, so the player's stream is cut and not left hanging
             await api.failPlay(made.id, next.index).catch(() => {});
+        } finally {
+            state.reading.delete(next.index);
         }
     }
 }
@@ -90,8 +95,18 @@ export async function startRelay(record) {
             ? fail("Máy chủ hết chỗ chứa tạm.", "disk")
             : fail("Không kết nối được máy chủ CloudGram.", "server");
     }
-    const state = { stopped: false };
+    const state = { stopped: false, reading: new Map(), sent: 0, error: "" };
     const session = {
+        // for the dialog: what the tab is doing for the player right now
+        status: () => ({
+            sent: state.sent,
+            reading: state.reading.size,
+            seconds: Math.round(
+                (Date.now() - Math.min(Date.now(), ...state.reading.values())) /
+                    1000,
+            ),
+            error: state.error,
+        }),
         url: `${window.location.origin}${made.path}`,
         stop: () => {
             state.stopped = true;

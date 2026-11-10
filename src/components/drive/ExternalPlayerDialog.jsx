@@ -35,6 +35,7 @@ export default function ExternalPlayerDialog({ item, onClose }) {
     const [session, setSession] = useState(null);
     const [error, setError] = useState("");
     const [copied, setCopied] = useState(false);
+    const [status, setStatus] = useState(null);
 
     useEffect(() => {
         if (!item) return undefined;
@@ -50,6 +51,14 @@ export default function ExternalPlayerDialog({ item, onClose }) {
             live = false;
         };
     }, [item]);
+
+    useEffect(() => {
+        if (!session) return undefined;
+        const tick = () => setStatus(session.status());
+        tick();
+        const timer = setInterval(tick, 1000);
+        return () => clearInterval(timer);
+    }, [session]);
 
     const copy = async () => {
         try {
@@ -101,6 +110,16 @@ export default function ExternalPlayerDialog({ item, onClose }) {
                 <Button size="small" onClick={copy}>
                     {copied ? "Đã sao chép" : "Sao chép địa chỉ"}
                 </Button>
+                {status && (
+                    <Typography {...text}>
+                        Đã gửi {status.sent} đoạn (2 MB). Đang đọc{" "}
+                        {status.reading} đoạn từ Telegram
+                        {status.reading
+                            ? `, lâu nhất ${status.seconds} giây`
+                            : ""}
+                        .{status.error ? ` Lỗi gần nhất: ${status.error}` : ""}
+                    </Typography>
+                )}
                 <Typography {...text}>
                     Hoặc dán địa chỉ vào PotPlayer (Ctrl+U) hay VLC (Ctrl+N). Ai
                     có địa chỉ này đều xem được cho tới khi bạn dừng.
