@@ -15,7 +15,7 @@
  *
  *     play/<id>/<n>.bin    chunk n (bytes n*2MiB ...) of one open video
  */
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rm, statfs, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -126,6 +126,9 @@ export class Play {
         await mkdir(join(this.dir, id), { recursive: true, mode: 0o700 });
         this.sessions.set(id, {
             id,
+            // lets the tab upload without its cookie, to an address that does
+            // not go through Cloudflare (see deploy/nginx/cloudgram-upload.conf)
+            key: randomBytes(24).toString("base64url"),
             owner: user.username,
             name: name || "video",
             type,
@@ -150,6 +153,7 @@ export class Play {
         const session = this.sessions.get(id);
         return {
             id,
+            key: session.key,
             chunk: PLAY_CHUNK,
             chunks: session.chunks,
             path: `/api/p/${id}/${encodeURIComponent(session.name)}`,
@@ -184,9 +188,26 @@ export class Play {
         return { index };
     }
 
+    /**
+     * The tab's upload: by its cookie, or by the session's key in X-Play-Key
+     * (the direct address is another origin, so no cookie goes there).
+     */
+    async #uploader(req, res) {
+        const key = req.headers["x-play-key"];
+        if (key === undefined) {
+            const { user } = await this.authenticate(req, res);
+            return this.#own(user, req.params.id);
+        }
+        const session = this.#session(req.params.id);
+        const given = Buffer.from(String(key));
+        const wanted = Buffer.from(session.key);
+        if (given.length !== wanted.length || !timingSafeEqual(given, wanted))
+            throw new HttpError(404, "play_not_found");
+        return session;
+    }
+
     async putChunk(req, res) {
-        const { user } = await this.authenticate(req, res);
-        const session = this.#own(user, req.params.id);
+        const session = await this.#uploader(req, res);
         const index = Number(req.params.index);
         if (!Number.isInteger(index) || index < 0 || index >= session.chunks)
             throw new HttpError(400, "bad_chunk");
