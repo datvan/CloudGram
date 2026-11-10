@@ -50,6 +50,15 @@ const premiumWait = (error) =>
 export const isFinal = (error) =>
     error instanceof errors.RPCError && error.code >= 300 && error.code < 500;
 
+/** Requests waiting for a connection to the DC, and for Telegram's answer */
+export const flight = { sender: 0, invoke: 0 };
+/** The last thing Telegram made a request wait or retry for, for diagnosis */
+export const trouble = { text: "", at: 0 };
+const note = (text) => {
+    trouble.text = text;
+    trouble.at = Date.now();
+};
+
 /**
  * One request on the DC's transfer connection, retried through a dropped
  * connection, passing errors and short waits Telegram asks for. `stats`
@@ -65,12 +74,20 @@ export const isFinal = (error) =>
  */
 async function call(client, request, dcId, stats) {
     for (let attempt = 0; ; attempt += 1) {
-        const sender = await client.getSender(dcId);
+        flight.sender += 1;
+        let sender;
+        try {
+            sender = await client.getSender(dcId);
+        } finally {
+            flight.sender -= 1;
+        }
+        flight.invoke += 1;
         try {
             return await client.invoke(request, sender);
         } catch (error) {
             const premium = premiumWait(error);
             if (premium) {
+                note(`Telegram bắt chờ ${premium} giây (giới hạn tốc độ tải)`);
                 stats.waits.push(premium);
                 if (premium <= MAX_SILENT_WAIT && attempt < ATTEMPTS - 1) {
                     await helpers.sleep(premium * 1000);
@@ -80,9 +97,11 @@ async function call(client, request, dcId, stats) {
                 throw error;
             }
             if (error instanceof errors.FloodWaitError) {
+                note(`Telegram bắt chờ ${error.seconds} giây (FLOOD_WAIT)`);
                 stats.waits.push(error.seconds);
                 throw error;
             }
+            note(`lỗi ${error?.errorMessage ?? error?.message}, đang thử lại`);
             if (attempt < ATTEMPTS - 1 && !isFinal(error)) {
                 if (sender.isConnected()) stats.retries += 1;
                 else stats.reconnects += 1;
@@ -90,6 +109,8 @@ async function call(client, request, dcId, stats) {
                 continue;
             }
             throw error;
+        } finally {
+            flight.invoke -= 1;
         }
     }
 }
