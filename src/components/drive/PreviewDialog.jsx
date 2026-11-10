@@ -28,6 +28,7 @@ import StarBorderIcon from "@mui/icons-material/StarBorder";
 import PersonAddAltOutlinedIcon from "@mui/icons-material/PersonAddAltOutlined";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import LaunchIcon from "@mui/icons-material/Launch";
 
 import { kindOf, previewKind } from "./fileTypes";
 import { FileIcon } from "./FileIcon";
@@ -40,7 +41,7 @@ import { useThumbnail } from "../../utils/thumbnails";
 import { useDrive } from "../../services/drive";
 import { needsConvert } from "../../services/convert";
 import { canStream, streamOffReason, streamUrl } from "../../services/stream";
-import { LOCAL_HELPER } from "../../config/features";
+import { EXTERNAL_PLAYER, LOCAL_HELPER } from "../../config/features";
 import { partChain } from "../../utils/partGroup";
 import VideoPlayer from "./VideoPlayer";
 
@@ -487,13 +488,30 @@ export default function PreviewDialog({
                             : "Không xem trước được loại tệp này."}
                     </Typography>
                     {item.file_id != null && (
-                        <Button
-                            variant="contained"
-                            onClick={download}
-                            startIcon={<FileDownloadOutlinedIcon />}
-                        >
-                            Tải xuống
-                        </Button>
+                        <Stack direction="row" spacing={1}>
+                            {EXTERNAL_PLAYER &&
+                                onAction &&
+                                kind === "video" && (
+                                    <Button
+                                        variant="contained"
+                                        onClick={() =>
+                                            onAction("external", live)
+                                        }
+                                        startIcon={<LaunchIcon />}
+                                    >
+                                        Mở bằng PotPlayer, VLC...
+                                    </Button>
+                                )}
+                            <Button
+                                variant={
+                                    kind === "video" ? "outlined" : "contained"
+                                }
+                                onClick={download}
+                                startIcon={<FileDownloadOutlinedIcon />}
+                            >
+                                Tải xuống
+                            </Button>
+                        </Stack>
                     )}
                 </Stack>
             );
@@ -765,6 +783,15 @@ export default function PreviewDialog({
                                     </IconButton>
                                 </span>
                             </Tooltip>
+                        )}
+                        {EXTERNAL_PLAYER && onAction && kind === "video" && (
+                            <Action
+                                title="Mở bằng PotPlayer, VLC..."
+                                onClick={() => onAction("external", live)}
+                                disabled={item.file_id == null}
+                            >
+                                <LaunchIcon />
+                            </Action>
                         )}
                         <Action
                             title="Tải xuống"

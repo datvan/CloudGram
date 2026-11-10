@@ -11,7 +11,7 @@ import CodeIcon from "@mui/icons-material/Code";
 import ArticleIcon from "@mui/icons-material/Article";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 
-import { CONVERT_EXT, needsConvert } from "../../services/convert";
+import { CONVERT_EXT, isTsVideo, needsConvert } from "../../services/convert";
 
 /**
  * File kinds by extension, with Drive's colour coding. Icons are bundled MUI
@@ -128,6 +128,7 @@ export function extensionOf(name) {
 
 export function kindOf(record) {
     if (record.type === "folder") return "folder";
+    if (isTsVideo(record)) return "video";
     return byExt.get(extensionOf(record.name)) ?? "other";
 }
 

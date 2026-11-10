@@ -25,9 +25,17 @@ export const CONVERT_EXT = [
 
 const extOf = (name) => name?.split(".").pop().toLowerCase();
 
+// .ts is also TypeScript. A source file is never this big, a video stream
+// (MPEG-TS) is, so size tells them apart without opening the file.
+const TS_VIDEO_MIN = 1024 * 1024;
+
+/** An MPEG-TS video, not a TypeScript file. */
+export const isTsVideo = (record) =>
+    extOf(record.name) === "ts" && record.size >= TS_VIDEO_MIN;
+
 /** Does this file have to go through ffmpeg before a <video> can play it? */
 export const needsConvert = (record) =>
-    CONVERT_EXT.includes(extOf(record.name));
+    CONVERT_EXT.includes(extOf(record.name)) || isTsVideo(record);
 
 // h264 with these sounds goes into an mp4 as it is, in seconds; anything else
 // is re-encoded, which in WebAssembly runs at a fraction of real time

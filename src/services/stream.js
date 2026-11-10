@@ -304,6 +304,17 @@ async function answer({ fileId, start, end, quiet }) {
     return { start, size, type: file.type, bytes: bytes.buffer };
 }
 
+/**
+ * Bytes `start`..`end` of a video (at most two parts), read for a program
+ * other than the player in this page: { start, size, type, bytes }.
+ */
+export async function readRange(record, start, end) {
+    streamUrl(record, { quiet: true });
+    const result = await answer({ fileId: record.file_id, start, end });
+    if (result.error) throw new Error(result.error);
+    return result;
+}
+
 /** Start answering the service worker; called once at start-up. */
 export function startStreaming() {
     const sw = navigator.serviceWorker;
