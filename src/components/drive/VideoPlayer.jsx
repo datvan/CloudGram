@@ -38,6 +38,7 @@ import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import CheckIcon from "@mui/icons-material/Check";
 import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
+import LaunchIcon from "@mui/icons-material/Launch";
 
 import {
     setBitrate,
@@ -360,6 +361,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
         onNext,
         onPrev,
         onDownload,
+        onExternal,
         parts,
         startAt = 0,
     },
@@ -409,6 +411,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     const [ended, setEnded] = useState(false);
     const [countdown, setCountdown] = useState(null);
     const [notice, setNotice] = useState(null);
+    // null: not known; "show": picture without sound; "hide": dismissed
+    const [silent, setSilent] = useState(null);
     const hideTimer = useRef(null);
     const lastSave = useRef(0);
     const resumeAt = useRef(0);
@@ -1010,6 +1014,27 @@ const VideoPlayer = forwardRef(function VideoPlayer(
             g.current.goto(startAt, 0, true);
     }, [grouped, startAt]);
 
+    // The browser plays a video it cannot decode the sound of (DTS, AC3...) as
+    // a silent picture, with no error. Chrome counts the audio bytes it
+    // decoded: still none after some seconds of playing means no sound.
+    useEffect(() => {
+        if (!started || paused || silent) return undefined;
+        const timer = setInterval(() => {
+            const v = video.current;
+            if (
+                v &&
+                !v.paused &&
+                !v.muted &&
+                v.volume > 0 &&
+                v.readyState >= 3 &&
+                v.currentTime >= 3 &&
+                v.webkitAudioDecodedByteCount === 0
+            )
+                setSilent("show");
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [started, paused, silent]);
+
     const volumeIcon =
         prefs.muted || prefs.volume === 0 ? (
             <VolumeOffIcon />
@@ -1237,6 +1262,47 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                             Xem từ đầu
                         </Button>
                     )}
+                </Stack>
+            )}
+
+            {silent === "show" && !error && (
+                <Stack
+                    direction="row"
+                    alignItems="center"
+                    spacing={1}
+                    sx={{
+                        position: "absolute",
+                        top: 72,
+                        left: "50%",
+                        transform: "translateX(-50%)",
+                        maxWidth: "92%",
+                        bgcolor: "rgba(0,0,0,.8)",
+                        borderRadius: 1,
+                        px: 1.5,
+                        py: 0.75,
+                    }}
+                >
+                    <Typography sx={{ ...white, fontSize: 14 }}>
+                        Không có tiếng: tệp không có âm thanh, hoặc trình duyệt
+                        không phát được loại âm thanh này (DTS, AC3...).
+                    </Typography>
+                    {onExternal && (
+                        <Button
+                            size="small"
+                            onClick={onExternal}
+                            startIcon={<LaunchIcon />}
+                            sx={{ color: "#3ea6ff", whiteSpace: "nowrap" }}
+                        >
+                            Mở bằng PotPlayer, VLC...
+                        </Button>
+                    )}
+                    <Button
+                        size="small"
+                        onClick={() => setSilent("hide")}
+                        sx={{ color: "#fff" }}
+                    >
+                        Bỏ qua
+                    </Button>
                 </Stack>
             )}
 
@@ -1557,6 +1623,8 @@ VideoPlayer.propTypes = {
     onNext: PropTypes.func,
     onPrev: PropTypes.func,
     onDownload: PropTypes.func,
+    // open the video in a player on this computer; absent when not offered
+    onExternal: PropTypes.func,
     // the records of one video cut into parts, in order, and which one was
     // opened; without them the player plays `record` alone
     parts: PropTypes.array,
