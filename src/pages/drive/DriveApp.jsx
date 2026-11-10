@@ -65,6 +65,7 @@ import DropboxDialog from "../../components/drive/DropboxDialog";
 import ResumeBanner from "../../components/drive/ResumeBanner";
 import TransferPanel from "../../components/drive/TransferPanel";
 import OversizeDialog from "../../components/drive/OversizeDialog";
+import ExternalPlayerDialog from "../../components/drive/ExternalPlayerDialog";
 import useMarquee from "../../components/drive/useMarquee";
 import {
     ConfirmDialog,
@@ -502,6 +503,9 @@ export default function DriveApp({ mode, onToggleMode }) {
                 break;
             case "share":
                 if (single) setDialog({ type: "share", id: single.id });
+                break;
+            case "external":
+                if (single) setDialog({ type: "external", item: single });
                 break;
             case "rename":
                 if (single) setDialog({ type: "rename", item: single });
@@ -1789,6 +1793,11 @@ export default function DriveApp({ mode, onToggleMode }) {
                     conflict?.resolve(choice);
                     setConflict(null);
                 }}
+            />
+
+            <ExternalPlayerDialog
+                item={dialog?.type === "external" ? dialog.item : null}
+                onClose={() => setDialog(null)}
             />
 
             <OversizeDialog
