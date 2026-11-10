@@ -537,6 +537,11 @@ export default function PreviewDialog({
                             onNext={nextVideo && (() => onNavigate(nextVideo))}
                             onPrev={prevVideo && (() => onNavigate(prevVideo))}
                             onDownload={download}
+                            onExternal={
+                                EXTERNAL_PLAYER && onAction
+                                    ? () => onAction("external", live)
+                                    : undefined
+                            }
                         />
                     );
                 // no service worker (blocked, or a hard reload): the whole
