@@ -88,3 +88,27 @@ switch/resume and service-worker rollback still need browser validation.
 6. Update this canonical document, environment examples and both agent pointers
    together when the flag contract changes. Publish and deploy only with user
    authorization; verify deployed assets and API health after deployment.
+
+## Playing in an outside player (VPS relay)
+
+These are features, not security fixes, but they move video through the VPS, so
+they are listed here. Only the exact value `0` disables them.
+
+| Flag                           | Configuration              | Effect                                                                                        |
+| ------------------------------ | -------------------------- | --------------------------------------------------------------------------------------------- |
+| `VITE_FEATURE_EXTERNAL_PLAYER` | Frontend build environment | The "Mở bằng PotPlayer, VLC..." button; `0` removes it                                        |
+| `CLOUDGRAM_PLAY`               | API environment            | `0` makes `POST /api/play` answer 403 `play_off`; existing addresses stop at the next restart |
+| `CLOUDGRAM_PLAY_CACHE_MB`      | API environment            | Cache cap for all videos together (default 1024 MB); each video also keeps at most 512 MB     |
+
+How it works (`server/play.js`): the signed-in tab opens a session and answers
+the server's long-poll for 2 MiB chunks, reading them from Telegram; the player
+reads `/api/p/<token>/<name>` with Range and no cookie. The token is random and
+is the only credential. **The video passes through the VPS unencrypted**, and
+anyone holding the address can read it until the tab closes, "Dừng" is pressed,
+the tab goes silent for 90 s, 12 h pass, or the API restarts (it empties
+`/var/lib/cloudgram-api/play` at start). Limits: 3 videos per account, 8 in
+all, and none start with less than 1 GiB of free disk.
+
+Verify: `npm run test:api` (`play.test.js`, `external-player.test.js`). Not
+verified without a real Telegram account: a real player on the VPS address,
+Cloudflare's terms and timeouts for video, `potplayer://https://...` in Chrome.

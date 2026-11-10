@@ -75,7 +75,26 @@ export const api = {
     listShares: () => request("GET", "/shares"),
     publicShare: (id) => request("GET", `/s/${encodeURIComponent(id)}`),
     resolveDropbox: (url) => request("POST", "/dropbox/resolve", { url }),
+    createPlay: (body) => request("POST", "/play", body),
+    playNext: (id) => request("GET", `/play/${id}/next`),
+    failPlay: (id, index) => request("POST", `/play/${id}/fail`, { index }),
+    closePlay: (id) => request("DELETE", `/play/${id}`),
 };
+
+export async function putPlayChunk(id, index, bytes) {
+    let res;
+    try {
+        res = await fetch(`/api/play/${id}/chunks/${index}`, {
+            method: "PUT",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: bytes,
+        });
+    } catch {
+        throw new ApiError(0, "offline");
+    }
+    return parse(res);
+}
 
 export async function putShareChunk(id, index, bytes) {
     let res;

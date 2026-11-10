@@ -1,6 +1,6 @@
 # Plan nghiên cứu: xem video bằng trình phát ngoài mà không cần `cloudgram-helper.mjs`
 
-Trạng thái 2026-11-10: **mới là plan nghiên cứu, chưa viết code.** Mục tiêu: bấm "Mở bằng PotPlayer" (hoặc xem tệp `.ts` quá lớn) mà người dùng không phải tải, không phải chạy `node cloudgram-helper.mjs`.
+Trạng thái 2026-11-10: **đã chọn H1 (cầu nối qua VPS), đã viết code** (`server/play.js`, `src/services/externalPlayer.js`); chưa kiểm với PotPlayer thật. Cầu nối của helper (`cloudgram-helper.mjs`) không còn được giao diện gọi tới nhưng vẫn nằm trong repo. Các mục bên dưới là phân tích ban đầu.
 
 ## Điều cần nói thẳng trước
 
