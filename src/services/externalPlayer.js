@@ -10,6 +10,7 @@
  */
 import { api, putPlayChunk } from "./api";
 import { readRange } from "./stream";
+import { isOnline } from "./telegram";
 
 // polls open at once: a player asks for several ranges together
 const WORKERS = 3;
@@ -18,6 +19,18 @@ const fail = (message, code) => Object.assign(new Error(message), { code });
 
 /** file_id -> { url, stop }: a video already open is not opened twice */
 const open = new Map();
+
+/** readRange, waiting out a Telegram reconnect (up to ~30 s) instead of failing */
+async function readWhenOnline(record, start, end) {
+    for (let tries = 0; ; tries += 1) {
+        try {
+            return await readRange(record, start, end);
+        } catch (error) {
+            if (error.message !== "offline" || tries >= 15) throw error;
+            await pause(2000);
+        }
+    }
+}
 
 /** Answer the server's chunk requests until the video is closed. */
 async function serve(made, record, size, state) {
@@ -39,7 +52,7 @@ async function serve(made, record, size, state) {
         const began = Date.now();
         state.reading.set(next.index, began);
         try {
-            const { bytes } = await readRange(
+            const { bytes } = await readWhenOnline(
                 record,
                 start,
                 Math.min(size - 1, start + made.chunk - 1),
@@ -106,6 +119,7 @@ export async function startRelay(record) {
                     1000,
             ),
             error: state.error,
+            online: isOnline(),
         }),
         url: `${window.location.origin}${made.path}`,
         stop: () => {

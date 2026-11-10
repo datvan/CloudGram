@@ -117,7 +117,8 @@ export default function ExternalPlayerDialog({ item, onClose }) {
                         {status.reading
                             ? `, lâu nhất ${status.seconds} giây`
                             : ""}
-                        .{status.error ? ` Lỗi gần nhất: ${status.error}` : ""}
+                        .{status.online ? "" : " Telegram đang mất kết nối."}
+                        {status.error ? ` Lỗi gần nhất: ${status.error}` : ""}
                     </Typography>
                 )}
                 <Typography {...text}>
