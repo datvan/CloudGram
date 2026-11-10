@@ -319,6 +319,17 @@ test("a chunk can come with the session's key instead of a cookie", async () => 
     const other = await create();
     assert.equal((await put(other.key)).status, 404);
     assert.equal((await put(made.key)).status, 200);
+    // the poll takes the key too (the tab polls the direct address as well)
+    const poll = (key) =>
+        fetch(`${base}/api/play/${made.id}/next`, {
+            headers: { Origin: ORIGIN, ...(key ? { "X-Play-Key": key } : {}) },
+        });
+    assert.equal((await poll()).status, 401);
+    assert.equal((await poll("x".repeat(32))).status, 404);
+    assert.equal((await poll(other.key)).status, 404);
+    const polled = await poll(made.key);
+    assert.equal(polled.status, 200);
+    assert.deepEqual(await polled.json(), { index: null });
     // the player can read what was put, without asking the tab for it
     const first = await get(made.path, "bytes=0-9");
     assert.ok(first.body.equals(VIDEO.subarray(0, 10)));

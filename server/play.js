@@ -162,8 +162,7 @@ export class Play {
 
     /** Long poll: the next chunk the tab should fetch, or null after a while. */
     async next(req, res) {
-        const { user } = await this.authenticate(req, res);
-        const session = this.#own(user, req.params.id);
+        const session = await this.#uploader(req, res);
         session.seen = this.now();
         const take = () => {
             while (session.wanted.length) {
@@ -189,8 +188,9 @@ export class Play {
     }
 
     /**
-     * The tab's upload: by its cookie, or by the session's key in X-Play-Key
-     * (the direct address is another origin, so no cookie goes there).
+     * The tab's poll and upload: by its cookie, or by the session's key in
+     * X-Play-Key (the direct address is another origin, so no cookie goes
+     * there; and Cloudflare rate-limits a poll that answers fast, 429).
      */
     async #uploader(req, res) {
         const key = req.headers["x-play-key"];
