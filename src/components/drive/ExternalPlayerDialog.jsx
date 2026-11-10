@@ -11,132 +11,99 @@ import {
     Typography,
 } from "@mui/material";
 
-import {
-    PLAYER_LABEL,
-    externalPlayers,
-    openInPlayer,
-} from "../../services/externalPlayer";
+import { startRelay } from "../../services/externalPlayer";
+
+/** A playlist file opens in whatever player the user has set for .m3u */
+function downloadPlaylist(name, url) {
+    const blob = new Blob([`#EXTM3U\n${url}\n`], {
+        type: "audio/x-mpegurl",
+    });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${name.replace(/\.[^.]+$/, "")}.m3u`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+}
 
 /**
- * Open a video in a player installed on this computer. Looks for the local
- * helper and the players it found when it opens; every state says what to do.
+ * Play a video in PotPlayer, VLC or mpv on this computer. The server keeps a
+ * short cache and gives an address; nothing is installed here. Closing the
+ * dialog leaves the video playing; "Dừng" ends it and clears the cache.
  */
 export default function ExternalPlayerDialog({ item, onClose }) {
-    // undefined while looking
-    const [found, setFound] = useState(undefined);
-    const [busy, setBusy] = useState("");
-    const [opened, setOpened] = useState("");
+    // { url, stop } once ready
+    const [session, setSession] = useState(null);
     const [error, setError] = useState("");
+    const [copied, setCopied] = useState(false);
 
-    const look = () => {
-        setFound(undefined);
-        externalPlayers().then(setFound);
-    };
     useEffect(() => {
         if (!item) return undefined;
         let live = true;
-        setOpened("");
+        setSession(null);
         setError("");
-        setBusy("");
-        setFound(undefined);
-        externalPlayers().then((now) => live && setFound(now));
+        setCopied(false);
+        startRelay(item).then(
+            (made) => live && setSession(made),
+            (err) => live && setError(err.message),
+        );
         return () => {
             live = false;
         };
     }, [item]);
 
-    const open = async (player) => {
-        setError("");
-        setBusy(player);
+    const copy = async () => {
         try {
-            await openInPlayer(item, player);
-            setOpened(PLAYER_LABEL[player]);
-        } catch (err) {
-            setError(err.message);
+            await navigator.clipboard.writeText(session.url);
+            setCopied(true);
+        } catch {
+            setError("Không sao chép được, hãy chọn địa chỉ và sao chép tay.");
         }
-        setBusy("");
+    };
+    const stop = async () => {
+        await session.stop();
+        onClose();
     };
 
     const text = { variant: "body2", color: "text.secondary" };
     let body;
-    if (opened)
+    if (error)
         body = (
-            <Typography {...text}>
-                Đã mở trong {opened}. Giữ tab CloudGram này mở trong lúc xem:
-                video được đọc từ Telegram qua tab này.
+            <Typography variant="body2" color="error">
+                {error}
             </Typography>
         );
-    else if (found === undefined)
-        body = (
-            <Typography {...text}>Đang tìm chương trình hỗ trợ...</Typography>
-        );
-    else if (!found.helper)
-        body = (
-            <Stack spacing={1} alignItems="flex-start">
-                <Typography {...text}>
-                    Cần chương trình hỗ trợ chạy trên máy này. Tải{" "}
-                    <a href="/helper/cloudgram-helper.mjs" download>
-                        cloudgram-helper.mjs
-                    </a>
-                    , mở Terminal tại thư mục chứa nó rồi chạy{" "}
-                    <code>node cloudgram-helper.mjs</code> (cần Node.js). Giữ
-                    cửa sổ đó mở, rồi bấm Kiểm tra lại.
-                </Typography>
-                <Button size="small" onClick={look}>
-                    Kiểm tra lại
-                </Button>
-            </Stack>
-        );
-    else if (found.outdated)
-        body = (
-            <Stack spacing={1} alignItems="flex-start">
-                <Typography {...text}>
-                    Chương trình hỗ trợ đang chạy là bản cũ, chưa mở được trình
-                    phát. Tắt nó (Ctrl+C), tải lại{" "}
-                    <a href="/helper/cloudgram-helper.mjs" download>
-                        cloudgram-helper.mjs
-                    </a>{" "}
-                    rồi chạy lại, sau đó bấm Kiểm tra lại.
-                </Typography>
-                <Button size="small" onClick={look}>
-                    Kiểm tra lại
-                </Button>
-            </Stack>
-        );
-    else if (!found.players.length)
-        body = (
-            <Stack spacing={1} alignItems="flex-start">
-                <Typography {...text}>
-                    Chương trình hỗ trợ không tìm thấy PotPlayer, VLC hay mpv
-                    trên máy. Cài một trong số đó, rồi bấm Kiểm tra lại. Nếu đã
-                    cài ở chỗ lạ, chạy helper với biến CLOUDGRAM_POTPLAYER,
-                    CLOUDGRAM_VLC hoặc CLOUDGRAM_MPV trỏ tới tệp chạy của nó.
-                </Typography>
-                <Button size="small" onClick={look}>
-                    Kiểm tra lại
-                </Button>
-            </Stack>
-        );
+    else if (!session)
+        body = <Typography {...text}>Đang chuẩn bị...</Typography>;
     else
         body = (
             <Stack spacing={1} alignItems="flex-start">
                 <Typography {...text}>
-                    Video chạy ngay, tua được, không cần tải cả tệp. Giữ tab này
-                    mở trong lúc xem.
+                    Video chạy ngay, tua được, không cần tải cả tệp. Giữ tab
+                    CloudGram này mở trong lúc xem: video được đọc từ Telegram
+                    qua tab này, rồi đi qua máy chủ CloudGram (chưa mã hoá) tới
+                    trình phát. Máy chủ chỉ giữ một đoạn ngắn và xoá khi bạn
+                    dừng hoặc đóng tab.
                 </Typography>
-                {found.players.map((player) => (
-                    <Button
-                        key={player}
-                        variant="contained"
-                        size="small"
-                        disabled={Boolean(busy)}
-                        onClick={() => open(player)}
-                    >
-                        {busy === player
-                            ? "Đang mở..."
-                            : `Mở bằng ${PLAYER_LABEL[player]}`}
-                    </Button>
-                ))}
+                <Button
+                    variant="contained"
+                    size="small"
+                    href={`potplayer://${session.url}`}
+                >
+                    Mở bằng PotPlayer
+                </Button>
+                <Button
+                    size="small"
+                    onClick={() => downloadPlaylist(item.name, session.url)}
+                >
+                    Tải danh sách phát (.m3u) cho VLC, mpv
+                </Button>
+                <Button size="small" onClick={copy}>
+                    {copied ? "Đã sao chép" : "Sao chép địa chỉ"}
+                </Button>
+                <Typography {...text}>
+                    Hoặc dán địa chỉ vào PotPlayer (Ctrl+U) hay VLC (Ctrl+N). Ai
+                    có địa chỉ này đều xem được cho tới khi bạn dừng.
+                </Typography>
             </Stack>
         );
 
@@ -154,13 +121,9 @@ export default function ExternalPlayerDialog({ item, onClose }) {
                     </Typography>
                 )}
                 {body}
-                {error && (
-                    <Typography variant="body2" color="error" sx={{ mt: 1 }}>
-                        {error}
-                    </Typography>
-                )}
             </DialogContent>
             <DialogActions>
+                {session && <Button onClick={stop}>Dừng</Button>}
                 <Button onClick={onClose}>Đóng</Button>
             </DialogActions>
         </Dialog>

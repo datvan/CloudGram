@@ -1,120 +1,105 @@
 /**
  * Open a video in PotPlayer, VLC or mpv on this computer.
  *
- * A player cannot read from this page, so the local helper (splitHelper.js,
- * public/helper) gives it an address on 127.0.0.1 and asks this page, which
- * holds the Telegram session, for the bytes the player wants: each one is a
- * poll the helper answers with a range, and the bytes go back in a POST. The
- * page sends only the player's name, never a path. The tab has to stay open
- * while the video plays.
+ * A player cannot read from this tab, which holds the Telegram session. So
+ * the server keeps a cache in between (server/play.js): the player reads a
+ * Range address there, the server asks this tab, by a long poll, for the 2 MiB
+ * chunks the player needs and some ahead of it, and each is read from Telegram
+ * here (stream.js) and put to the server. The tab has to stay open while the
+ * video plays; the server drops the cache when it does not.
  */
-import { call, helperStatus } from "./splitHelper";
+import { api, putPlayChunk } from "./api";
 import { readRange } from "./stream";
-
-// the order a player is picked in when the user has not chosen
-const PREFERRED = ["potplayer", "vlc", "mpv"];
-export const PLAYER_LABEL = { potplayer: "PotPlayer", vlc: "VLC", mpv: "mpv" };
 
 // polls open at once: a player asks for several ranges together
 const WORKERS = 3;
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const fail = (message, code) => Object.assign(new Error(message), { code });
 
-/**
- * What can be done now: { helper: false } when the helper is not running,
- * else the players it found (in the order to offer them).
- */
-export async function externalPlayers() {
-    const status = await helperStatus();
-    if (!status) return { helper: false, players: [] };
-    const found = status.players ?? [];
-    return {
-        helper: true,
-        // an older helper has no players list at all
-        outdated: !("players" in status),
-        players: PREFERRED.filter((name) => found.includes(name)),
-    };
-}
+/** file_id -> { url, stop }: a video already open is not opened twice */
+const open = new Map();
 
-/** Answer the helper's requests until it closes the video or goes away. */
-async function serve(token, record, state) {
+/** Answer the server's chunk requests until the video is closed. */
+async function serve(made, record, size, state) {
     let failures = 0;
     while (!state.stopped) {
         let next;
         try {
-            next = await call(`/bridge/${token}/next`);
-        } catch {
-            // the helper went away; a few tries, then the video is over
-            if ((failures += 1) >= 3) return;
+            next = await api.playNext(made.id);
+        } catch (error) {
+            // closed on the server (or signed out): the video is over
+            if (error.status === 401 || error.status === 404) return;
+            if ((failures += 1) >= 5) return;
             await pause(1000);
             continue;
         }
         failures = 0;
-        if (next.status === 204) continue;
-        if (next.status !== 200) return;
-        const { id, start, end } = await next.json();
-        let body;
-        let query = "";
+        if (next.index === null) continue;
+        const start = next.index * made.chunk;
         try {
-            const { bytes } = await readRange(record, start, end);
-            body = bytes;
+            const { bytes } = await readRange(
+                record,
+                start,
+                Math.min(size - 1, start + made.chunk - 1),
+            );
+            await putPlayChunk(made.id, next.index, bytes);
         } catch (error) {
             console.log(error);
-            query = "?error=1";
+            if (error.status === 404 || error.status === 401) return;
+            // tell the server, so the player's stream is cut and not left hanging
+            await api.failPlay(made.id, next.index).catch(() => {});
         }
-        await call(`/bridge/${token}/${id}${query}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/octet-stream" },
-            body,
-        }).catch(() => {});
     }
 }
 
 /**
- * Start `record` in `player`. Resolves once the helper has launched it;
- * `stop()` closes the video on the helper's side. Throws with `.code`
- * "helper", "player" or "read" (and a message to show).
+ * Make `record` playable at an address on the server. Resolves with
+ * `{ url, stop }`; throws with `.code` "read" (Telegram), "off", "busy",
+ * "disk" or "server", and a message to show.
  */
-export async function openInPlayer(record, player) {
+export async function startRelay(record) {
+    const known = open.get(record.file_id);
+    if (known) return known;
     let first;
     try {
         first = await readRange(record, 0, 0);
     } catch (error) {
         console.log(error);
-        throw Object.assign(new Error("Không đọc được tệp từ Telegram."), {
-            code: "read",
-        });
+        throw fail("Không đọc được tệp từ Telegram.", "read");
     }
-    let res;
+    let made;
     try {
-        res = await call("/play", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                name: record.name,
-                size: first.size,
-                type: first.type,
-                player,
-            }),
+        made = await api.createPlay({
+            name: record.name,
+            size: first.size,
+            type: first.type,
         });
-    } catch {
-        throw Object.assign(new Error("Chương trình hỗ trợ không chạy."), {
-            code: "helper",
-        });
+    } catch (error) {
+        throw error.code === "play_off"
+            ? fail("Máy chủ đang tắt tính năng này.", "off")
+            : error.code === "play_busy"
+            ? fail("Máy chủ đang phát nhiều video, thử lại sau.", "busy")
+            : error.code === "disk_full"
+            ? fail("Máy chủ hết chỗ chứa tạm.", "disk")
+            : fail("Không kết nối được máy chủ CloudGram.", "server");
     }
-    if (!res.ok)
-        throw Object.assign(
-            new Error(`Không mở được ${PLAYER_LABEL[player] ?? player}.`),
-            { code: "player" },
-        );
-    const { token } = await res.json();
     const state = { stopped: false };
-    for (let i = 0; i < WORKERS; i += 1) serve(token, record, state);
-    return {
+    const session = {
+        url: `${window.location.origin}${made.path}`,
         stop: () => {
             state.stopped = true;
-            return call(`/bridge/${token}`, { method: "DELETE" }).catch(
-                () => {},
-            );
+            open.delete(record.file_id);
+            return api.closePlay(made.id).catch(() => {});
         },
     };
+    open.set(record.file_id, session);
+    const done = [];
+    for (let i = 0; i < WORKERS; i += 1)
+        done.push(serve(made, record, first.size, state));
+    // every poll over: closed here, on the server, or signed out
+    Promise.all(done).then(() => {
+        state.stopped = true;
+        if (open.get(record.file_id) === session) open.delete(record.file_id);
+    });
+    return session;
 }

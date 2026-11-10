@@ -8,6 +8,7 @@ import { createReadStream } from "node:fs";
 import { createServer } from "node:http";
 
 import { HttpError, LIMITS } from "./app.js";
+import { PlayReply } from "./play.js";
 import { FileReply, SHARE_LIMITS } from "./shares.js";
 
 const ROUTES = {
@@ -32,6 +33,7 @@ const ROUTES = {
     "POST /api/lease/release": "release",
     "POST /api/shares": "shares.create",
     "POST /api/dropbox/resolve": "dropbox.resolve",
+    "POST /api/play": "play.create",
     "GET /api/shares": "shares.list",
 };
 
@@ -55,6 +57,38 @@ const PATTERNS = [
         re: /^\/api\/shares\/([^/]+)$/,
         keys: ["id"],
         handler: "shares.remove",
+    },
+    {
+        method: "GET",
+        re: /^\/api\/play\/([^/]+)\/next$/,
+        keys: ["id"],
+        handler: "play.next",
+    },
+    {
+        method: "PUT",
+        re: /^\/api\/play\/([^/]+)\/chunks\/(\d+)$/,
+        keys: ["id", "index"],
+        handler: "play.putChunk",
+        raw: true,
+    },
+    {
+        method: "POST",
+        re: /^\/api\/play\/([^/]+)\/fail$/,
+        keys: ["id"],
+        handler: "play.fail",
+    },
+    {
+        method: "DELETE",
+        re: /^\/api\/play\/([^/]+)$/,
+        keys: ["id"],
+        handler: "play.close",
+    },
+    // public: whoever holds the token (a player has no cookie)
+    {
+        method: "GET",
+        re: /^\/api\/p\/([^/]+)\/[^/]+$/,
+        keys: ["id"],
+        handler: "play.open",
     },
     // public: anyone holding a link
     {
@@ -208,6 +242,9 @@ export function createApiServer(
                     : undefined,
             };
             const result = await resolve(api, found.handler)(request, reply);
+            // the player route writes its own response, bytes as they come
+            if (result instanceof PlayReply)
+                return result.run(res, req.method === "HEAD");
             if (result instanceof FileReply) {
                 res.writeHead(200, {
                     "Content-Type": "application/octet-stream",

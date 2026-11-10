@@ -1,6 +1,6 @@
-// The page half of "open in PotPlayer/VLC/mpv" (src/services/externalPlayer.js)
-// and the .ts rule (src/services/convert.js). The helper half is tested in
-// helper-player.test.js against the real helper.
+// The page half of "open in PotPlayer/VLC/mpv" (src/services/externalPlayer.js,
+// answering the server's relay in server/play.js, tested in play.test.js) and
+// the .ts rule (src/services/convert.js).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
@@ -36,147 +36,123 @@ test(".ts is a video only when it is big enough to be one", async () => {
     assert.equal(needsConvert({ name: "a.mts", size: 10 }), true);
 });
 
-const response = (status, body) => ({
-    status,
-    ok: status >= 200 && status < 300,
-    json: async () => body,
-});
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const CHUNK = 2 * MB;
 
-test("externalPlayers lists what the helper found, in the order to offer", async () => {
-    const run = (status) =>
-        load(
-            "../../src/services/externalPlayer.js",
-            { helperStatus: async () => status },
-            ["externalPlayers"],
-        ).then((m) => m.externalPlayers());
-
-    assert.deepEqual(JSON.parse(JSON.stringify(await run(null))), {
-        helper: false,
-        players: [],
-    });
-    assert.deepEqual(
-        JSON.parse(
-            JSON.stringify(await run({ players: ["mpv", "vlc", "other"] })),
-        ),
+/** The page's service with a fake api and a fake Telegram read. */
+function relay({ api, readRange, puts = [] }) {
+    return load(
+        "../../src/services/externalPlayer.js",
         {
-            helper: true,
-            outdated: false,
-            players: ["vlc", "mpv"],
+            window: { location: { origin: "https://cg.test" } },
+            api,
+            readRange,
+            putPlayChunk: async (id, index, bytes) =>
+                puts.push([id, index, bytes.byteLength]),
         },
+        ["startRelay"],
     );
-    // a helper from before the bridge has no list at all
-    assert.equal((await run({ ffmpeg: true })).outdated, true);
+}
+
+const read = async (r, start, end) => ({
+    size: 3 * CHUNK - 5,
+    type: "video/mp2t",
+    bytes: new ArrayBuffer(end - start + 1),
 });
 
-test("openInPlayer sends a player name and no path, then serves the helper's ranges", async () => {
+test("startRelay makes a session, answers the server's chunk requests, stops", async () => {
     const calls = [];
-    const asked = [{ id: "0", start: 10, end: 19 }];
-    const record = { file_id: 7, name: "clip.ts" };
+    const puts = [];
+    const asked = [1, 2];
     const reads = [];
-    const m = await load(
-        "../../src/services/externalPlayer.js",
-        {
-            readRange: async (r, start, end) => {
-                reads.push([start, end]);
-                return {
-                    size: 100,
-                    type: "video/mp2t",
-                    bytes: new ArrayBuffer(end - start + 1),
-                };
-            },
-            call: async (path, init = {}) => {
-                calls.push({ path, init });
-                if (path === "/play") return response(200, { token: "tok" });
-                if (path === "/bridge/tok/next") {
-                    const next = asked.shift();
-                    return next
-                        ? response(200, next)
-                        : // nothing more: the video was closed
-                          response(410, {});
-                }
-                return response(200, {});
-            },
+    const m = await relay({
+        puts,
+        readRange: async (r, start, end) => {
+            reads.push([start, end]);
+            return read(r, start, end);
         },
-        ["openInPlayer"],
-    );
-
-    const opened = await m.openInPlayer(record, "vlc");
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const play = calls.find((c) => c.path === "/play");
-    assert.deepEqual(JSON.parse(play.init.body), {
+        api: {
+            createPlay: async (body) => {
+                calls.push(["create", body]);
+                return { id: "abc", chunk: CHUNK, path: "/api/p/abc/clip.ts" };
+            },
+            playNext: async () => {
+                if (asked.length) return { index: asked.shift() };
+                await wait(5);
+                return { index: null };
+            },
+            failPlay: async () => {},
+            closePlay: async (id) => calls.push(["close", id]),
+        },
+    });
+    const record = { file_id: 7, name: "clip.ts" };
+    const session = await m.startRelay(record);
+    assert.equal(session.url, "https://cg.test/api/p/abc/clip.ts");
+    // the same video is not opened twice
+    assert.equal(await m.startRelay(record), session);
+    await wait(40);
+    assert.deepEqual(JSON.parse(JSON.stringify(calls[0][1])), {
         name: "clip.ts",
-        size: 100,
+        size: 3 * CHUNK - 5,
         type: "video/mp2t",
-        player: "vlc",
     });
-    // the first probe, then the helper's request
-    assert.deepEqual(reads, [
-        [0, 0],
-        [10, 19],
+    // the probe, then chunk 1 whole, then the short last chunk
+    assert.deepEqual(reads.slice(1).sort(), [
+        [CHUNK, 2 * CHUNK - 1],
+        [2 * CHUNK, 3 * CHUNK - 6],
     ]);
-    const answer = calls.find((c) => c.path === "/bridge/tok/0");
-    assert.equal(answer.init.method, "POST");
-    assert.equal(answer.init.body.byteLength, 10);
+    assert.deepEqual(puts.map((p) => p[1]).sort(), [1, 2]);
+    assert.equal(puts.find((p) => p[1] === 2)[2], CHUNK - 5);
 
-    await opened.stop();
-    assert.ok(
-        calls.some(
-            (c) => c.path === "/bridge/tok" && c.init.method === "DELETE",
-        ),
-    );
+    await session.stop();
+    assert.deepEqual(calls.at(-1), ["close", "abc"]);
 });
 
-test("a read that fails tells the helper, so the player is cut and not fed junk", async () => {
-    const calls = [];
+test("a read that fails tells the server, so the player is cut and not fed junk", async () => {
+    const failed = [];
     let once = true;
-    const m = await load(
-        "../../src/services/externalPlayer.js",
-        {
-            readRange: async (r, start) => {
-                if (start === 0) return { size: 50, type: "video/mp4" };
-                throw new Error("failed");
-            },
-            call: async (path, init = {}) => {
-                calls.push(path);
-                if (path === "/play") return response(200, { token: "t" });
-                if (path === "/bridge/t/next" && once) {
-                    once = false;
-                    return response(200, { id: "3", start: 5, end: 9 });
-                }
-                return path.endsWith("/next")
-                    ? response(410, {})
-                    : response(200, {});
-            },
+    const m = await relay({
+        readRange: async (r, start, end) => {
+            if (start === 0) return read(r, start, end);
+            throw new Error("failed");
         },
-        ["openInPlayer"],
-    );
-    const opened = await m.openInPlayer({ file_id: 1, name: "a.mkv" }, "mpv");
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.ok(calls.includes("/bridge/t/3?error=1"));
-    await opened.stop();
+        api: {
+            createPlay: async () => ({ id: "x", chunk: CHUNK, path: "/p" }),
+            playNext: async () => {
+                if (once) {
+                    once = false;
+                    return { index: 1 };
+                }
+                await wait(5);
+                return { index: null };
+            },
+            failPlay: async (id, index) => failed.push([id, index]),
+            closePlay: async () => {},
+        },
+    });
+    const session = await m.startRelay({ file_id: 1, name: "a.mkv" });
+    await wait(40);
+    assert.deepEqual(JSON.parse(JSON.stringify(failed)), [["x", 1]]);
+    await session.stop();
 });
 
-test("openInPlayer says which part failed", async () => {
-    const make = (readRange, call) =>
-        load("../../src/services/externalPlayer.js", { readRange, call }, [
-            "openInPlayer",
-        ]);
+test("startRelay says which part failed", async () => {
+    const make = (readRange, createPlay) =>
+        relay({ readRange, api: { createPlay } });
     const record = { file_id: 1, name: "a.ts" };
-    const ok = async () => ({ size: 9, type: "video/mp2t" });
+    const refused = (code) => async () => {
+        throw Object.assign(new Error(code), { code });
+    };
 
-    let m = await make(
-        async () => {
-            throw new Error("x");
-        },
-        async () => response(200, {}),
-    );
-    await assert.rejects(m.openInPlayer(record, "vlc"), { code: "read" });
-
-    m = await make(ok, async () => {
-        throw new TypeError("fetch failed");
-    });
-    await assert.rejects(m.openInPlayer(record, "vlc"), { code: "helper" });
-
-    m = await make(ok, async () => response(412, {}));
-    await assert.rejects(m.openInPlayer(record, "vlc"), { code: "player" });
+    let m = await make(refused("x"), async () => ({}));
+    await assert.rejects(m.startRelay(record), { code: "read" });
+    for (const [code, want] of [
+        ["play_off", "off"],
+        ["play_busy", "busy"],
+        ["disk_full", "disk"],
+        ["offline", "server"],
+    ]) {
+        m = await make(read, refused(code));
+        await assert.rejects(m.startRelay(record), { code: want });
+    }
 });
