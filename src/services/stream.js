@@ -11,6 +11,7 @@
 import { getClient, isOnline, onClientChange } from "./telegram";
 import { locate } from "../utils/downloadFile";
 import { filePart } from "../utils/transfer";
+import { messagesOf } from "../utils/splitPlan";
 import { typeOf } from "../utils/thumbnails";
 import { STREAM_GUARD } from "../config/security";
 
@@ -32,6 +33,8 @@ const KEEP_BYTES = 256 * MB;
 const files = new Map();
 /** fileId -> the name it was opened under, for its type */
 const names = new Map();
+/** fileId -> the messages of a file sent in slices (uploadFile.js) */
+const slices = new Map();
 /** fileId -> bytes a second, once the player knows the duration */
 const bitrates = new Map();
 /** `${fileId}:${index}` -> { promise, size, task }, oldest use first */
@@ -58,6 +61,8 @@ export const streamOffReason = () => offReason;
 /** The URL a <video> plays `record` from. */
 export function streamUrl(record, { quiet = false } = {}) {
     names.set(record.file_id, record.name);
+    if (record.parts?.length > 1)
+        slices.set(record.file_id, messagesOf(record));
     const url = `/stream/${record.file_id}/${encodeURIComponent(record.name)}`;
     // quiet: only the bytes asked for, nothing fetched ahead (storyboards)
     return quiet ? `${url}?quiet` : url;
@@ -101,18 +106,27 @@ function enqueue(job, now, queue = now ? urgent : ahead) {
 function info(fileId, fresh = false) {
     if (fresh || !files.has(fileId)) {
         const loading = (async () => {
-            const [message] = await getClient().getMessages("me", {
-                ids: [fileId],
-            });
-            const file = message?.media && locate(message.media);
-            if (!file)
+            const ids = slices.get(fileId) ?? [fileId];
+            const messages = await getClient().getMessages("me", { ids });
+            const found = messages.map((m) => m?.media && locate(m.media));
+            if (found.length !== ids.length || found.some((f) => !f))
                 throw Object.assign(new Error("missing"), { missing: true });
+            const [file] = found;
             const type =
                 file.mimeType && file.mimeType !== "application/octet-stream"
                     ? file.mimeType
                     : typeOf({ name: names.get(fileId) ?? "" }) ||
                       "application/octet-stream";
-            return { ...file, type };
+            if (ids.length === 1) return { ...file, type };
+            // every slice but the last is whole MiB, so a part never
+            // straddles two of them
+            let start = 0;
+            const pieces = found.map((f) => {
+                const piece = { ...f, start };
+                start += f.size;
+                return piece;
+            });
+            return { ...file, size: start, type, pieces };
         })();
         files.set(fileId, loading);
         loading.catch(() => {
@@ -127,13 +141,24 @@ function info(fileId, fresh = false) {
 const referenceExpired = (error) =>
     /^FILE_REFERENCE_/.test(error?.errorMessage ?? "");
 
+// the slice holding part `index` and the part's place in it
+function slicePart(file, index) {
+    if (!file.pieces) return [file, index];
+    const at = index * PART;
+    const piece = file.pieces.find(
+        (p) => at >= p.start && at < p.start + p.size,
+    );
+    return [piece, (at - piece.start) / PART];
+}
+
 async function fetchPart(fileId, index) {
     const file = await info(fileId);
     try {
-        return await filePart(getClient(), file, index, PART);
+        return await filePart(getClient(), ...slicePart(file, index), PART);
     } catch (error) {
         if (!referenceExpired(error)) throw error;
-        return filePart(getClient(), await info(fileId, true), index, PART);
+        const fresh = await info(fileId, true);
+        return filePart(getClient(), ...slicePart(fresh, index), PART);
     }
 }
 
@@ -324,6 +349,7 @@ onClientChange((client) => {
     if (client) return;
     files.clear();
     names.clear();
+    slices.clear();
     bitrates.clear();
     failed.clear();
     parts.clear();

@@ -34,6 +34,7 @@ import {
     uploadScope,
 } from "./uploadLog";
 import { UPLOAD_OWNER } from "../config/security";
+import { messagesOf } from "../utils/splitPlan";
 import { isHidden, pathTo } from "../utils/tree";
 import { fileOpener } from "../utils/pickers";
 import {
@@ -188,11 +189,7 @@ async function sentFinder(entries, onLooked) {
         }
     }
 
-    const used = new Set(
-        getSnapshot()
-            .records.map((r) => r.file_id)
-            .filter((x) => x != null),
-    );
+    const used = new Set(getSnapshot().records.flatMap(messagesOf));
     return (entry) => {
         const own = byId.get(entry.messageId);
         if (own) {
@@ -516,7 +513,10 @@ export async function discard(found) {
     const scope = uploadScope();
     if (UPLOAD_OWNER && (scope === null || found.scope !== scope)) return;
     const messages = found.files
-        .map((item) => item.entry?.messageId)
+        .flatMap((item) => [
+            item.entry?.messageId,
+            ...(item.entry?.resume?.pieces ?? []).map((piece) => piece.id),
+        ])
         .filter((id) => id != null);
     if (messages.length) {
         await getClient().deleteMessages("me", messages, { revoke: true });

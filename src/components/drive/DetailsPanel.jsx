@@ -161,7 +161,13 @@ export default function DetailsPanel({ items, folderName, onClose }) {
                                 label="Lưu trữ"
                                 value={
                                     single.file_id != null
-                                        ? `Telegram Saved Messages, tin nhắn #${single.file_id}`
+                                        ? `Telegram Saved Messages, tin nhắn #${
+                                              single.file_id
+                                          }${
+                                              single.parts?.length > 1
+                                                  ? ` (tệp được chia thành ${single.parts.length} tin nhắn)`
+                                                  : ""
+                                          }`
                                         : "Chưa tải lên xong"
                                 }
                             />
