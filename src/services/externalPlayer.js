@@ -180,10 +180,13 @@ export async function startRelay(record) {
         stop: () => {
             state.stopped = true;
             open.delete(record.file_id);
+            window.removeEventListener("pagehide", session.stop);
             return api.closePlay(made.id).catch(() => {});
         },
     };
     open.set(record.file_id, session);
+    // the tab closing ends the video, as the plan promised: no tab, no relay
+    window.addEventListener("pagehide", session.stop);
     const done = [];
     for (let i = 0; i < WORKERS; i += 1)
         done.push(serve(made, record, first.size, state));

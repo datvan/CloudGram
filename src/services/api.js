@@ -13,7 +13,7 @@ export class ApiError extends Error {
     }
 }
 
-async function request(method, path, body, signal) {
+async function request(method, path, body, signal, keepalive) {
     // the server takes only JSON on writes, a bodiless DELETE included
     if (method !== "GET") body ??= {};
     let res;
@@ -24,6 +24,7 @@ async function request(method, path, body, signal) {
             headers: body ? { "Content-Type": "application/json" } : {},
             body: body ? JSON.stringify(body) : undefined,
             signal,
+            keepalive,
         });
     } catch {
         throw new ApiError(0, "offline");
@@ -87,7 +88,9 @@ export const api = {
             ),
         ),
     failPlay: (id, index) => request("POST", `/play/${id}/fail`, { index }),
-    closePlay: (id) => request("DELETE", `/play/${id}`),
+    // keepalive: it still goes out when the tab is closing
+    closePlay: (id) =>
+        request("DELETE", `/play/${id}`, undefined, undefined, true),
 };
 
 /**

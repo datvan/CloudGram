@@ -106,14 +106,8 @@ export class Play {
             ? req.body.type
             : "application/octet-stream";
 
-        const mine = [...this.sessions.values()].filter(
-            (s) => s.owner === user.username,
-        );
-        // opening a fourth video closes the one opened first
-        while (mine.length >= this.limits.perUser)
-            await this.#drop(mine.shift().id);
-        if (this.sessions.size >= this.limits.total)
-            throw new HttpError(409, "play_busy");
+        // the disk is asked before the limits, and nothing awaits between the
+        // limits and the session being added, so parallel opens cannot pass both
         const disk = await statfs(this.dir).catch(() => null);
         if (
             disk &&
@@ -121,9 +115,20 @@ export class Play {
                 this.limits.diskReserve + this.limits.sessionBytes
         )
             throw new HttpError(507, "disk_full");
+        const mine = [...this.sessions.values()].filter(
+            (s) => s.owner === user.username,
+        );
+        // opening a fourth video closes the one opened first (#drop leaves the
+        // map at once; only its files are removed afterwards)
+        const closing = mine
+            .slice(0, Math.max(0, mine.length - this.limits.perUser + 1))
+            .map((s) => this.#drop(s.id));
+        if (this.sessions.size >= this.limits.total) {
+            await Promise.all(closing);
+            throw new HttpError(409, "play_busy");
+        }
 
         const id = randomBytes(16).toString("base64url");
-        await mkdir(join(this.dir, id), { recursive: true, mode: 0o700 });
         this.sessions.set(id, {
             id,
             // lets the tab upload without its cookie, to an address that does
@@ -151,6 +156,8 @@ export class Play {
             closed: false,
         });
         const session = this.sessions.get(id);
+        await Promise.all(closing);
+        await mkdir(join(this.dir, id), { recursive: true, mode: 0o700 });
         return {
             id,
             key: session.key,
@@ -281,7 +288,9 @@ export class Play {
             }
             status = 206;
             if (start > end || start >= total)
-                throw new HttpError(416, "bad_range");
+                throw new HttpError(416, "bad_range", {
+                    contentRange: `bytes */${total}`,
+                });
         }
         return new PlayReply((res, head) =>
             this.#send(session, start, end, status, res, head),

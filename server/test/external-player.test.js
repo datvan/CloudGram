@@ -44,7 +44,11 @@ function relay({ api, readRange, puts = [] }) {
     return load(
         "../../src/services/externalPlayer.js",
         {
-            window: { location: { origin: "https://cg.test" } },
+            window: {
+                location: { origin: "https://cg.test" },
+                addEventListener() {},
+                removeEventListener() {},
+            },
             api,
             isOnline: () => true,
             PLAY_DIRECT: "",
