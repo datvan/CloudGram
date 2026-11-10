@@ -27,6 +27,7 @@ import {
     retryingProgress,
 } from "../redux/actions/progressAction";
 import { isFinal } from "./transfer";
+import { missingPieces } from "./partGroup";
 import { KEPT, removePicked } from "./pickers";
 import uploadFile, { sentChanges } from "./uploadFile";
 import { fromUpload } from "../services/storyboard";
@@ -78,17 +79,25 @@ let running = 0;
 let announce = [];
 
 // the file id is a big integer, which JSON cannot carry
-const saveResume = (resume) =>
-    resume?.fileId
+// A cut file (resume.pieces, see uploadFile.js) saves the slices whose message
+// is out, not the slice in flight, which a reopened tab sends again.
+const saveResume = (resume) => {
+    if (resume?.pieces?.length) return { pieces: resume.pieces };
+    return resume?.fileId && !resume.pieces
         ? { fileId: resume.fileId.toString(), done: [...resume.done] }
         : undefined;
-const loadResume = (saved) =>
-    saved?.fileId
+};
+const loadResume = (saved) => {
+    // `verify`: uploadFile checks those messages are still in Saved Messages
+    if (saved?.pieces?.length)
+        return { pieces: saved.pieces.map((p) => ({ ...p })), verify: true };
+    return saved?.fileId
         ? {
               fileId: helpers.returnBigInt(saved.fileId),
               done: new Set(saved.done),
           }
         : {};
+};
 
 /** Is this record's upload queued or running here (not waiting for Retry)? */
 export const isQueued = (id) => jobs.has(id) && !failed.has(id);
@@ -138,6 +147,7 @@ export function enqueueUpload({
     path,
     replaces,
     removeOriginal = false,
+    group,
 }) {
     if (UPLOAD_OWNER && !uploadScope()) return undefined;
     if (recordId && jobs.has(recordId)) {
@@ -171,6 +181,8 @@ export function enqueueUpload({
         replaces,
         handle,
         removeOriginal,
+        // one of the pieces of a cut file (watchPieces); not written to the log
+        group,
         resume: loadResume(resume),
     };
     jobs.set(record.id, job);
@@ -201,6 +213,17 @@ export function enqueueUpload({
     return record;
 }
 
+/** Delete the slices a cut file got out before its upload was given up on. */
+function dropPieces(job) {
+    const ids = job?.resume?.pieces?.map((piece) => piece.id);
+    if (!ids?.length || !owns(job)) return;
+    // shortcut: best effort; a failure leaves them in Saved Messages, where
+    // "Nhập từ Telegram" finds them
+    getClient()
+        .deleteMessages("me", ids, { revoke: true })
+        .catch((error) => console.log("Could not delete slices", error));
+}
+
 /**
  * Give up on uploads whose records are about to disappear.
  *
@@ -209,6 +232,8 @@ export function enqueueUpload({
  */
 export function cancelUploads(ids) {
     for (const id of ids) {
+        // a cut file that failed midway already has messages out
+        if (failed.has(id)) dropPieces(failed.get(id));
         cancelled.add(id);
         failed.delete(id);
         dropEntry(id);
@@ -269,6 +294,7 @@ function pump() {
             continue;
         }
         if (cancelled.delete(job.id)) {
+            dropPieces(job);
             jobs.delete(job.id);
             Store.dispatch(completedProgress(job.id));
             continue;
@@ -331,12 +357,23 @@ async function run(job, release) {
             ...(UPLOAD_OWNER ? { client, assertCurrent } : {}),
             asMedia,
             resume: job.resume,
+            // a slice of a cut file is out: on disk before the next one starts,
+            // so a reopened tab goes on from there
+            onPiece: () => {
+                if (owns(job))
+                    patchEntry(id, { resume: saveResume(job.resume) });
+            },
             // on disk before the message goes, so a reopened tab knows to
             // look for it in Saved Messages before sending another copy
-            onSend: (kind) => {
+            onSend: (kind, final = true) => {
                 assertCurrent();
+                // a slice of a cut file; the last one is the one that counts
+                if (!final) return undefined;
                 // every part is out; what is left does not use the pool
                 release();
+                // no note for a cut file: its messages are not the file's
+                // size and name, so a reopened tab could not match them
+                if (job.resume.pieces) return undefined;
                 patchEntry(id, {
                     resume: saveResume(job.resume),
                     sending: Date.now(),
@@ -348,7 +385,9 @@ async function run(job, release) {
     } catch (error) {
         if (!owns(job)) return forget(job);
         console.log(error);
-        if (partsLost(error)) job.resume = {};
+        // slices already sent stay sent
+        if (partsLost(error))
+            job.resume = job.resume.pieces ? { pieces: job.resume.pieces } : {};
         // Telegram refused it, so nothing went out
         if (!error?.maybeSent)
             patchEntry(id, {
@@ -399,7 +438,7 @@ async function run(job, release) {
     if (!owns(job)) return forget(job);
     // the message exists now; if the tab closes before the vault has its id,
     // the reopened tab attaches this message instead of sending again
-    patchEntry(id, { messageId: result.message.id });
+    if (!result.messages) patchEntry(id, { messageId: result.message.id });
 
     // Deliberately outside the try above: the file is on Telegram by now, so
     // retrying from here would send a second copy and orphan the first. A
@@ -470,9 +509,11 @@ async function settle(id, result, replaces, job) {
                 );
         }
     } else {
-        await getClient().deleteMessages("me", [message.id], {
-            revoke: true,
-        });
+        await getClient().deleteMessages(
+            "me",
+            result.messages ?? [message.id],
+            { revoke: true },
+        );
         if (job?.removeOriginal) kept = KEPT.gone;
     }
 
@@ -485,6 +526,89 @@ async function settle(id, result, replaces, job) {
     jobs.delete(id);
     if (stored) dropEntry(id);
     Store.dispatch(completedProgress(id, kept));
+    if (record && stored && job?.group) notePiece(job.group, id);
+}
+
+/**
+ * The pieces a too big file was cut into, whose original is deleted once all of
+ * them are in the vault: `file` is the original as picked, `handle` how to
+ * delete it, `id`/`name` the transfer-panel row that says it was not sent.
+ * Hand the result to every piece's enqueueUpload (`group`), then to sealPieces.
+ * Held in memory only: a reloaded tab keeps the original, as does anything
+ * missing at the end.
+ */
+export function watchPieces({ id, name, handle, file, parent, pieces }) {
+    const group = {
+        id,
+        name,
+        handle,
+        file,
+        parent,
+        pieces,
+        scope: uploadScope(),
+        // records of the pieces this cut uploaded and the vault has
+        ids: new Set(),
+        sealed: false,
+        finished: false,
+    };
+    Store.dispatch(keptProgress(id, name, KEPT.cutting));
+    return group;
+}
+
+/** Every piece has been handed to the queue: `queued` of them went in. */
+export function sealPieces(group, queued) {
+    if (queued !== group.pieces.length) {
+        group.finished = true;
+        Store.dispatch(keptProgress(group.id, group.name, KEPT.incomplete));
+        return;
+    }
+    group.sealed = true;
+    finishPieces(group);
+}
+
+function notePiece(group, id) {
+    group.ids.add(id);
+    finishPieces(group);
+}
+
+async function finishPieces(group) {
+    if (group.finished || !group.sealed || group.ids.size < group.pieces.length)
+        return;
+    group.finished = true;
+    const { id, name, handle, file, parent, pieces, scope } = group;
+    const same = () => !UPLOAD_OWNER || scope === uploadScope();
+    if (!same()) return;
+    const records = [...group.ids].map(getRecord);
+    // the vault must hold the tree too, or the pieces could vanish after the
+    // original is gone
+    const stored = await flush().then(
+        () => true,
+        () => false,
+    );
+    if (!same()) return;
+    let kept;
+    // a piece deleted meanwhile is no record any more
+    if (
+        records.includes(undefined) ||
+        missingPieces(pieces, records, parent).length
+    )
+        kept = KEPT.incomplete;
+    else if (!stored) kept = KEPT.notStored;
+    else if (
+        records.some(
+            (r) =>
+                r.trashedAt ||
+                foldersAbove(r).some((f) => getRecord(f.id)?.trashedAt),
+        )
+    )
+        kept = KEPT.trashed;
+    else
+        kept = await removePicked(handle, file).catch(
+            (error) => `Không xoá được: ${error?.message ?? error}`,
+        );
+    if (!same()) return;
+    // sent and the original gone: the row turns into a done one
+    Store.dispatch(keptProgress(id, name, kept, Boolean(kept)));
 }
 
 /** Originals still on disk that "Xoá lại" can try again, by record id. */

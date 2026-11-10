@@ -1,5 +1,6 @@
 import { Api } from "telegram";
 
+import { getRecord } from "../services/drive";
 import { getClient } from "../services/telegram";
 import {
     completedProgress,
@@ -7,6 +8,7 @@ import {
     errorProgress,
 } from "../redux/actions/progressAction";
 import { Store } from "../redux/store";
+import { messagesOf } from "./splitPlan";
 import { downloadParts } from "./transfer";
 
 /** The full-size copy of a photo: its location type and byte size. */
@@ -137,6 +139,16 @@ export async function fetchFile(id, file_id, { quiet = false } = {}) {
     const dispatch = quiet ? () => {} : Store.dispatch;
     dispatch(downloadProgress(id, 0));
     try {
+        // a cut file is several messages; `file_id` may also be another
+        // message of the record (its storyboard), which is just one
+        const record = getRecord(id);
+        const ids =
+            record?.file_id === file_id ? messagesOf(record) : [file_id];
+        if (ids.length > 1) {
+            const blob = await fetchSlices(id, ids, record.mime, dispatch);
+            dispatch(completedProgress(id));
+            return blob;
+        }
         const message = await getClient().getMessages("me", { ids: file_id });
         const media = message[0]?.media;
 
@@ -189,6 +201,43 @@ export async function fetchFile(id, file_id, { quiet = false } = {}) {
         console.log(e);
         dispatch(errorProgress(id, e?.message ?? "Download failed"));
         throw e;
+    }
+}
+
+/**
+ * A file sent as several messages (uploadFile.js), written one after the
+ * other into one file on disk. Needs the disk area: a file this big does not
+ * fit in memory.
+ */
+async function fetchSlices(id, ids, mime, dispatch) {
+    const client = getClient();
+    const messages = await client.getMessages("me", { ids });
+    const files = messages.map((m) => m?.media && locate(m.media));
+    if (files.length !== ids.length || files.some((f) => !f))
+        throw new Error("File missing on Telegram");
+    const total = files.reduce((sum, f) => sum + f.size, 0);
+    const disk = await diskTarget(id, total);
+    if (!disk)
+        throw new Error("Trình duyệt này không tải được tệp lớn như vậy");
+    try {
+        let base = 0;
+        for (const file of files) {
+            const start = base;
+            await downloadParts(client, file, {
+                onProgress: (done) =>
+                    dispatch(
+                        downloadProgress(id, ((start + done) / total) * 100),
+                    ),
+                write: (bytes, position) => disk.write(bytes, start + position),
+            });
+            base += file.size;
+        }
+        return new Blob([await disk.finish()], {
+            type: mime || files[0].mimeType,
+        });
+    } catch (error) {
+        await disk.abort();
+        throw error;
     }
 }
 

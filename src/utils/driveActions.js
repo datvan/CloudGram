@@ -25,6 +25,8 @@ import {
 } from "../services/drive";
 import { TAB, liveTabs, readEntries, uploadScope } from "../services/uploadLog";
 import { UPLOAD_OWNER } from "../config/security";
+import { SPLIT_RAW } from "../config/features";
+import { messagesOf } from "./splitPlan";
 import { uploadLimit } from "./uploadLimit";
 import { dropShares } from "../services/shares";
 import { getClient } from "../services/telegram";
@@ -69,6 +71,7 @@ export async function uploadEntries(
         onConflict,
         onElsewhere,
         onTooBig,
+        group,
     } = {},
 ) {
     const scope = uploadScope();
@@ -126,7 +129,13 @@ export async function uploadEntries(
 
     // what Telegram would refuse after hours of sending is stopped here
     const limit = uploadLimit();
-    const oversize = placed.filter((p) => p.entry.file.size > limit);
+    // with SPLIT_RAW nothing is too big: a bigger file goes up in slices
+    const oversize = SPLIT_RAW
+        ? []
+        : placed.filter((p) => p.entry.file.size > limit);
+    // the panel row saying it was not sent; the pieces' upload finds it again
+    // by this id to say what became of the original
+    for (const p of oversize) p.keptId = `kept:${Math.random()}`;
     if (oversize.length) {
         placed = placed.filter((p) => !oversize.includes(p));
         onTooBig?.(
@@ -134,6 +143,10 @@ export async function uploadEntries(
                 name: p.name,
                 size: p.entry.file.size,
                 file: p.entry.file,
+                // to delete the original once every piece is up
+                handle: p.entry.handle,
+                removeOriginal,
+                keptId: p.keptId,
                 // where the cut pieces should go, and how
                 // a folder still to be made is not there yet: the pieces go
                 // to the folder the whole upload was aimed at
@@ -212,6 +225,7 @@ export async function uploadEntries(
             path: p.entry.path,
             asMedia,
             removeOriginal,
+            group,
             parentID: parentOf(p.entry),
             ...extra,
         });
@@ -221,7 +235,11 @@ export async function uploadEntries(
     const keep = (p, reason) => {
         if (removeOriginal)
             Store.dispatch(
-                keptProgress(`kept:${Math.random()}`, p.name, reason),
+                keptProgress(
+                    p.keptId ?? `kept:${Math.random()}`,
+                    p.name,
+                    reason,
+                ),
             );
     };
 
@@ -273,7 +291,8 @@ export async function uploadEntries(
             const name = freeName(named, parentOf(entry), p.name);
             // taken from now on, for the next file of this batch
             named.set(nameKey(parentOf(entry), name), [{ name }]);
-            queue(p, { name });
+            // renamed, so it is no piece of the cut: not counted for the group
+            queue(p, { name, group: undefined });
             counts.renamed += 1;
         } else {
             counts.skipped += 1;
@@ -455,8 +474,8 @@ export async function deleteForever(ids, { withLinks = false } = {}) {
     }
     // a linked copy (linkFile) left elsewhere still needs its message
     for (const r of records)
-        if (!recordIds.has(r.id) && r.file_id != null)
-            messageIds.delete(r.file_id);
+        if (!recordIds.has(r.id))
+            messagesOf(r).forEach((x) => messageIds.delete(x));
 
     cancelUploads([...recordIds]);
     // a file deleted for good must not stay downloadable through its link

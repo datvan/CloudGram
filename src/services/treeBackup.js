@@ -23,6 +23,7 @@ import {
     update,
 } from "./drive";
 import { fetchFile, locate } from "../utils/downloadFile";
+import { messagesOf } from "../utils/splitPlan";
 import { uploadParts } from "../utils/transfer";
 
 export const BACKUP_PREFIX = "cloudgram-cay-thu-muc-";
@@ -161,11 +162,7 @@ function guessName(message, file) {
  * `onProgress(scanned, added)` is called as it goes.
  */
 export async function importFromTelegram(onProgress) {
-    const known = new Set(
-        getSnapshot()
-            .records.map((r) => r.file_id)
-            .filter(Boolean),
-    );
+    const known = new Set(getSnapshot().records.flatMap(messagesOf));
     for (const r of getSnapshot().records)
         if (r.storyboard) known.add(r.storyboard.message);
     let folder = null;
