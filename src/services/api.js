@@ -13,7 +13,7 @@ export class ApiError extends Error {
     }
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, signal, keepalive) {
     // the server takes only JSON on writes, a bodiless DELETE included
     if (method !== "GET") body ??= {};
     let res;
@@ -23,6 +23,8 @@ async function request(method, path, body) {
             credentials: "same-origin",
             headers: body ? { "Content-Type": "application/json" } : {},
             body: body ? JSON.stringify(body) : undefined,
+            signal,
+            keepalive,
         });
     } catch {
         throw new ApiError(0, "offline");
@@ -75,7 +77,68 @@ export const api = {
     listShares: () => request("GET", "/shares"),
     publicShare: (id) => request("GET", `/s/${encodeURIComponent(id)}`),
     resolveDropbox: (url) => request("POST", "/dropbox/resolve", { url }),
+    createPlay: (body) => request("POST", "/play", body),
+    // the server answers within 20 s; a poll that hangs longer is cut, not waited on
+    playNext: async (id, direct) =>
+        parse(
+            await playFetch(
+                `/api/play/${id}/next`,
+                { method: "GET", signal: AbortSignal.timeout(40_000) },
+                direct,
+            ),
+        ),
+    failPlay: (id, index) => request("POST", `/play/${id}/fail`, { index }),
+    // keepalive: it still goes out when the tab is closing
+    closePlay: (id) =>
+        request("DELETE", `/play/${id}`, undefined, undefined, true),
 };
+
+/**
+ * A request of the relay. With `direct` (a base URL and the session's key) it
+ * goes there, with no cookie and not through Cloudflare (whose way to the VPS
+ * is slow for uploads, and which answers a quick poll's burst with 429); if
+ * that cannot be reached at all it goes by the page's own address, as before.
+ */
+async function playFetch(path, init, direct) {
+    try {
+        if (direct) {
+            try {
+                return await fetch(`${direct.url}${path}`, {
+                    ...init,
+                    credentials: "omit",
+                    headers: { ...init.headers, "X-Play-Key": direct.key },
+                });
+            } catch (error) {
+                // our own timeout is not the address being down
+                if (
+                    error.name === "TimeoutError" ||
+                    error.name === "AbortError"
+                )
+                    throw error;
+                // blocked port, no DNS, no certificate: the old way
+                direct.failed();
+            }
+        }
+        return await fetch(path, { ...init, credentials: "same-origin" });
+    } catch {
+        throw new ApiError(0, "offline");
+    }
+}
+
+/** Put chunk `index` of a video for an outside player (see playFetch). */
+export async function putPlayChunk(id, index, bytes, direct) {
+    return parse(
+        await playFetch(
+            `/api/play/${id}/chunks/${index}`,
+            {
+                method: "PUT",
+                body: bytes,
+                headers: { "Content-Type": "application/octet-stream" },
+            },
+            direct,
+        ),
+    );
+}
 
 export async function putShareChunk(id, index, bytes) {
     let res;

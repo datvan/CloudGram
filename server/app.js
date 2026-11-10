@@ -26,9 +26,11 @@ import {
     scrypt,
     timingSafeEqual,
 } from "node:crypto";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { Dropbox } from "./dropbox.js";
+import { Play } from "./play.js";
 import { Shares } from "./shares.js";
 
 const scryptAsync = promisify(scrypt);
@@ -173,6 +175,7 @@ export class CloudGramApi {
         dropboxFetch = globalThis.fetch,
         credentialGuard = true,
         shareQuotaGuard = true,
+        play = {},
     }) {
         if (!pepper || pepper.length < 32)
             throw new Error("CLOUDGRAM_PEPPER must be set (32+ chars)");
@@ -191,6 +194,13 @@ export class CloudGramApi {
             quota: shareQuota,
             quotaGuard: shareQuotaGuard,
             authenticate: (req, res) => this.authenticate(req, res),
+        });
+        this.play = new Play({
+            // a test double db has no dir: no relay then
+            dir: db.dir && join(db.dir, "play"),
+            now,
+            authenticate: (req, res) => this.authenticate(req, res),
+            ...play,
         });
         this.dropbox = new Dropbox({
             now,
@@ -241,6 +251,7 @@ export class CloudGramApi {
         if (!user) throw new Error(`no user ${name}`);
         await this.db.deleteTree(user.id);
         await this.shares.dropOwner(name);
+        await this.play.dropOwner(name);
         delete this.db.data.users[name];
         this.#dropSessions(name);
         await this.db.save();
@@ -516,8 +527,11 @@ export class CloudGramApi {
         const token = req.cookies[COOKIE];
         if (token) {
             const session = this.db.data.sessions[sha256(token)];
-            if (session)
+            if (session) {
                 this.#releaseLeaseOf(session.username, req.body.browserId);
+                // a video relayed to a player holds its own key, not the cookie
+                await this.play.dropOwner(session.username);
+            }
             delete this.db.data.sessions[sha256(token)];
             await this.db.save();
         }
@@ -528,6 +542,7 @@ export class CloudGramApi {
     async logoutOthers(req, res) {
         const { user, sessionKey } = await this.authenticate(req, res);
         this.#dropSessions(user.username, sessionKey);
+        await this.play.dropOwner(user.username);
         await this.db.save();
         return { ok: true };
     }
@@ -559,6 +574,7 @@ export class CloudGramApi {
         );
         Object.assign(user, { kdf, verifier, wrappedDek });
         this.#dropSessions(user.username, sessionKey);
+        await this.play.dropOwner(user.username);
         await this.db.save();
         return { ok: true };
     }
@@ -708,6 +724,7 @@ export class CloudGramApi {
 
     async sweep() {
         await this.shares.sweep();
+        await this.play.sweep();
         this.dropbox.sweep();
         this.loginByIp.sweep();
         this.loginByUser.sweep();
