@@ -47,6 +47,7 @@ function relay({ api, readRange, puts = [] }) {
             window: { location: { origin: "https://cg.test" } },
             api,
             isOnline: () => true,
+            PLAY_DIRECT: "",
             streamQueue: () => ({ active: 0, waiting: 0 }),
             flight: { sender: 0, invoke: 0 },
             trouble: { text: "", at: 0 },
@@ -192,4 +193,47 @@ test("a Telegram reconnect is waited out, not passed to the player", async () =>
         [1],
     );
     await session.stop();
+});
+
+test("a chunk goes to the direct address with the key and no cookie, and falls back", async () => {
+    const calls = [];
+    const reply = (status) => ({ ok: true, status, json: async () => ({}) });
+    const m = await load(
+        "../../src/services/api.js",
+        {
+            fetch: async (url, init) => {
+                calls.push({ url, init });
+                if (String(url).startsWith("https://up.test") && calls.dead)
+                    throw new TypeError("failed to fetch");
+                return reply(200);
+            },
+        },
+        ["putPlayChunk"],
+    );
+    let failed = 0;
+    const direct = {
+        url: "https://up.test:8444",
+        key: "K",
+        failed: () => failed++,
+    };
+    await m.putPlayChunk("id1", 3, new ArrayBuffer(4), direct);
+    assert.equal(calls[0].url, "https://up.test:8444/api/play/id1/chunks/3");
+    assert.equal(calls[0].init.credentials, "omit");
+    assert.equal(calls[0].init.headers["X-Play-Key"], "K");
+    assert.equal(
+        calls[0].init.headers["Content-Type"],
+        "application/octet-stream",
+    );
+
+    // unreachable: the page's own address, with its cookie, and the caller told
+    calls.dead = true;
+    await m.putPlayChunk("id1", 4, new ArrayBuffer(4), direct);
+    assert.equal(failed, 1);
+    assert.equal(calls.at(-1).url, "/api/play/id1/chunks/4");
+    assert.equal(calls.at(-1).init.credentials, "same-origin");
+    assert.equal(calls.at(-1).init.headers["X-Play-Key"], undefined);
+
+    // no direct address at all
+    await m.putPlayChunk("id1", 5, new ArrayBuffer(4));
+    assert.equal(calls.at(-1).url, "/api/play/id1/chunks/5");
 });

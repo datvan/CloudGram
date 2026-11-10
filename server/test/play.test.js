@@ -299,3 +299,29 @@ test("a tab busy reading is not dropped while the player keeps asking", async ()
     await api.sweep();
     assert.ok(!(await readdir(join(dir, "play"))).includes(made.id));
 });
+
+test("a chunk can come with the session's key instead of a cookie", async () => {
+    const made = await create();
+    assert.match(made.key, /^[A-Za-z0-9_-]{32}$/);
+    const put = (key) =>
+        fetch(`${base}/api/play/${made.id}/chunks/0`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/octet-stream",
+                Origin: ORIGIN,
+                ...(key ? { "X-Play-Key": key } : {}),
+            },
+            body: VIDEO.subarray(0, C),
+        });
+    // no cookie and no key; a wrong key; a key of another session
+    assert.equal((await put()).status, 401);
+    assert.equal((await put("x".repeat(32))).status, 404);
+    const other = await create();
+    assert.equal((await put(other.key)).status, 404);
+    assert.equal((await put(made.key)).status, 200);
+    // the player can read what was put, without asking the tab for it
+    const first = await get(made.path, "bytes=0-9");
+    assert.ok(first.body.equals(VIDEO.subarray(0, 10)));
+    await page("DELETE", `/api/play/${made.id}`);
+    await page("DELETE", `/api/play/${other.id}`);
+});

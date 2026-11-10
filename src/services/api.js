@@ -81,15 +81,37 @@ export const api = {
     closePlay: (id) => request("DELETE", `/play/${id}`),
 };
 
-export async function putPlayChunk(id, index, bytes) {
+/**
+ * Put chunk `index` of a video for an outside player. With `direct` (a base
+ * URL and the session's key) it goes there, with no cookie; if that cannot be
+ * reached at all it goes by the page's own address, as before.
+ */
+export async function putPlayChunk(id, index, bytes, direct) {
+    const path = `/api/play/${id}/chunks/${index}`;
+    const send = (url, init) =>
+        fetch(url, {
+            method: "PUT",
+            body: bytes,
+            ...init,
+            headers: {
+                "Content-Type": "application/octet-stream",
+                ...init.headers,
+            },
+        });
     let res;
     try {
-        res = await fetch(`/api/play/${id}/chunks/${index}`, {
-            method: "PUT",
-            credentials: "same-origin",
-            headers: { "Content-Type": "application/octet-stream" },
-            body: bytes,
-        });
+        if (direct) {
+            try {
+                res = await send(`${direct.url}${path}`, {
+                    credentials: "omit",
+                    headers: { "X-Play-Key": direct.key },
+                });
+            } catch {
+                // blocked port, no DNS, no certificate: the old way
+                direct.failed();
+            }
+        }
+        res ??= await send(path, { credentials: "same-origin", headers: {} });
     } catch {
         throw new ApiError(0, "offline");
     }

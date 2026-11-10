@@ -112,3 +112,23 @@ all, and none start with less than 1 GiB of free disk.
 Verify: `npm run test:api` (`play.test.js`, `external-player.test.js`). Not
 verified without a real Telegram account: a real player on the VPS address,
 Cloudflare's terms and timeouts for video, `potplayer://https://...` in Chrome.
+
+### Direct upload past Cloudflare
+
+Uploading a 2 MiB chunk to `cloudgram.datvan.com` measured 3-11 KB/s from the
+owner's network (Cloudflare to the VPS), against 7 MB/s straight to the VPS, so
+the tab can put chunks at `VITE_PLAY_DIRECT_URL` (`https://up.datvan.com:8444`,
+frontend build environment; empty = through the page's address, and it falls
+back to that by itself when the direct address cannot be reached).
+
+-   DNS: `up` as an A record to the VPS, **DNS only** (grey cloud).
+-   `deploy/vps-direct-upload.sh` installs `deploy/nginx/cloudgram-upload.conf`,
+    gets a Let's Encrypt certificate (port 80 is opened by certbot's hook only
+    while it runs) and opens `8444/tcp` in ufw. Only that nginx listens on 8444;
+    it accepts nothing but `PUT /api/play/<id>/chunks/<n>`, so no other site on
+    the VPS is reachable without Cloudflare.
+-   No cookie crosses origins: the session has its own random key, sent as
+    `X-Play-Key` and checked in constant time (`server/play.js`). The origin IP
+    is now in public DNS for `up.datvan.com` (it was already in git history).
+-   Rollback: remove the `cloudgram-upload.conf` site link, `ufw delete allow
+8444/tcp`, reload nginx, restore `cloudgram.conf` from the script's backup.

@@ -9,6 +9,7 @@
  * video plays; the server drops the cache when it does not.
  */
 import { api, putPlayChunk } from "./api";
+import { PLAY_DIRECT } from "../config/features";
 import { readRange, streamQueue } from "./stream";
 import { flight, trouble } from "../utils/transfer";
 import { isOnline } from "./telegram";
@@ -59,7 +60,7 @@ async function serve(made, record, size, state) {
                 Math.min(size - 1, start + made.chunk - 1),
             );
             const read = Date.now() - began;
-            await putPlayChunk(made.id, next.index, bytes);
+            await putPlayChunk(made.id, next.index, bytes, state.direct);
             state.sent += 1;
             console.log(
                 `relay chunk ${next.index}: read ${read} ms, sent ${
@@ -109,7 +110,21 @@ export async function startRelay(record) {
             ? fail("Máy chủ hết chỗ chứa tạm.", "disk")
             : fail("Không kết nối được máy chủ CloudGram.", "server");
     }
-    const state = { stopped: false, reading: new Map(), sent: 0, error: "" };
+    const state = {
+        stopped: false,
+        reading: new Map(),
+        sent: 0,
+        error: "",
+        // the address that skips Cloudflare, until one try cannot reach it
+        direct:
+            PLAY_DIRECT && made.key
+                ? {
+                      url: PLAY_DIRECT,
+                      key: made.key,
+                      failed: () => (state.direct = null),
+                  }
+                : null,
+    };
     const session = {
         // for the dialog: what the tab is doing for the player right now
         status: () => ({
