@@ -3,8 +3,11 @@ import { Api, errors } from "telegram";
 import { getClient } from "../services/telegram";
 import { Store } from "../redux/store";
 import { uploadProgress } from "../redux/actions/progressAction";
+import { SPLIT_RAW } from "../config/features";
+import { pieceName, splitSizes } from "./splitPlan";
 import { fitsAsPhoto, makeThumb, probeVideo, typeOf } from "./thumbnails";
 import { turns, uploadParts } from "./transfer";
+import { sliceLimit } from "./uploadLimit";
 
 // Messages being sent at once. The pool frees a file's place once its parts
 // are out, so without a cap a large folder had hundreds of sends waiting on
@@ -133,63 +136,146 @@ export default async function uploadFile(
         asMedia = false,
         resume,
         onSend,
+        onPiece,
         client: boundClient,
         assertCurrent,
     } = {},
 ) {
-    const { kind, options } = await sendOptions(file, asMedia);
+    // bigger than one message takes: raw slices, one message each
+    const limit = sliceLimit();
+    const slices = SPLIT_RAW ? splitSizes(file.size, limit) : [file.size];
+    // slices sent by an earlier attempt that saw a smaller limit still count
+    const cut = slices.length > 1 || resume?.pieces?.length > 0;
+    const { kind, options } = await sendOptions(
+        file,
+        // the slices are plain files, nothing Telegram would play or recompress
+        cut ? false : asMedia,
+    );
     assertCurrent?.();
     const client = boundClient ?? getClient();
 
     const speed = speedMeter();
     let told = 0;
-    const inputFile = await uploadParts(client, file, {
-        resume,
-        onProgress: (fraction) => {
-            const rate = speed(fraction * file.size);
-            const now = performance.now();
-            if (fraction < 1 && now - told < PROGRESS_EVERY) return;
-            told = now;
-            // every part is out: what is left is sending the message, which
-            // moves no bytes however long it waits
-            Store.dispatch(
-                uploadProgress(id, fraction * 100, fraction < 1 ? rate : 0),
-            );
-        },
-    });
-
-    await sendTurns.take();
-    let given = false;
-    const give = () => {
-        if (given) return;
-        given = true;
-        sendTurns.give();
+    // `sentBytes` of the whole file are out by now
+    const report = (sentBytes) => {
+        const fraction = sentBytes / Math.max(1, file.size);
+        const rate = speed(sentBytes);
+        const now = performance.now();
+        if (fraction < 1 && now - told < PROGRESS_EVERY) return;
+        told = now;
+        // every part is out: what is left is sending the message, which
+        // moves no bytes however long it waits
+        Store.dispatch(
+            uploadProgress(id, fraction * 100, fraction < 1 ? rate : 0),
+        );
     };
-    // a send that never answers must not hold up every file behind it
-    const stuck = setTimeout(give, SEND_STUCK);
-    let message;
-    let sending = false;
-    try {
-        // from here a closed tab may leave a message nobody recorded
-        await onSend?.(kind);
-        assertCurrent?.();
-        sending = true;
-        message = await client.sendFile("me", {
-            file: inputFile,
-            ...options,
-        });
-    } catch (error) {
-        if (
-            sending &&
-            !(error instanceof errors.RPCError) &&
-            !neverQueued(error)
-        )
-            error.maybeSent = true;
-        throw error;
-    } finally {
-        clearTimeout(stuck);
-        give();
+
+    /** Send one message for bytes already uploaded; `final` is the last one. */
+    async function send(inputFile, extra, final) {
+        await sendTurns.take();
+        let given = false;
+        const give = () => {
+            if (given) return;
+            given = true;
+            sendTurns.give();
+        };
+        // a send that never answers must not hold up every file behind it
+        const stuck = setTimeout(give, SEND_STUCK);
+        let sending = false;
+        try {
+            // from here a closed tab may leave a message nobody recorded
+            await onSend?.(kind, final);
+            assertCurrent?.();
+            sending = true;
+            return await client.sendFile("me", {
+                file: inputFile,
+                ...extra,
+            });
+        } catch (error) {
+            if (
+                sending &&
+                !(error instanceof errors.RPCError) &&
+                !neverQueued(error)
+            )
+                error.maybeSent = true;
+            throw error;
+        } finally {
+            clearTimeout(stuck);
+            give();
+        }
     }
 
-    return { message, changes: sentChanges(message, kind, file.size) };
+    if (!cut) {
+        const inputFile = await uploadParts(client, file, {
+            resume,
+            onProgress: (fraction) => report(fraction * file.size),
+        });
+        const message = await send(inputFile, options, true);
+        return { message, changes: sentChanges(message, kind, file.size) };
+    }
+
+    // `resume.pieces` keeps the messages already sent, through retries, so
+    // no attempt sends a slice twice; `resume.fileId`/`done` are the slice in
+    // flight, cleared once its message is out.
+    // The ids are logged (onPiece), so a reopened tab goes on from the next
+    // slice. shortcut: the window between a send answering and its log write
+    // can leave one slice nobody knows of; "Nhập từ Telegram" finds it.
+    const sent = (resume.pieces ??= []);
+    if (resume.verify) {
+        resume.verify = undefined;
+        // slices a reopened tab was told about may have been deleted since
+        const found = new Map();
+        if (sent.length)
+            for (const m of await client.getMessages("me", {
+                ids: sent.map((piece) => piece.id),
+            }))
+                if (m) found.set(m.id, m);
+        const size = (m) => {
+            const doc = m?.media?.document;
+            return Number(doc?.size?.value ?? doc?.size);
+        };
+        const bad = sent.findIndex((p) => size(found.get(p.id)) !== p.size);
+        // shortcut: slices after the first missing one stay in Saved Messages
+        if (bad >= 0) sent.length = bad;
+    }
+    let offset = sent.reduce((sum, piece) => sum + piece.size, 0);
+    // cut again from what is left, so a limit that changed since the last
+    // attempt (the profile loaded) cannot make the slices miss the end
+    while (offset < file.size) {
+        const i = sent.length;
+        const [next, ...after] = splitSizes(file.size - offset, limit);
+        const last = after.length === 0;
+        // another account since the slice before: nothing more goes out
+        assertCurrent?.();
+        const piece = new File(
+            [file.slice(offset, offset + next)],
+            pieceName(file.name, i),
+        );
+        const base = offset;
+        const inputFile = await uploadParts(client, piece, {
+            resume,
+            onProgress: (fraction) => report(base + fraction * piece.size),
+        });
+        // the first slice carries the picture the grid shows
+        const message = await send(
+            inputFile,
+            i === 0 ? options : { forceDocument: true },
+            last,
+        );
+        sent.push({ id: message.id, size: piece.size });
+        onPiece?.();
+        resume.fileId = undefined;
+        resume.done = undefined;
+        offset += piece.size;
+    }
+    const [first] = sent;
+    return {
+        message: { id: first.id },
+        // every message to delete if the record is gone by now
+        messages: sent.map((piece) => piece.id),
+        changes: {
+            sentAs: "file",
+            parts: sent.map(({ id, size }) => ({ id, size })),
+        },
+    };
 }

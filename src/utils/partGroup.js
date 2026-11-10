@@ -41,6 +41,31 @@ export function partChain(item, siblings) {
 }
 
 /**
+ * Names of the `pieces` ({ name, size }) with no finished, not trashed file of
+ * that name and size among `records` in `parent`. Empty when all are there.
+ * Judged on the records the caller uploaded for this cut, so parts left in the
+ * folder by an earlier cut never count.
+ */
+export function missingPieces(pieces, records, parent) {
+    const where = (p) => p ?? null;
+    return pieces
+        .filter(
+            (piece) =>
+                !records.some(
+                    (r) =>
+                        r &&
+                        r.type === "file" &&
+                        r.name === piece.name &&
+                        r.size === piece.size &&
+                        where(r.parent) === where(parent) &&
+                        r.file_id != null &&
+                        !r.trashedAt,
+                ),
+        )
+        .map((piece) => piece.name);
+}
+
+/**
  * How many finished, not trashed parts "base.partNNN.ext" of the video `name`
  * already sit in `parent`. Tells the oversize dialog it was cut before.
  * shortcut: by name only, and it does not check the run is complete.

@@ -362,6 +362,11 @@ export const KEPT = {
     linked: "Đã có tệp giống hệt ở thư mục khác nên chỉ liên kết, không tải lại. Bản gốc được giữ nguyên.",
     tooBig: "Tệp quá lớn để tải lên Telegram nên chưa gửi. Bản gốc được giữ nguyên.",
     busy: "Tệp này đang được tải dở (ở tab khác hoặc lần trước), nên chưa xoá bản gốc.",
+    // a file too big, cut into pieces that are being sent instead
+    cutting:
+        "Đã cắt thành các phần. Bản gốc sẽ được xoá khi tất cả các phần đã tải lên xong.",
+    incomplete:
+        "Chưa đủ các phần trên Drive (có phần bị bỏ qua, lỗi, đổi tên hoặc bị xoá), nên giữ lại bản gốc.",
 };
 
 /**
