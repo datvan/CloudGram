@@ -13,7 +13,7 @@ export class ApiError extends Error {
     }
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, signal) {
     // the server takes only JSON on writes, a bodiless DELETE included
     if (method !== "GET") body ??= {};
     let res;
@@ -23,6 +23,7 @@ async function request(method, path, body) {
             credentials: "same-origin",
             headers: body ? { "Content-Type": "application/json" } : {},
             body: body ? JSON.stringify(body) : undefined,
+            signal,
         });
     } catch {
         throw new ApiError(0, "offline");
@@ -76,7 +77,14 @@ export const api = {
     publicShare: (id) => request("GET", `/s/${encodeURIComponent(id)}`),
     resolveDropbox: (url) => request("POST", "/dropbox/resolve", { url }),
     createPlay: (body) => request("POST", "/play", body),
-    playNext: (id) => request("GET", `/play/${id}/next`),
+    // the server answers within 20 s; a poll that hangs longer is cut, not waited on
+    playNext: (id) =>
+        request(
+            "GET",
+            `/play/${id}/next`,
+            undefined,
+            AbortSignal.timeout(40_000),
+        ),
     failPlay: (id, index) => request("POST", `/play/${id}/fail`, { index }),
     closePlay: (id) => request("DELETE", `/play/${id}`),
 };

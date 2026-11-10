@@ -37,22 +37,47 @@ async function readWhenOnline(record, start, end) {
 /** Answer the server's chunk requests until the video is closed. */
 async function serve(made, record, size, state) {
     let failures = 0;
-    while (!state.stopped) {
-        let next;
-        try {
-            next = await api.playNext(made.id);
-        } catch (error) {
-            // closed on the server (or signed out): the video is over
-            if (error.status === 401 || error.status === 404) return;
-            if ((failures += 1) >= 5) return;
-            await pause(1000);
-            continue;
+    state.alive += 1;
+    try {
+        await loop();
+    } finally {
+        state.alive -= 1;
+        console.log("relay worker ended:", state.why);
+    }
+
+    async function loop() {
+        while (!state.stopped) {
+            let next;
+            try {
+                next = await api.playNext(made.id);
+            } catch (error) {
+                // closed on the server (or signed out): the video is over
+                if (error.status === 401 || error.status === 404) {
+                    state.why = `session gone (${error.status})`;
+                    return;
+                }
+                // shortcut: retries for as long as the video is open, 10 s apart
+                // at most; the server drops the session when nobody answers
+                failures += 1;
+                state.error = `hỏi máy chủ lỗi ${error.status ?? ""} ${
+                    error.code ?? ""
+                }`;
+                console.log("relay poll failed", failures, error);
+                await pause(Math.min(1000 * failures, 10_000));
+                continue;
+            }
+            failures = 0;
+            if (next.index === null) continue;
+            if (!(await chunk(next.index))) return;
         }
-        failures = 0;
-        if (next.index === null) continue;
-        const start = next.index * made.chunk;
+        state.why = "stopped";
+    }
+
+    /** Read one chunk from Telegram and put it to the server; false: give up. */
+    async function chunk(index) {
+        const start = index * made.chunk;
         const began = Date.now();
-        state.reading.set(next.index, began);
+        state.reading.set(index, began);
         try {
             const { bytes } = await readWhenOnline(
                 record,
@@ -60,21 +85,26 @@ async function serve(made, record, size, state) {
                 Math.min(size - 1, start + made.chunk - 1),
             );
             const read = Date.now() - began;
-            await putPlayChunk(made.id, next.index, bytes, state.direct);
+            await putPlayChunk(made.id, index, bytes, state.direct);
             state.sent += 1;
             console.log(
-                `relay chunk ${next.index}: read ${read} ms, sent ${
+                `relay chunk ${index}: read ${read} ms, sent ${
                     Date.now() - began - read
                 } ms`,
             );
+            return true;
         } catch (error) {
             console.log(error);
             state.error = String(error.errorMessage ?? error.message);
-            if (error.status === 404 || error.status === 401) return;
+            if (error.status === 404 || error.status === 401) {
+                state.why = `put refused (${error.status})`;
+                return false;
+            }
             // tell the server, so the player's stream is cut and not left hanging
-            await api.failPlay(made.id, next.index).catch(() => {});
+            await api.failPlay(made.id, index).catch(() => {});
+            return true;
         } finally {
-            state.reading.delete(next.index);
+            state.reading.delete(index);
         }
     }
 }
@@ -112,6 +142,8 @@ export async function startRelay(record) {
     }
     const state = {
         stopped: false,
+        alive: 0,
+        why: "",
         reading: new Map(),
         sent: 0,
         error: "",
@@ -129,6 +161,8 @@ export async function startRelay(record) {
         // for the dialog: what the tab is doing for the player right now
         status: () => ({
             sent: state.sent,
+            // polls still asking the server for chunks (WORKERS when well)
+            alive: state.alive,
             reading: state.reading.size,
             seconds: Math.round(
                 (Date.now() - Math.min(Date.now(), ...state.reading.values())) /

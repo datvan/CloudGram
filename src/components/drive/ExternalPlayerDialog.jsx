@@ -112,8 +112,9 @@ export default function ExternalPlayerDialog({ item, onClose }) {
                 </Button>
                 {status && (
                     <Typography {...text}>
-                        Đã gửi {status.sent} đoạn (2 MB). Đang đọc{" "}
-                        {status.reading} đoạn từ Telegram
+                        Đã gửi {status.sent} đoạn (2 MB), {status.alive} luồng
+                        đang chờ yêu cầu. Đang đọc {status.reading} đoạn từ
+                        Telegram
                         {status.reading
                             ? `, lâu nhất ${status.seconds} giây`
                             : ""}
