@@ -6,6 +6,8 @@
  *     CLOUDGRAM_DATA     data directory (default /var/lib/cloudgram-api)
  *     CLOUDGRAM_ORIGIN   expected Origin header (default https://cloudgram.datvan.com)
  *     CLOUDGRAM_SHARE_QUOTA_GB  disk each account may use for share links (default 20)
+ *     CLOUDGRAM_PLAY     0 turns off opening a video in PotPlayer/VLC (default on)
+ *     CLOUDGRAM_PLAY_CACHE_MB  disk for the player cache, all videos (default 1024)
  *     PORT               loopback port (default 4322)
  */
 import { CloudGramApi } from "./app.js";
@@ -22,7 +24,16 @@ const api = new CloudGramApi({
     shareQuota: Number(process.env.CLOUDGRAM_SHARE_QUOTA_GB ?? 20) * 1024 ** 3,
     credentialGuard: process.env.CLOUDGRAM_SECURITY_CREDENTIAL_GUARD !== "0",
     shareQuotaGuard: process.env.CLOUDGRAM_SECURITY_SHARE_QUOTA !== "0",
+    play: {
+        enabled: process.env.CLOUDGRAM_PLAY !== "0",
+        limits: {
+            totalBytes:
+                Number(process.env.CLOUDGRAM_PLAY_CACHE_MB ?? 1024) * 1024 ** 2,
+        },
+    },
 });
+// a restart leaves no open video, so whatever it cached is dropped
+await api.play.reset();
 
 const server = createApiServer(api, {
     origin: process.env.CLOUDGRAM_ORIGIN ?? "https://cloudgram.datvan.com",

@@ -17,3 +17,12 @@ export const SPLIT_RAW = import.meta.env.VITE_FEATURE_SPLIT_RAW !== "0";
 // mpv" button; videos play only in the page (which needs no helper program).
 export const EXTERNAL_PLAYER =
     import.meta.env.VITE_FEATURE_EXTERNAL_PLAYER !== "0";
+
+// VITE_PLAY_DIRECT_URL, e.g. https://up.datvan.com:8444: where the tab puts the
+// chunks of a video for an outside player, without Cloudflare in between
+// (whose way to the VPS is slow for uploads). Empty or unset: same address as
+// the page. The server side is deploy/vps-direct-upload.sh.
+export const PLAY_DIRECT = (import.meta.env.VITE_PLAY_DIRECT_URL ?? "").replace(
+    /\/+$/,
+    "",
+);
