@@ -12,3 +12,8 @@ export const LOCAL_HELPER = import.meta.env.VITE_FEATURE_LOCAL_HELPER !== "0";
 // the drive shows and plays as one file. Files already sent that way keep
 // working: reading them does not depend on this switch.
 export const SPLIT_RAW = import.meta.env.VITE_FEATURE_SPLIT_RAW !== "0";
+
+// VITE_FEATURE_EXTERNAL_PLAYER=0 and a rebuild: no "open in PotPlayer / VLC /
+// mpv" button; videos play only in the page (which needs no helper program).
+export const EXTERNAL_PLAYER =
+    import.meta.env.VITE_FEATURE_EXTERNAL_PLAYER !== "0";

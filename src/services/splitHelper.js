@@ -5,7 +5,7 @@ import { pieceBytes } from "../utils/splitPlan";
 export const HELPER_URL = "http://127.0.0.1:47633";
 const HEADERS = { "X-CloudGram": "1" };
 
-const call = (path, init = {}, signal) =>
+export const call = (path, init = {}, signal) =>
     fetch(`${HELPER_URL}${path}`, {
         ...init,
         headers: { ...HEADERS, ...init.headers },

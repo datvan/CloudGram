@@ -23,8 +23,10 @@ import DeleteForeverOutlinedIcon from "@mui/icons-material/DeleteForeverOutlined
 import ReplayIcon from "@mui/icons-material/Replay";
 import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
 import LinkIcon from "@mui/icons-material/Link";
+import LaunchIcon from "@mui/icons-material/Launch";
 
-import { previewKind } from "./fileTypes";
+import { EXTERNAL_PLAYER } from "../../config/features";
+import { kindOf, previewKind } from "./fileTypes";
 
 function Item({ icon, label, hint, onClick, disabled }) {
     return (
@@ -137,6 +139,17 @@ export default function ItemMenu({
                               onClick={act("download")}
                           />
                       ),
+                      EXTERNAL_PLAYER &&
+                          single?.type === "file" &&
+                          kindOf(single) === "video" && (
+                              <Item
+                                  key="external"
+                                  icon={icon(LaunchIcon)}
+                                  label="Mở bằng PotPlayer, VLC..."
+                                  disabled={single.file_id == null}
+                                  onClick={act("external")}
+                              />
+                          ),
                       single?.type === "file" && (
                           <Item
                               key="share"
