@@ -78,52 +78,63 @@ export const api = {
     resolveDropbox: (url) => request("POST", "/dropbox/resolve", { url }),
     createPlay: (body) => request("POST", "/play", body),
     // the server answers within 20 s; a poll that hangs longer is cut, not waited on
-    playNext: (id) =>
-        request(
-            "GET",
-            `/play/${id}/next`,
-            undefined,
-            AbortSignal.timeout(40_000),
+    playNext: async (id, direct) =>
+        parse(
+            await playFetch(
+                `/api/play/${id}/next`,
+                { method: "GET", signal: AbortSignal.timeout(40_000) },
+                direct,
+            ),
         ),
     failPlay: (id, index) => request("POST", `/play/${id}/fail`, { index }),
     closePlay: (id) => request("DELETE", `/play/${id}`),
 };
 
 /**
- * Put chunk `index` of a video for an outside player. With `direct` (a base
- * URL and the session's key) it goes there, with no cookie; if that cannot be
- * reached at all it goes by the page's own address, as before.
+ * A request of the relay. With `direct` (a base URL and the session's key) it
+ * goes there, with no cookie and not through Cloudflare (whose way to the VPS
+ * is slow for uploads, and which answers a quick poll's burst with 429); if
+ * that cannot be reached at all it goes by the page's own address, as before.
  */
-export async function putPlayChunk(id, index, bytes, direct) {
-    const path = `/api/play/${id}/chunks/${index}`;
-    const send = (url, init) =>
-        fetch(url, {
-            method: "PUT",
-            body: bytes,
-            ...init,
-            headers: {
-                "Content-Type": "application/octet-stream",
-                ...init.headers,
-            },
-        });
-    let res;
+async function playFetch(path, init, direct) {
     try {
         if (direct) {
             try {
-                res = await send(`${direct.url}${path}`, {
+                return await fetch(`${direct.url}${path}`, {
+                    ...init,
                     credentials: "omit",
-                    headers: { "X-Play-Key": direct.key },
+                    headers: { ...init.headers, "X-Play-Key": direct.key },
                 });
-            } catch {
+            } catch (error) {
+                // our own timeout is not the address being down
+                if (
+                    error.name === "TimeoutError" ||
+                    error.name === "AbortError"
+                )
+                    throw error;
                 // blocked port, no DNS, no certificate: the old way
                 direct.failed();
             }
         }
-        res ??= await send(path, { credentials: "same-origin", headers: {} });
+        return await fetch(path, { ...init, credentials: "same-origin" });
     } catch {
         throw new ApiError(0, "offline");
     }
-    return parse(res);
+}
+
+/** Put chunk `index` of a video for an outside player (see playFetch). */
+export async function putPlayChunk(id, index, bytes, direct) {
+    return parse(
+        await playFetch(
+            `/api/play/${id}/chunks/${index}`,
+            {
+                method: "PUT",
+                body: bytes,
+                headers: { "Content-Type": "application/octet-stream" },
+            },
+            direct,
+        ),
+    );
 }
 
 export async function putShareChunk(id, index, bytes) {

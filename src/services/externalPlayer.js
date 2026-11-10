@@ -49,7 +49,7 @@ async function serve(made, record, size, state) {
         while (!state.stopped) {
             let next;
             try {
-                next = await api.playNext(made.id);
+                next = await api.playNext(made.id, state.direct);
             } catch (error) {
                 // closed on the server (or signed out): the video is over
                 if (error.status === 401 || error.status === 404) {

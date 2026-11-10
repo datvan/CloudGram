@@ -233,6 +233,7 @@ test("a chunk goes to the direct address with the key and no cookie, and falls b
     const m = await load(
         "../../src/services/api.js",
         {
+            AbortSignal,
             fetch: async (url, init) => {
                 calls.push({ url, init });
                 if (String(url).startsWith("https://up.test") && calls.dead)
@@ -240,7 +241,7 @@ test("a chunk goes to the direct address with the key and no cookie, and falls b
                 return reply(200);
             },
         },
-        ["putPlayChunk"],
+        ["putPlayChunk", "api"],
     );
     let failed = 0;
     const direct = {
@@ -268,4 +269,12 @@ test("a chunk goes to the direct address with the key and no cookie, and falls b
     // no direct address at all
     await m.putPlayChunk("id1", 5, new ArrayBuffer(4));
     assert.equal(calls.at(-1).url, "/api/play/id1/chunks/5");
+
+    // the poll goes the same way, so Cloudflare never sees it
+    calls.dead = false;
+    await m.api.playNext("id1", direct);
+    assert.equal(calls.at(-1).url, "https://up.test:8444/api/play/id1/next");
+    assert.equal(calls.at(-1).init.credentials, "omit");
+    assert.equal(calls.at(-1).init.headers["X-Play-Key"], "K");
+    assert.equal(calls.at(-1).init.method, "GET");
 });
