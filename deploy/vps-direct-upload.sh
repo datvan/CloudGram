@@ -116,13 +116,15 @@ rm -rf "$STAGE"
 REMOTE
 
 echo "→ thử từ máy này"
-code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X OPTIONS \
+# --resolve: bỏ qua bộ nhớ DNS của máy này (có thể còn nhớ "chưa có bản ghi up")
+PIN="--resolve $UP_HOST:$UP_PORT:${DEPLOY_HOST#*@}"
+code=$(curl $PIN -s -o /dev/null -w '%{http_code}' -m 20 -X OPTIONS \
     -H 'Origin: https://cloudgram.datvan.com' \
     -H 'Access-Control-Request-Method: PUT' \
     "https://$UP_HOST:$UP_PORT/api/play/AAAAAAAAAAAAAAAAAAAAAA/chunks/0" || true)
 echo "   OPTIONS: $code (204 là đúng)"
-code=$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$UP_HOST:$UP_PORT/" || true)
+code=$(curl $PIN -s -o /dev/null -w '%{http_code}' -m 20 "https://$UP_HOST:$UP_PORT/" || true)
 echo "   GET /: $code (404 là đúng)"
 curl -s -o /dev/null -w '%{http_code}' -m 20 https://cloudgram.datvan.com/ | grep -q 200 &&
-    echo "   cloudgram.datvan.com vẫn lên (200)"
+    echo "   cloudgram.datvan.com vẫn lên (200)" || true
 echo "Xong. Thêm vào .env:  VITE_PLAY_DIRECT_URL=https://$UP_HOST:$UP_PORT  rồi npm run deploy."
