@@ -283,3 +283,19 @@ test("opening a fourth video closes the first", async () => {
     assert.ok(ids.slice(1).every((id) => open.includes(id)));
     for (const id of ids.slice(1)) await page("DELETE", `/api/play/${id}`);
 });
+
+test("a tab busy reading is not dropped while the player keeps asking", async () => {
+    const made = await create();
+    clock += 80_000;
+    // the player asks (HEAD answers at once), the tab has not polled since
+    assert.equal(
+        (await fetch(base + made.path, { method: "HEAD" })).status,
+        200,
+    );
+    clock += 80_000;
+    await api.sweep();
+    assert.ok((await readdir(join(dir, "play"))).includes(made.id));
+    clock += 20_000;
+    await api.sweep();
+    assert.ok(!(await readdir(join(dir, "play"))).includes(made.id));
+});

@@ -36,13 +36,20 @@ async function serve(made, record, size, state) {
         failures = 0;
         if (next.index === null) continue;
         const start = next.index * made.chunk;
+        const began = Date.now();
         try {
             const { bytes } = await readRange(
                 record,
                 start,
                 Math.min(size - 1, start + made.chunk - 1),
             );
+            const read = Date.now() - began;
             await putPlayChunk(made.id, next.index, bytes);
+            console.log(
+                `relay chunk ${next.index}: read ${read} ms, sent ${
+                    Date.now() - began - read
+                } ms`,
+            );
         } catch (error) {
             console.log(error);
             if (error.status === 404 || error.status === 401) return;
