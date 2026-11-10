@@ -195,6 +195,38 @@ test("a Telegram reconnect is waited out, not passed to the player", async () =>
     await session.stop();
 });
 
+test("polls that keep failing are retried, not given up on", async () => {
+    const puts = [];
+    let polls = 0;
+    const m = await relay({
+        puts,
+        readRange: read,
+        api: {
+            createPlay: async () => ({ id: "r", chunk: CHUNK, path: "/p" }),
+            playNext: async () => {
+                polls += 1;
+                // more than the 5 failures it used to stop at
+                if (polls <= 7)
+                    throw Object.assign(new Error("x"), { status: 0 });
+                if (polls === 8) return { index: 2 };
+                await wait(5);
+                return { index: null };
+            },
+            failPlay: async () => assert.fail("must not fail"),
+            closePlay: async () => {},
+        },
+    });
+    const session = await m.startRelay({ file_id: 11, name: "a.ts" });
+    // 3 workers share the failures: at most 1+2+3 s of waiting each
+    await wait(8000);
+    assert.deepEqual(
+        puts.map((p) => p[1]),
+        [2],
+    );
+    assert.ok(session.status().alive > 0);
+    await session.stop();
+});
+
 test("a chunk goes to the direct address with the key and no cookie, and falls back", async () => {
     const calls = [];
     const reply = (status) => ({ ok: true, status, json: async () => ({}) });
