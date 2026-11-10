@@ -46,6 +46,7 @@ function relay({ api, readRange, puts = [] }) {
         {
             window: { location: { origin: "https://cg.test" } },
             api,
+            isOnline: () => true,
             readRange,
             putPlayChunk: async (id, index, bytes) =>
                 puts.push([id, index, bytes.byteLength]),
@@ -155,4 +156,37 @@ test("startRelay says which part failed", async () => {
         m = await make(read, refused(code));
         await assert.rejects(m.startRelay(record), { code: want });
     }
+});
+
+test("a Telegram reconnect is waited out, not passed to the player", async () => {
+    let tries = 0;
+    const puts = [];
+    let once = true;
+    const m = await relay({
+        puts,
+        readRange: async (r, start, end) => {
+            if (start > 0 && (tries += 1) < 2) throw new Error("offline");
+            return read(r, start, end);
+        },
+        api: {
+            createPlay: async () => ({ id: "w", chunk: CHUNK, path: "/p" }),
+            playNext: async () => {
+                if (once) {
+                    once = false;
+                    return { index: 1 };
+                }
+                await wait(5);
+                return { index: null };
+            },
+            failPlay: async () => assert.fail("must not fail"),
+            closePlay: async () => {},
+        },
+    });
+    const session = await m.startRelay({ file_id: 9, name: "a.ts" });
+    await wait(2300);
+    assert.deepEqual(
+        puts.map((p) => p[1]),
+        [1],
+    );
+    await session.stop();
 });
