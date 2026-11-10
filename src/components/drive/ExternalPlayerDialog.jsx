@@ -118,6 +118,11 @@ export default function ExternalPlayerDialog({ item, onClose }) {
                             ? `, lâu nhất ${status.seconds} giây`
                             : ""}
                         .{status.online ? "" : " Telegram đang mất kết nối."}
+                        {` [Telegram: ${status.queue.active} đang chạy, ${
+                            status.queue.waiting
+                        } chờ; chờ nối ${status.flight.sender}, chờ trả lời ${
+                            status.flight.invoke
+                        }${status.trouble ? `; ${status.trouble}` : ""}]`}
                         {status.error ? ` Lỗi gần nhất: ${status.error}` : ""}
                     </Typography>
                 )}

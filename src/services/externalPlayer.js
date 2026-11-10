@@ -9,7 +9,8 @@
  * video plays; the server drops the cache when it does not.
  */
 import { api, putPlayChunk } from "./api";
-import { readRange } from "./stream";
+import { readRange, streamQueue } from "./stream";
+import { flight, trouble } from "../utils/transfer";
 import { isOnline } from "./telegram";
 
 // polls open at once: a player asks for several ranges together
@@ -120,6 +121,11 @@ export async function startRelay(record) {
             ),
             error: state.error,
             online: isOnline(),
+            // what Telegram requests are doing: running, queued, stuck on a
+            // connection or on an answer, and the last wait or error
+            queue: streamQueue(),
+            flight: { ...flight },
+            trouble: Date.now() - trouble.at < 120_000 ? trouble.text : "",
         }),
         url: `${window.location.origin}${made.path}`,
         stop: () => {

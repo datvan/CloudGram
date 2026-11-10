@@ -49,6 +49,12 @@ const idle = [];
 let active = 0;
 let idleActive = 0;
 
+/** Telegram requests running and waiting, for the external player's status */
+export const streamQueue = () => ({
+    active,
+    waiting: urgent.length + ahead.length,
+});
+
 /** Can a video be streamed in this tab (the service worker controls it)? */
 export const canStream = () =>
     typeof navigator !== "undefined" &&

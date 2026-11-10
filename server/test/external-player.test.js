@@ -47,6 +47,9 @@ function relay({ api, readRange, puts = [] }) {
             window: { location: { origin: "https://cg.test" } },
             api,
             isOnline: () => true,
+            streamQueue: () => ({ active: 0, waiting: 0 }),
+            flight: { sender: 0, invoke: 0 },
+            trouble: { text: "", at: 0 },
             readRange,
             putPlayChunk: async (id, index, bytes) =>
                 puts.push([id, index, bytes.byteLength]),
