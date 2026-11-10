@@ -336,3 +336,38 @@ test("a chunk can come with the session's key instead of a cookie", async () => 
     await page("DELETE", `/api/play/${made.id}`);
     await page("DELETE", `/api/play/${other.id}`);
 });
+
+test("a range past the end says how long the video is", async () => {
+    const made = await create();
+    const res = await get(made.path, `bytes=${VIDEO.length + 5}-`);
+    assert.equal(res.status, 416);
+    assert.equal(res.headers.get("content-range"), `bytes */${VIDEO.length}`);
+    await page("DELETE", `/api/play/${made.id}`);
+});
+
+test("CLOUDGRAM_PLAY=0 refuses a new video and leaves the others be", async () => {
+    const before = await create();
+    assert.equal(before.status, 200);
+    api.play.enabled = false;
+    try {
+        const refused = await create();
+        assert.equal(refused.status, 403);
+        assert.equal(refused.error, "play_off");
+    } finally {
+        api.play.enabled = true;
+    }
+    await page("DELETE", `/api/play/${before.id}`);
+});
+
+// last: it signs the cookie out, which the tests above still use
+test("signing out closes the videos, even those that go by the session's key", async () => {
+    const made = await create();
+    const poll = () =>
+        fetch(`${base}/api/play/${made.id}/next`, {
+            headers: { Origin: ORIGIN, "X-Play-Key": made.key },
+        });
+    assert.equal((await poll()).status, 200);
+    assert.equal((await page("POST", "/api/auth/logout", {})).status, 200);
+    assert.equal((await poll()).status, 404);
+    assert.equal((await get(made.path)).status, 404);
+});

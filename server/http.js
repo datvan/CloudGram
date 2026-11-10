@@ -263,6 +263,8 @@ export function createApiServer(
             if (error instanceof HttpError) {
                 if (error.extra?.retryAfter)
                     headers["Retry-After"] = String(error.extra.retryAfter);
+                if (error.extra?.contentRange)
+                    headers["Content-Range"] = error.extra.contentRange;
                 send(error.status, { error: error.code, ...error.extra });
             } else {
                 log.error(error);

@@ -13,7 +13,7 @@
 #   - xin chứng chỉ Let's Encrypt cho up.datvan.com bằng certbot; cổng 80 chỉ
 #     được mở trong lúc certbot chạy (hook của certbot mở rồi đóng)
 #   - ufw: mở cổng 8444/tcp cho mọi nơi. Chỉ nginx của site này nghe cổng đó và
-#     nó chỉ nhận PUT một đoạn video của phiên đang phát; các site khác không
+#     nó chỉ nhận PUT một đoạn video và GET next của phiên đang phát; các site khác không
 #     bị mở ra ngoài Cloudflare.
 #
 # Hoàn tác:
