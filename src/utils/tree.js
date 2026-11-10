@@ -4,6 +4,7 @@
  * Records imported from the old IndexedDB tree may carry no `parent` key at
  * all, so undefined and null both mean "at the root" throughout.
  */
+import { messagesOf } from "./splitPlan.js";
 
 const parentOf = (record) => record.parent ?? undefined;
 
@@ -93,9 +94,10 @@ export function recordIdsOf({ folders, files }) {
     return [...folders.map((folder) => folder.id), ...files.map((f) => f.id)];
 }
 
-/** Messages to delete from Telegram; a file still uploading has none yet. */
+/**
+ * Messages to delete from Telegram, every slice of a cut file included; a file
+ * still uploading has none yet.
+ */
 export function messageIdsOf({ files }) {
-    return files
-        .filter((file) => file.file_id !== undefined && file.file_id !== null)
-        .map((file) => file.file_id);
+    return files.flatMap(messagesOf);
 }

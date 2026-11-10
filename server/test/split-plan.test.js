@@ -58,3 +58,54 @@ test("anything else goes into 7-Zip volumes under the limit", () => {
     const command = splitCommand("data.zip", 6e9, FREE_MAX);
     assert.equal(command, '7z a -v1700m "data.zip.7z" "data.zip"');
 });
+
+import {
+    messagesOf,
+    pieceName,
+    sliceMax,
+    splitSizes,
+} from "../../src/utils/splitPlan.js";
+
+test("a file within the limit is one slice", () => {
+    assert.deepEqual(splitSizes(5, FREE_MAX), [5]);
+    assert.deepEqual(splitSizes(FREE_MAX, FREE_MAX), [FREE_MAX]);
+});
+
+test("a bigger file is cut in even slices of whole MiB, the sum is the file", () => {
+    for (const limit of [FREE_MAX, PREMIUM_MAX]) {
+        for (const size of [
+            limit + 1,
+            limit * 2 - 7,
+            limit * 3 + 12345,
+            sliceMax(limit) * 4,
+            sliceMax(limit) * 4 + 1,
+        ]) {
+            const sizes = splitSizes(size, limit);
+            assert.equal(
+                sizes.reduce((a, b) => a + b, 0),
+                size,
+            );
+            assert.ok(sizes.every((s) => s > 0 && s <= sliceMax(limit)));
+            // all but the last start and end on a whole MiB
+            assert.ok(sizes.slice(0, -1).every((s) => s % MiB === 0));
+        }
+    }
+    assert.equal(sliceMax(FREE_MAX), 1900 * MiB);
+    assert.equal(splitSizes(FREE_MAX + 1, FREE_MAX).length, 2);
+});
+
+test("slices are named like 7-Zip volumes", () => {
+    assert.equal(pieceName("film.mkv", 0), "film.mkv.001");
+    assert.equal(pieceName("film.mkv", 11), "film.mkv.012");
+});
+
+test("messagesOf lists every message of a record", () => {
+    assert.deepEqual(messagesOf({ file_id: 5 }), [5]);
+    assert.deepEqual(messagesOf({}), []);
+    assert.deepEqual(
+        messagesOf({ file_id: 5, parts: [{ id: 5 }, { id: 9 }] }),
+        [5, 9],
+    );
+    // one part is the same as none
+    assert.deepEqual(messagesOf({ file_id: 5, parts: [{ id: 5 }] }), [5]);
+});

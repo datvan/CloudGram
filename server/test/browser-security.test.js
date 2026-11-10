@@ -5,6 +5,14 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
 import { partsOf } from "../../src/utils/partGroup.js";
+import {
+    FREE_MAX,
+    PREMIUM_MAX,
+    maxFileBytes,
+    messagesOf,
+    pieceName,
+    splitSizes,
+} from "../../src/utils/splitPlan.js";
 
 async function load(path, globals, exports) {
     const source = (await readFile(new URL(path, import.meta.url), "utf8"))
@@ -252,6 +260,10 @@ test("in-flight upload cannot acquire another account after preparing media", as
         {
             Api: {},
             errors: {},
+            SPLIT_RAW: true,
+            sliceLimit: () => Infinity,
+            splitSizes,
+            pieceName,
             turns: () => ({ take: async () => {}, give() {} }),
             typeOf: () => "application/octet-stream",
             makeThumb: () => preparation,
@@ -420,6 +432,63 @@ for (const enabled of [true, false]) {
     }
 }
 
+test("giving up on a cut upload that failed midway deletes its slices", async () => {
+    const deleted = [];
+    const client = {
+        deleteMessages: async (_to, ids) => deleted.push(...ids),
+    };
+    const records = new Map();
+    let next = 0;
+    let failedAt;
+    const failedOnce = new Promise((resolve) => {
+        failedAt = resolve;
+    });
+    const queue = await load(
+        "../../src/utils/uploadQueue.js",
+        {
+            UPLOAD_OWNER: false,
+            helpers: {},
+            uploadScope: () => ({}),
+            createFile: (r) => {
+                const row = { ...r, id: String(++next) };
+                records.set(row.id, row);
+                return row;
+            },
+            getRecord: (id) => records.get(id),
+            isOnline: () => true,
+            getClient: () => client,
+            onClientChange() {},
+            Store: { dispatch() {} },
+            batchProgress() {},
+            queuedProgress() {},
+            completedProgress() {},
+            retryingProgress() {},
+            errorProgress: () => failedAt(),
+            logEntry() {},
+            saveHandle() {},
+            patchEntry() {},
+            dropEntry() {},
+            settleWrites: async () => {},
+            isFinal: () => true,
+            setTimeout: () => 0,
+            uploadFile: async (_id, _file, { resume }) => {
+                // two slices out, the third fails
+                resume.pieces = [
+                    { id: 11, size: 1 },
+                    { id: 12, size: 1 },
+                ];
+                throw new Error("slice 3 failed");
+            },
+        },
+        ["enqueueUpload", "cancelUploads"],
+    );
+    const record = queue.enqueueUpload({ file: { name: "x.mkv", size: 3 } });
+    await failedOnce;
+    queue.cancelUploads([record.id]);
+    await new Promise(setImmediate);
+    assert.deepEqual(deleted, [11, 12]);
+});
+
 test("in-flight upload rechecks owner immediately before send", async () => {
     let resume;
     const sending = new Promise((resolve) => {
@@ -436,6 +505,10 @@ test("in-flight upload rechecks owner immediately before send", async () => {
         {
             Api: {},
             errors: { RPCError: class extends Error {} },
+            SPLIT_RAW: true,
+            sliceLimit: () => Infinity,
+            splitSizes,
+            pieceName,
             turns: () => ({ take: async () => {}, give() {} }),
             typeOf: () => "application/octet-stream",
             makeThumb: async () => null,
@@ -481,6 +554,7 @@ test("upload dialog cannot enqueue into a later account", async () => {
         "../../src/utils/driveActions.js",
         {
             UPLOAD_OWNER: true,
+            SPLIT_RAW: true,
             uploadScope: () => scope,
             uploadLimit: () => Infinity,
             buildTreeFromPaths: () => ({ folders: [], files: [{ file }] }),
@@ -510,7 +584,7 @@ test("upload dialog cannot enqueue into a later account", async () => {
     assert.equal(queued, 0);
 });
 
-test("a file over Telegram's limit is reported, not queued", async () => {
+test("with SPLIT_RAW off a file over Telegram's limit is reported, not queued", async () => {
     const big = { name: "big.mkv", size: 11 };
     const small = { name: "small.txt", size: 5 };
     const queued = [];
@@ -519,6 +593,7 @@ test("a file over Telegram's limit is reported, not queued", async () => {
         "../../src/utils/driveActions.js",
         {
             UPLOAD_OWNER: false,
+            SPLIT_RAW: false,
             KEPT: {},
             uploadScope: () => ({}),
             uploadLimit: () => 10,
@@ -552,6 +627,290 @@ test("a file over Telegram's limit is reported, not queued", async () => {
         [["big.mkv", 11]],
     );
     assert.equal(reported[0].files[0].parts, 2);
+});
+
+test("with SPLIT_RAW on a file over the limit is queued whole", async () => {
+    const big = { name: "big.mkv", size: 11 };
+    const queued = [];
+    const reported = [];
+    const actions = await load(
+        "../../src/utils/driveActions.js",
+        {
+            UPLOAD_OWNER: false,
+            SPLIT_RAW: true,
+            KEPT: {},
+            uploadScope: () => ({}),
+            uploadLimit: () => 10,
+            partsOf,
+            buildTreeFromPaths: () => ({ folders: [], files: [{ file: big }] }),
+            getSnapshot: () => ({ records: [] }),
+            enqueueUpload: ({ file }) => queued.push(file.name),
+        },
+        ["uploadEntries"],
+    );
+    const counts = await actions.uploadEntries([], null, {
+        onTooBig: (files) => reported.push(files),
+    });
+    assert.deepEqual(queued, ["big.mkv"]);
+    assert.equal(counts.queued, 1);
+    assert.equal(reported.length, 0);
+});
+
+// what a module loaded in its own context returns is another realm's objects
+const plain = (value) => JSON.parse(JSON.stringify(value));
+
+const SLICE_GLOBALS = {
+    Api: {},
+    errors: { RPCError: class extends Error {} },
+    File: class {
+        constructor(parts, name) {
+            this.size = parts[0].size;
+            this.name = name;
+        }
+    },
+    SPLIT_RAW: true,
+    splitSizes,
+    pieceName,
+    turns: () => ({ take: async () => {}, give() {} }),
+    typeOf: () => "application/octet-stream",
+    makeThumb: async () => null,
+    fitsAsPhoto: async () => false,
+    performance,
+    Store: { dispatch() {} },
+    uploadProgress: () => ({}),
+    sentChanges: () => ({}),
+};
+
+test("a file over the limit goes up as slices that add up to it", async () => {
+    const MiB = 1024 * 1024;
+    const size = 250 * MiB;
+    const file = {
+        name: "big.mkv",
+        size,
+        slice: (a, b) => ({ size: b - a }),
+    };
+    const uploaded = [];
+    const sentOptions = [];
+    const finals = [];
+    let nextId = 10;
+    const uploader = await load(
+        "../../src/utils/uploadFile.js",
+        {
+            ...SLICE_GLOBALS,
+            sliceLimit: () => 100 * MiB,
+            typeOf: () => "video/x-matroska",
+            probeVideo: async () => ({ thumb: "T", duration: 1 }),
+            uploadParts: async (_client, piece, { resume }) => {
+                uploaded.push([piece.name, piece.size]);
+                // like the real one: remembers the slice in flight
+                resume.fileId ??= uploaded.length;
+                resume.done ??= new Set();
+                return {};
+            },
+        },
+        ["uploadFile"],
+    );
+    const resume = {};
+    const result = await uploader.uploadFile("id", file, {
+        asMedia: true,
+        resume,
+        client: {
+            sendFile: async (_to, options) => {
+                sentOptions.push(options);
+                return { id: nextId++ };
+            },
+        },
+        onSend: (_kind, final) => finals.push(final),
+    });
+    assert.deepEqual(plain(uploaded.map(([name]) => name)), [
+        "big.mkv.001",
+        "big.mkv.002",
+        "big.mkv.003",
+    ]);
+    assert.equal(
+        uploaded.reduce((sum, [, n]) => sum + n, 0),
+        size,
+    );
+    assert.deepEqual(plain(finals), [false, false, true]);
+    // only the first slice carries the picture; none is sent as a video
+    assert.equal(sentOptions[0].thumb, "T");
+    assert.equal(sentOptions[1].thumb, undefined);
+    assert.ok(sentOptions.every((o) => o.forceDocument === true));
+    assert.deepEqual(plain(result.messages), [10, 11, 12]);
+    assert.equal(result.message.id, 10);
+    assert.deepEqual(
+        plain(result.changes.parts.map((p) => p.id)),
+        [10, 11, 12],
+    );
+    assert.equal(
+        result.changes.parts.reduce((sum, p) => sum + p.size, 0),
+        size,
+    );
+    assert.deepEqual(
+        messagesOf({ file_id: 10, ...plain(result.changes) }),
+        [10, 11, 12],
+    );
+    // the slice in flight is cleared once its message is out
+    assert.equal(resume.fileId, undefined);
+    assert.equal(resume.pieces.length, 3);
+});
+
+test("a reopened tab goes on from the slices the log has, if still there", async () => {
+    const MiB = 1024 * 1024;
+    for (const goneId of [null, 11]) {
+        const file = {
+            name: "big.bin",
+            size: 250 * MiB,
+            slice: (a, b) => ({ size: b - a }),
+        };
+        const uploaded = [];
+        const logged = [];
+        let nextId = 20;
+        const uploader = await load(
+            "../../src/utils/uploadFile.js",
+            {
+                ...SLICE_GLOBALS,
+                sliceLimit: () => 100 * MiB,
+                uploadParts: async (_client, piece) => {
+                    uploaded.push(piece.name);
+                    return {};
+                },
+            },
+            ["uploadFile"],
+        );
+        // what splitSizes makes of 250 MiB under a 100 MiB limit
+        const size = Math.ceil(250 / 3) * MiB;
+        const resume = {
+            pieces: [
+                { id: 10, size },
+                { id: 11, size },
+            ],
+            verify: true,
+        };
+        const result = await uploader.uploadFile("id", file, {
+            resume,
+            onPiece: () => logged.push(resume.pieces.length),
+            client: {
+                getMessages: async (_to, { ids }) =>
+                    ids.map((id) =>
+                        id === goneId
+                            ? null
+                            : { id, media: { document: { size } } },
+                    ),
+                sendFile: async () => ({ id: nextId++ }),
+            },
+        });
+        if (goneId === null) {
+            // only the third slice goes up
+            assert.deepEqual(uploaded, ["big.bin.003"]);
+            assert.deepEqual(result.messages, [10, 11, 20]);
+        } else {
+            // slice 2 is gone: it and the third are sent again
+            assert.deepEqual(uploaded, ["big.bin.002", "big.bin.003"]);
+            assert.deepEqual(result.messages, [10, 20, 21]);
+        }
+        assert.ok(logged.length > 0, "each slice sent is logged");
+    }
+});
+
+test("slices are cut for a free account until the profile says Premium", async () => {
+    for (const [me, expected] of [
+        [undefined, FREE_MAX],
+        [{ premium: false }, FREE_MAX],
+        [{ premium: true }, PREMIUM_MAX],
+    ]) {
+        const limits = await load(
+            "../../src/utils/uploadLimit.js",
+            {
+                SPLIT_LARGE: true,
+                Store: { getState: () => ({ auth: { me } }) },
+                maxFileBytes,
+            },
+            ["sliceLimit"],
+        );
+        assert.equal(limits.sliceLimit(), expected);
+    }
+});
+
+test("a bigger limit on retry still ends the slices at the end of the file", async () => {
+    const MiB = 1024 * 1024;
+    const file = {
+        name: "big.bin",
+        size: 250 * MiB,
+        slice: (a, b) => ({ size: b - a }),
+    };
+    const sizes = [];
+    let nextId = 30;
+    const uploader = await load(
+        "../../src/utils/uploadFile.js",
+        {
+            ...SLICE_GLOBALS,
+            sliceLimit: () => 1000 * MiB,
+            uploadParts: async (_client, piece) => {
+                sizes.push(piece.size);
+                return {};
+            },
+        },
+        ["uploadFile"],
+    );
+    // one 84 MiB slice went out while the limit was still the small one
+    const resume = { pieces: [{ id: 10, size: 84 * MiB }] };
+    const result = await uploader.uploadFile("id", file, {
+        resume,
+        client: { sendFile: async () => ({ id: nextId++ }) },
+    });
+    assert.deepEqual(sizes, [166 * MiB]);
+    assert.deepEqual(result.messages, [10, 30]);
+});
+
+test("a retry sends only the slices not sent yet", async () => {
+    const MiB = 1024 * 1024;
+    const file = {
+        name: "big.bin",
+        size: 250 * MiB,
+        slice: (a, b) => ({ size: b - a }),
+    };
+    const uploaded = [];
+    let failOnce = true;
+    let nextId = 10;
+    const uploader = await load(
+        "../../src/utils/uploadFile.js",
+        {
+            ...SLICE_GLOBALS,
+            sliceLimit: () => 100 * MiB,
+            uploadParts: async (_client, piece) => {
+                uploaded.push(piece.name);
+                return {};
+            },
+        },
+        ["uploadFile"],
+    );
+    const resume = {};
+    const options = {
+        resume,
+        client: {
+            sendFile: async () => {
+                if (uploaded.length === 2 && failOnce) {
+                    failOnce = false;
+                    throw new Error("boom");
+                }
+                return { id: nextId++ };
+            },
+        },
+    };
+    await assert.rejects(uploader.uploadFile("id", file, options), {
+        message: "boom",
+    });
+    assert.equal(resume.pieces.length, 1);
+    const result = await uploader.uploadFile("id", file, options);
+    // slice 1 once, slice 2 twice (its message failed), slice 3 once
+    assert.deepEqual(plain(uploaded), [
+        "big.bin.001",
+        "big.bin.002",
+        "big.bin.002",
+        "big.bin.003",
+    ]);
+    assert.deepEqual(plain(result.messages), [10, 11, 12]);
 });
 
 test("Dropbox import stops when account changes during resolution", async () => {

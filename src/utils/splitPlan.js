@@ -18,6 +18,40 @@ const AIM = 0.85;
 export const pieceBytes = (limit) => Math.floor((limit * AIM) / MiB) * MiB;
 export const pieceCount = (size, limit) => Math.ceil(size / pieceBytes(limit));
 
+// A file bigger than one message takes is sent as several messages, each a raw
+// slice of the bytes. A slice stays this far under the limit, so a limit read a
+// part too generously still lets it through.
+const SLICE_AIM = 0.95;
+export const sliceMax = (limit) => Math.floor((limit * SLICE_AIM) / MiB) * MiB;
+
+/**
+ * The sizes of the slices a file of `size` bytes goes up in, one message each
+ * ([size] when it fits `limit`). Even slices, each a whole number of MiB but
+ * the last, so a 1 MiB read (video streaming) never crosses two slices.
+ */
+export function splitSizes(size, limit) {
+    const max = sliceMax(limit);
+    if (!(size > limit) || !(max > 0)) return [size];
+    const count = Math.ceil(size / max);
+    const each = Math.ceil(size / count / MiB) * MiB;
+    const sizes = [];
+    for (let left = size; left > 0; left -= each)
+        sizes.push(Math.min(each, left));
+    return sizes;
+}
+
+/** The file name a slice goes up under: "film.mkv.001" (what 7-Zip joins). */
+export const pieceName = (name, index) =>
+    `${name}.${String(index + 1).padStart(3, "0")}`;
+
+/** Every Telegram message a record's bytes live in, in order. */
+export const messagesOf = (record) =>
+    record?.parts?.length > 1
+        ? record.parts.map((part) => part.id)
+        : record?.file_id != null
+        ? [record.file_id]
+        : [];
+
 const VIDEO = /\.(mp4|m4v|mov|mkv|avi|webm|wmv|flv|mpe?g|m2?ts|3gp)$/i;
 export const isVideoName = (name) => VIDEO.test(name);
 

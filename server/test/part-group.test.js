@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { partChain, partsOf } from "../../src/utils/partGroup.js";
+import {
+    missingPieces,
+    partChain,
+    partsOf,
+} from "../../src/utils/partGroup.js";
 
 const file = (name, extra = {}) => ({
     id: name,
@@ -68,4 +72,53 @@ test("partsOf counts the finished parts a video was cut into", () => {
     ];
     assert.equal(partsOf("a.mkv", "f", list), 2);
     assert.equal(partsOf("c.mkv", "f", list), 0);
+});
+
+test("missingPieces names the pieces not safely on Drive", () => {
+    const pieces = [
+        { name: "a.part001.mp4", size: 10 },
+        { name: "a.part002.mp4", size: 10 },
+    ];
+    const rec = (name, extra) =>
+        file(name, { type: "file", size: 10, ...extra });
+    const all = [rec("a.part001.mp4"), rec("a.part002.mp4")];
+    assert.deepEqual(missingPieces(pieces, all, "f"), []);
+    // unfinished, trashed, another size, another folder or renamed: missing
+    assert.deepEqual(
+        missingPieces(
+            pieces,
+            [rec("a.part001.mp4", { file_id: null }), rec("a.part002.mp4")],
+            "f",
+        ),
+        ["a.part001.mp4"],
+    );
+    assert.deepEqual(
+        missingPieces(
+            pieces,
+            [rec("a.part001.mp4", { trashedAt: 1 }), rec("a.part002.mp4")],
+            "f",
+        ),
+        ["a.part001.mp4"],
+    );
+    assert.deepEqual(
+        missingPieces(
+            pieces,
+            [rec("a.part001.mp4", { size: 9 }), rec("a.part002 (1).mp4")],
+            "f",
+        ),
+        ["a.part001.mp4", "a.part002.mp4"],
+    );
+    assert.deepEqual(missingPieces(pieces, all, "other"), [
+        "a.part001.mp4",
+        "a.part002.mp4",
+    ]);
+    // root folder: null and undefined are the same place
+    assert.deepEqual(
+        missingPieces(
+            pieces,
+            [rec("a.part001.mp4", { parent: null })],
+            undefined,
+        ),
+        ["a.part002.mp4"],
+    );
 });

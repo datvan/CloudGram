@@ -1,5 +1,7 @@
 # Plan nghiên cứu: tự phát hiện tệp quá giới hạn Telegram và chia thành các phần
 
+Trạng thái 2026-11-10: đã làm thêm **cắt thô theo byte ngay trong trình duyệt** (không cần helper), bật mặc định, tắt bằng `VITE_FEATURE_SPLIT_RAW=0` (khi tắt thì quay lại hộp thoại + helper ffmpeg như bên dưới). Tệp lớn hơn giới hạn gửi thành nhiều tin nhắn `tên.001`, `.002`…, một bản ghi duy nhất; tải, phát và xoá đều đi qua mọi mảnh. Đã có test tự động (lint, 66 test, build); **chưa thử với Telegram thật** (R2, R3 vẫn mở) nên chưa triển khai. Còn hở: tải lại trang giữa chừng thì làm lại từ đầu và để mảnh cũ trong Saved Messages ("Nhập từ Telegram" nhặt lại được); nhập từ Dropbox vẫn bị chặn ở giới hạn.
+
 Trạng thái 2026-11-09: đã làm **giai đoạn 1 của cách 2** (cắt bằng ffmpeg trên máy bạn): phát hiện tệp quá giới hạn, chặn trước khi tải, hiện hộp thoại kèm lệnh cắt. Chưa làm: gom các phần thành một video và phát lần lượt trong trình phát (giai đoạn 2), cắt thô theo byte (mục 2 đến 5).
 
 ## Cờ bật tắt (rollback)

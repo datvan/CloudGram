@@ -115,7 +115,7 @@ import {
     scanProgress,
 } from "../../utils/pickers";
 import { isHidden, pathTo } from "../../utils/tree";
-import { retryUpload } from "../../utils/uploadQueue";
+import { retryUpload, sealPieces, watchPieces } from "../../utils/uploadQueue";
 
 const VIEWS = {
     folder: {
@@ -694,6 +694,7 @@ export default function DriveApp({ mode, onToggleMode }) {
         const counts = await uploadEntries(entries, run.target, {
             asMedia: run.asMedia ?? false,
             removeOriginal: run.removeOriginal,
+            group: run.group,
             onConflict: async (list) => {
                 if (run.choice) return run.choice;
                 const choice = await new Promise((resolve) =>
@@ -834,7 +835,9 @@ export default function DriveApp({ mode, onToggleMode }) {
 
     /**
      * The pieces a file too big for Telegram was cut into, sent like picked
-     * files into the folder it was meant for. The original is never removed.
+     * files into the folder it was meant for. When the original was to be
+     * deleted after upload, that happens once every piece is in the vault
+     * (watchPieces); the pieces themselves are plain files with no handle.
      * False when another upload is running (it says so).
      */
     function sendPieces(item, files) {
@@ -844,6 +847,15 @@ export default function DriveApp({ mode, onToggleMode }) {
         // already asked when the big file was picked
         run.asMedia = item.asMedia;
         run.scanned = true;
+        if (item.removeOriginal && item.handle && item.keptId)
+            run.group = watchPieces({
+                id: item.keptId,
+                name: item.name,
+                handle: item.handle,
+                file: item.file,
+                parent: item.parentID,
+                pieces: files.map((f) => ({ name: f.name, size: f.size })),
+            });
         activeRun.current = run;
         addBatch(
             run,
@@ -851,6 +863,9 @@ export default function DriveApp({ mode, onToggleMode }) {
         );
         run.chain.then(() => {
             if (!run.stopped) finishRun(run);
+            // a piece skipped or renamed leaves the original where it is
+            if (run.group)
+                sealPieces(run.group, run.counts.queued + run.counts.replaced);
         });
         return true;
     }

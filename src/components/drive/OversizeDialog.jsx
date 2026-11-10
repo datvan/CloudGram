@@ -84,8 +84,10 @@ function AutoCut({ item, limit, onSend }) {
     if (sent)
         body = (
             <Typography {...text}>
-                Đã cắt thành {sent} phần và đưa vào hàng chờ tải lên. Tệp gốc
-                vẫn còn nguyên trên máy.
+                Đã cắt thành {sent} phần và đưa vào hàng chờ tải lên.{" "}
+                {item.removeOriginal && item.handle
+                    ? "Khi tất cả các phần đã tải lên xong, tệp gốc sẽ được xoá khỏi máy như bạn đã chọn."
+                    : "Tệp gốc vẫn còn nguyên trên máy."}
             </Typography>
         );
     else if (status === undefined)
