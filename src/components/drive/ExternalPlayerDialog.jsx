@@ -79,10 +79,11 @@ export default function ExternalPlayerDialog({ item, onClose }) {
             <Stack spacing={1} alignItems="flex-start">
                 <Typography {...text}>
                     Video chạy ngay, tua được, không cần tải cả tệp. Giữ tab
-                    CloudGram này mở trong lúc xem: video được đọc từ Telegram
-                    qua tab này, rồi đi qua máy chủ CloudGram (chưa mã hoá) tới
-                    trình phát. Máy chủ chỉ giữ một đoạn ngắn và xoá khi bạn
-                    dừng hoặc đóng tab.
+                    CloudGram này mở và đừng để trình phát che kín cửa sổ trình
+                    duyệt (Chrome làm chậm tab bị che) trong lúc xem: video được
+                    đọc từ Telegram qua tab này, rồi đi qua máy chủ CloudGram
+                    (chưa mã hoá) tới trình phát. Máy chủ chỉ giữ một đoạn ngắn
+                    và xoá khi bạn dừng hoặc đóng tab.
                 </Typography>
                 <Button
                     variant="contained"

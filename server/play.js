@@ -133,6 +133,9 @@ export class Play {
             chunks: Math.ceil(size / PLAY_CHUNK),
             created: this.now(),
             seen: this.now(),
+            // the player's last request: a tab busy reading from Telegram does not
+            // poll, but a player still asking shows the video is being watched
+            played: this.now(),
             // chunk -> { bytes, used }
             have: new Map(),
             // chunks the tab was not asked for yet, first to ask at the front
@@ -243,6 +246,7 @@ export class Play {
         const session = this.#session(
             idRe.test(req.params.id) ? req.params.id : "",
         );
+        session.played = this.now();
         const total = session.size;
         let start = 0;
         let end = total - 1;
@@ -284,6 +288,7 @@ export class Play {
             for (let at = start; at <= end && !closed && !session.closed; ) {
                 const index = Math.floor(at / PLAY_CHUNK);
                 session.at = index;
+                session.played = this.now();
                 this.#readAhead(session, index);
                 await this.#ensure(session, index, true);
                 const bytes = await this.#read(session, index);
@@ -443,7 +448,8 @@ export class Play {
         const now = this.now();
         for (const session of [...this.sessions.values()])
             if (
-                now - session.seen > this.limits.silentMs ||
+                now - Math.max(session.seen, session.played) >
+                    this.limits.silentMs ||
                 now - session.created > this.limits.maxMs
             )
                 await this.#drop(session.id);
