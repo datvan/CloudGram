@@ -1,6 +1,10 @@
 #!/usr/bin/env node
-// CloudGram helper: cuts a video that is too big for Telegram into pieces with
-// the ffmpeg on this computer, and hands the pieces back to the CloudGram page.
+// CloudGram helper, two jobs for the CloudGram page:
+//  - cuts a video that is too big for Telegram into pieces with the ffmpeg on
+//    this computer, and hands the pieces back;
+//  - opens a video in PotPlayer, VLC or mpv: it serves a local address the
+//    player reads (with Range, so seeking works) and asks the page, which has
+//    the Telegram session, for each piece of bytes the player wants.
 //
 //   node cloudgram-helper.mjs
 //
@@ -30,6 +34,25 @@ const FFPROBE = process.env.FFPROBE || "ffprobe";
 const ROOT = path.join(os.tmpdir(), "cloudgram-helper");
 const STALE_MS = 6 * 3600 * 1000;
 const TRIES = 3;
+// the players the page may ask for, by name only: it never sends a path, so a
+// flaw in the page cannot make this program run something else. A path can be
+// set here, by whoever starts the program, with these variables.
+const PLAYERS = {
+    potplayer: "CLOUDGRAM_POTPLAYER",
+    vlc: "CLOUDGRAM_VLC",
+    mpv: "CLOUDGRAM_MPV",
+};
+// bytes asked of the page at a time; it answers at most two 1 MB parts
+const CHUNK = 2 * 1024 * 1024;
+// the page polls at least this often while a video is open; one gone silent
+// for SILENT_MS is closed
+const POLL_MS = 25000;
+const SILENT_MS = 90000;
+// a video no player has read from for this long is closed, so the page stops
+// polling for one nobody is watching
+const IDLE_MS = 30 * 60000;
+const ASK_MS = 60000;
+const MAX_SESSIONS = 8;
 
 /** id -> { dir, state: uploading|splitting|done|error, parts: [bytes], error } */
 const jobs = new Map();
@@ -44,6 +67,196 @@ const busy = () =>
 const rm = (dir) => fs.rmSync(dir, { recursive: true, force: true });
 const partFile = (dir, n) =>
     path.join(dir, `part${String(n).padStart(3, "0")}.mp4`);
+
+const onPath = (bin) => {
+    const found = spawnSync(
+        process.platform === "win32" ? "where" : "which",
+        [bin],
+        { encoding: "utf8", windowsHide: true },
+    );
+    return found.status === 0 ? found.stdout.split(/\r?\n/)[0].trim() : "";
+};
+
+/** player name -> program path, for the players this computer has. */
+function findPlayers() {
+    const programs = [
+        process.env.ProgramFiles,
+        process.env["ProgramFiles(x86)"],
+    ].filter(Boolean);
+    const candidates = { potplayer: [], vlc: [], mpv: [] };
+    if (process.platform === "win32") {
+        // PotPlayer registers potplayer: with the path of its own program
+        const reg = spawnSync(
+            "reg",
+            ["query", "HKCR\\potplayer\\shell\\open\\command", "/ve"],
+            { encoding: "utf8", windowsHide: true },
+        );
+        const registered = /REG_SZ\s+"?([^"]+?\.exe)/i.exec(
+            reg.stdout ?? "",
+        )?.[1];
+        if (registered) candidates.potplayer.push(registered);
+        for (const dir of programs) {
+            candidates.potplayer.push(
+                path.join(dir, "DAUM", "PotPlayer", "PotPlayerMini64.exe"),
+                path.join(dir, "DAUM", "PotPlayer", "PotPlayerMini.exe"),
+            );
+            candidates.vlc.push(path.join(dir, "VideoLAN", "VLC", "vlc.exe"));
+        }
+    } else if (process.platform === "darwin") {
+        candidates.vlc.push("/Applications/VLC.app/Contents/MacOS/VLC");
+    }
+    const found = {};
+    for (const [name, variable] of Object.entries(PLAYERS)) {
+        const exe = [process.env[variable], ...candidates[name]].find(
+            (file) => file && fs.existsSync(file),
+        );
+        // PotPlayer is Windows only and found above; the others may be on PATH
+        const installed = exe || (name === "potplayer" ? "" : onPath(name));
+        if (installed) found[name] = installed;
+    }
+    return found;
+}
+let playersAt = 0;
+let playersKnown = {};
+const players = () => {
+    if (Date.now() - playersAt > 10000) {
+        playersKnown = findPlayers();
+        playersAt = Date.now();
+    }
+    return playersKnown;
+};
+
+/** token -> an open video: the bytes come from the page, see ask() */
+const sessions = new Map();
+
+function closeSession(token) {
+    const session = sessions.get(token);
+    if (!session) return;
+    sessions.delete(token);
+    for (const res of session.waiters.splice(0)) {
+        clearTimeout(res.timer);
+        reply(res, 410, { error: "closed" });
+    }
+    for (const { reject } of session.pending.values())
+        reject(new Error("closed"));
+    session.pending.clear();
+}
+
+/** Hand queued requests to the page's waiting polls. */
+function flush(session) {
+    while (session.queue.length && session.waiters.length) {
+        const res = session.waiters.shift();
+        clearTimeout(res.timer);
+        reply(res, 200, session.queue.shift());
+    }
+}
+
+/** Bytes start..end of the video, as the page reads them from Telegram. */
+function ask(session, start, end) {
+    const id = String(session.next++);
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            session.pending.delete(id);
+            session.queue = session.queue.filter((r) => r.id !== id);
+            reject(new Error("page did not answer"));
+        }, ASK_MS);
+        session.pending.set(id, {
+            resolve: (bytes) => {
+                clearTimeout(timer);
+                resolve(bytes);
+            },
+            reject: (error) => {
+                clearTimeout(timer);
+                reject(error);
+            },
+        });
+        session.queue.push({ id, start, end });
+        flush(session);
+    });
+}
+
+/** The player's request: the whole video, or a part of it with Range. */
+async function play(req, res, session) {
+    const total = session.size;
+    let start = 0;
+    let end = total - 1;
+    let status = 200;
+    const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
+    if (m && (m[1] || m[2])) {
+        if (m[1] === "") start = Math.max(0, total - Number(m[2]));
+        else {
+            start = Number(m[1]);
+            if (m[2] !== "") end = Math.min(end, Number(m[2]));
+        }
+        status = 206;
+        if (start > end || start >= total) {
+            res.writeHead(416, { "Content-Range": `bytes */${total}` });
+            return res.end();
+        }
+    }
+    res.writeHead(status, {
+        "Content-Type": session.type,
+        "Accept-Ranges": "bytes",
+        "Content-Length": end - start + 1,
+        ...(status === 206
+            ? { "Content-Range": `bytes ${start}-${end}/${total}` }
+            : {}),
+    });
+    if (req.method === "HEAD") return res.end();
+    let closed = false;
+    session.playing += 1;
+    res.on("close", () => {
+        closed = true;
+        session.playing -= 1;
+        session.lastPlay = Date.now();
+    });
+    try {
+        for (let at = start; at <= end && !closed; ) {
+            const bytes = await ask(session, at, Math.min(end, at + CHUNK - 1));
+            if (closed) return undefined;
+            // never more than was asked, whatever the page sent
+            const chunk = bytes.subarray(0, end - at + 1);
+            if (!chunk.length) throw new Error("empty");
+            if (!res.write(chunk))
+                await new Promise((resolve) => res.once("drain", resolve));
+            at += chunk.length;
+        }
+        res.end();
+    } catch {
+        // the page is gone or could not read: the player sees a cut stream
+        res.destroy();
+    }
+    return undefined;
+}
+
+const readBody = (req, max) =>
+    new Promise((resolve, reject) => {
+        const chunks = [];
+        let size = 0;
+        req.on("data", (c) => {
+            size += c.length;
+            if (size > max) {
+                reject(new Error("too big"));
+                req.destroy();
+            } else chunks.push(c);
+        });
+        req.on("end", () => resolve(Buffer.concat(chunks)));
+        req.on("error", reject);
+    });
+
+const safeName = (name) =>
+    String(name ?? "")
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
+        .slice(0, 200) || "video";
+
+setInterval(() => {
+    for (const [token, session] of sessions)
+        if (
+            Date.now() - session.seen > SILENT_MS ||
+            (!session.playing && Date.now() - session.lastPlay > IDLE_MS)
+        )
+            closeSession(token);
+}, 30000).unref();
 
 function sweep() {
     fs.mkdirSync(ROOT, { recursive: true });
@@ -162,6 +375,18 @@ async function handle(req, res) {
     // other website open in the browser
     if (host !== `127.0.0.1:${PORT}` && host !== `localhost:${PORT}`)
         return reply(res, 403, { error: "host" });
+    const url = new URL(req.url, "http://local");
+    const route = url.pathname.split("/").filter(Boolean);
+
+    // The player has no Origin or header to show: the token in its address,
+    // which only the page was given, is what lets it in.
+    if (route[0] === "play" && route.length >= 3) {
+        const session = sessions.get(route[1]);
+        if (!session || !["GET", "HEAD"].includes(req.method))
+            return reply(res, 404, { error: "not found" });
+        return play(req, res, session);
+    }
+
     if (!ORIGINS.has(origin)) return reply(res, 403, { error: "origin" });
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
@@ -177,14 +402,12 @@ async function handle(req, res) {
     if (req.headers["x-cloudgram"] !== "1")
         return reply(res, 403, { error: "header" });
 
-    const url = new URL(req.url, "http://local");
-    const route = url.pathname.split("/").filter(Boolean);
-
     if (req.method === "GET" && url.pathname === "/status")
         return reply(res, 200, {
             ok: true,
-            version: 1,
+            version: 2,
             platform: process.platform,
+            players: Object.keys(players()),
             ffmpeg: has(FFMPEG),
             ffprobe: has(FFPROBE),
         });
@@ -221,6 +444,90 @@ async function handle(req, res) {
         job.state = "splitting";
         split(job, input, size, piece, limit);
         return reply(res, 202, { id });
+    }
+
+    if (req.method === "POST" && url.pathname === "/play") {
+        let want;
+        try {
+            want = JSON.parse((await readBody(req, 4096)).toString());
+        } catch {
+            return reply(res, 400, { error: "body" });
+        }
+        const size = Number(want?.size);
+        if (!(Number.isSafeInteger(size) && size > 0))
+            return reply(res, 400, { error: "size" });
+        const exe = Object.hasOwn(PLAYERS, want?.player)
+            ? players()[want.player]
+            : undefined;
+        if (!exe) return reply(res, 412, { error: "player" });
+        const type = /^[\w.+-]+\/[\w.+-]+$/.test(want.type ?? "")
+            ? want.type
+            : "application/octet-stream";
+        const token = crypto.randomBytes(16).toString("hex");
+        if (sessions.size >= MAX_SESSIONS)
+            closeSession(sessions.keys().next().value);
+        sessions.set(token, {
+            size,
+            type,
+            seen: Date.now(),
+            lastPlay: Date.now(),
+            playing: 0,
+            next: 0,
+            queue: [],
+            waiters: [],
+            pending: new Map(),
+        });
+        const address = `http://127.0.0.1:${PORT}/play/${token}/${encodeURIComponent(
+            safeName(want.name),
+        )}`;
+        // a fixed program and one argument made here, never through a shell
+        const child = spawn(exe, [address], {
+            detached: true,
+            stdio: "ignore",
+        });
+        child.on("error", () => closeSession(token));
+        child.unref();
+        return reply(res, 200, { token, url: address });
+    }
+
+    if (route[0] === "bridge" && sessions.has(route[1])) {
+        const session = sessions.get(route[1]);
+        session.seen = Date.now();
+        if (req.method === "DELETE" && route.length === 2) {
+            closeSession(route[1]);
+            return reply(res, 200, { ok: true });
+        }
+        if (req.method === "GET" && route[2] === "next") {
+            const request = session.queue.shift();
+            if (request) return reply(res, 200, request);
+            res.timer = setTimeout(() => {
+                session.waiters = session.waiters.filter((w) => w !== res);
+                res.writeHead(204);
+                res.end();
+            }, POLL_MS);
+            res.on("close", () => {
+                clearTimeout(res.timer);
+                session.waiters = session.waiters.filter((w) => w !== res);
+            });
+            session.waiters.push(res);
+            return undefined;
+        }
+        if (req.method === "POST" && route.length === 3) {
+            const waiting = session.pending.get(route[2]);
+            if (!waiting) return reply(res, 404, { error: "request" });
+            session.pending.delete(route[2]);
+            if (url.searchParams.has("error")) {
+                waiting.reject(new Error("page could not read"));
+                return reply(res, 200, { ok: true });
+            }
+            try {
+                waiting.resolve(await readBody(req, 2 * CHUNK));
+            } catch (error) {
+                waiting.reject(error);
+                return reply(res, 400, { error: "body" });
+            }
+            return reply(res, 200, { ok: true });
+        }
     }
 
     const job = jobs.get(route[1]);
