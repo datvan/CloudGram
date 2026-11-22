@@ -38,6 +38,7 @@ await api.play.reset();
 const server = createApiServer(api, {
     origin: process.env.CLOUDGRAM_ORIGIN ?? "https://cloudgram.datvan.com",
     secureCookies: process.env.CLOUDGRAM_INSECURE_COOKIES !== "1",
+    diagLog: process.env.CLOUDGRAM_DIAG_LOG !== "0",
 });
 
 // also deletes expired share links
