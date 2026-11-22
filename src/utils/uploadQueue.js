@@ -1,3 +1,10 @@
+import {
+    diag,
+    diagRun,
+    diagStage,
+    diagStageEnd,
+    swallow,
+} from "../services/diag";
 import { helpers } from "telegram";
 
 import {
@@ -59,6 +66,36 @@ const RESUME_SAVE = 2000;
 // client (the lease came back) restarts it at once
 const OFFLINE_CHECK = 3000;
 
+const trace = (fn) => {
+    try {
+        fn();
+    } catch {
+        // Diagnostics are optional.
+    }
+};
+const emit = (event, fields) =>
+    diag(
+        event,
+        Object.fromEntries(
+            Object.entries(fields).filter(([, value]) => value !== undefined),
+        ),
+    );
+const sizeBucket = (size) =>
+    Math.max(0, Math.min(60, Math.floor(Math.log2(Math.max(1, size)))));
+const errorName = (error) => {
+    const name = error?.name;
+    return [
+        "Error",
+        "TypeError",
+        "AbortError",
+        "NotAllowedError",
+        "SecurityError",
+        "NetworkError",
+    ].includes(name)
+        ? name
+        : "Error";
+};
+
 const waiting = [];
 const cancelled = new Set();
 /** Jobs that gave up, kept whole so Retry can put them back on the queue. */
@@ -75,6 +112,15 @@ function forget(job) {
     Store.dispatch(completedProgress(job.id));
 }
 let running = 0;
+let lastPumpState;
+const offlineRuns = new Set();
+function pumpState(state) {
+    trace(() => {
+        if (lastPumpState === state) return;
+        lastPumpState = state;
+        emit("queue.pump", { state, active: running, queued: waiting.length });
+    });
+}
 /** Files queued since the page last heard, announced together. */
 let announce = [];
 
@@ -148,11 +194,34 @@ export function enqueueUpload({
     replaces,
     removeOriginal = false,
     group,
+    run,
+    diagKind,
 }) {
-    if (UPLOAD_OWNER && !uploadScope()) return undefined;
+    let diagFile;
+    trace(() => {
+        diagFile = diagRun().slice(0, 4);
+    });
+    const report = (ok, fileId = diagFile) =>
+        trace(() =>
+            emit("upload.enqueue", {
+                run: run?.diagId,
+                file: fileId,
+                sizeB: sizeBucket(file.size),
+                ok,
+                kind: diagKind ?? (recordId ? "resume" : "new"),
+            }),
+        );
+    if (UPLOAD_OWNER && !uploadScope()) {
+        report(false);
+        return undefined;
+    }
     if (recordId && jobs.has(recordId)) {
         // only a job waiting for Retry takes new bytes; a live one is left be
-        if (!failed.has(recordId)) return getRecord(recordId);
+        if (!failed.has(recordId)) {
+            const record = getRecord(recordId);
+            report(Boolean(record), jobs.get(recordId)?.diagFile);
+            return record;
+        }
         failed.delete(recordId);
     }
     const record = recordId
@@ -163,7 +232,10 @@ export function enqueueUpload({
               size: file.size,
               mime: file.type || undefined,
           });
-    if (!record) return undefined;
+    if (!record) {
+        report(false);
+        return undefined;
+    }
     // a folder queues thousands in one go; one update for all of them, or
     // the page renders thousands of times before the first byte goes out
     if (!announce.length)
@@ -183,6 +255,8 @@ export function enqueueUpload({
         removeOriginal,
         // one of the pieces of a cut file (watchPieces); not written to the log
         group,
+        run,
+        diagFile,
         resume: loadResume(resume),
     };
     jobs.set(record.id, job);
@@ -209,6 +283,7 @@ export function enqueueUpload({
     });
     if (handle) saveHandle(record.id, handle);
     waiting.push(job);
+    report(true);
     pump();
     return record;
 }
@@ -279,6 +354,16 @@ function pump() {
     // Without Telegram every file would fail at once and use up its retries
     // (another device took the lease, the network dropped). They wait instead.
     if (!isOnline()) {
+        pumpState(waiting.length ? "offline" : "idle");
+        trace(() => {
+            for (const job of waiting) {
+                const id = job.run?.diagId;
+                if (id && !offlineRuns.has(id)) {
+                    offlineRuns.add(id);
+                    diagStage(id, "offline");
+                }
+            }
+        });
         if (waiting.length && !offlineCheck) {
             offlineCheck = setTimeout(() => {
                 offlineCheck = null;
@@ -287,9 +372,14 @@ function pump() {
         }
         return;
     }
+    trace(() => {
+        for (const id of offlineRuns) diagStageEnd(id);
+        offlineRuns.clear();
+    });
     while (running < MAX_CONCURRENT && waiting.length) {
         const job = waiting.shift();
         if (!owns(job)) {
+            pumpState("scopeMismatch");
             forget(job);
             continue;
         }
@@ -300,6 +390,7 @@ function pump() {
             continue;
         }
         running += 1;
+        pumpState("slot");
         let released = false;
         const release = () => {
             if (released) return;
@@ -309,6 +400,7 @@ function pump() {
         };
         run(job, release).finally(release);
     }
+    if (!waiting.length) pumpState("idle");
 }
 
 // Telegram keeps uploaded parts only for a while; lost ones have to go again
@@ -331,6 +423,17 @@ function retryDelay(job, error) {
 /** `release` gives the job's place in the pool to the next one. */
 async function run(job, release) {
     const { id, file, asMedia } = job;
+    trace(() => {
+        if (job.diagStarted !== undefined) return;
+        job.diagStarted = Date.now();
+        job.diagRetries = 0;
+        emit("file.start", {
+            run: job.run?.diagId,
+            file: job.diagFile,
+            sizeB: sizeBucket(file.size),
+            parts: Math.max(1, Math.ceil(file.size / (512 * 1024))),
+        });
+    });
     // kept on the job, through Retry too, so no attempt resends a part
     // Telegram already has
     job.resume ??= {};
@@ -357,6 +460,16 @@ async function run(job, release) {
             ...(UPLOAD_OWNER ? { client, assertCurrent } : {}),
             asMedia,
             resume: job.resume,
+            onRetry: (error) =>
+                trace(() => {
+                    job.diagRetries = (job.diagRetries ?? 0) + 1;
+                    emit("file.part.retry", {
+                        run: job.run?.diagId,
+                        file: job.diagFile,
+                        n: job.diagRetries,
+                        errName: errorName(error),
+                    });
+                }),
             // a slice of a cut file is out: on disk before the next one starts,
             // so a reopened tab goes on from there
             onPiece: () => {
@@ -366,6 +479,9 @@ async function run(job, release) {
             // on disk before the message goes, so a reopened tab knows to
             // look for it in Saved Messages before sending another copy
             onSend: (kind, final = true) => {
+                trace(() => {
+                    job.diagStage = "send";
+                });
                 assertCurrent();
                 // a slice of a cut file; the last one is the one that counts
                 if (!final) return undefined;
@@ -410,6 +526,14 @@ async function run(job, release) {
         }
         const seconds = retryDelay(job, error);
         if (!seconds) {
+            trace(() =>
+                emit("file.fail", {
+                    run: job.run?.diagId,
+                    file: job.diagFile,
+                    errName: errorName(error),
+                    stage: job.diagStage ?? "other",
+                }),
+            );
             failed.set(id, job);
             Store.dispatch(
                 errorProgress(id, error?.message ?? "Upload failed"),
@@ -449,6 +573,14 @@ async function run(job, release) {
         // while the file is still at hand, for the player's seek bar
         if (!job.removeOriginal) fromUpload(id, file);
     } catch (error) {
+        trace(() =>
+            emit("file.fail", {
+                run: job.run?.diagId,
+                file: job.diagFile,
+                errName: errorName(error),
+                stage: "save",
+            }),
+        );
         console.log(error);
         Store.dispatch(
             errorProgress(id, error?.message ?? "Could not save the file id"),
@@ -492,6 +624,26 @@ async function settle(id, result, replaces, job) {
             () => false,
         );
         if (!current()) return;
+        trace(
+            () =>
+                job &&
+                emit(
+                    stored ? "file.done" : "file.fail",
+                    stored
+                        ? {
+                              run: job?.run?.diagId,
+                              file: job?.diagFile,
+                              ms: Date.now() - job?.diagStarted,
+                              retries: job?.diagRetries ?? 0,
+                          }
+                        : {
+                              run: job?.run?.diagId,
+                              file: job?.diagFile,
+                              errName: "Error",
+                              stage: "save",
+                          },
+                ),
+        );
         const old = replaces && getRecord(replaces);
         if (stored && old && !old.trashedAt) trash([replaces]);
         // a file put in the trash meanwhile may be emptied out of it next,
@@ -504,8 +656,16 @@ async function settle(id, result, replaces, job) {
             else if (!stored) kept = KEPT.notStored;
             else if (trashed) kept = KEPT.trashed;
             else
-                kept = await removePicked(job.handle, job.file).catch(
+                kept = await removePicked(job.handle, job.file, job).catch(
                     (error) => `Không xoá được: ${error?.message ?? error}`,
+                );
+            if (!job.handle || !stored || trashed)
+                trace(() =>
+                    emit("remove.original", {
+                        run: job.run?.diagId,
+                        file: job.diagFile,
+                        result: "kept",
+                    }),
                 );
         }
     } else {
@@ -514,7 +674,16 @@ async function settle(id, result, replaces, job) {
             result.messages ?? [message.id],
             { revoke: true },
         );
-        if (job?.removeOriginal) kept = KEPT.gone;
+        if (job?.removeOriginal) {
+            kept = KEPT.gone;
+            trace(() =>
+                emit("remove.original", {
+                    run: job.run?.diagId,
+                    file: job.diagFile,
+                    result: "kept",
+                }),
+            );
+        }
     }
 
     if (!current()) return;
@@ -636,7 +805,9 @@ export async function retryRemoveOriginals(ids) {
     const roots = new Set(list.map((id) => keptJobs.get(id).handle.root));
     await Promise.all(
         [...roots].map((root) =>
-            root.requestPermission({ mode: "readwrite" }).catch(() => {}),
+            root
+                .requestPermission({ mode: "readwrite" })
+                .catch(swallow("uploadQueue.writePermission")),
         ),
     );
     if (UPLOAD_OWNER && scope !== uploadScope()) return;

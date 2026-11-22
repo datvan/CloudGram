@@ -1,3 +1,4 @@
+import { diag, swallow } from "./diag";
 /**
  * The sign-in flow, from a local CloudGram account down to a live Telegram
  * connection:
@@ -44,6 +45,7 @@ import {
     hasClient,
     legacySession,
     newClient,
+    onClientChange,
     sessionString,
     setClient,
     stopClient,
@@ -63,7 +65,34 @@ let leaseGrantedAt = 0;
 let leasePoll = null;
 let quickClient = null;
 
-const set = (state) => Store.dispatch(setAuth(state));
+let diagLease = false;
+let lastConnection;
+function connection(state, leaseOk = diagLease) {
+    try {
+        diagLease = leaseOk;
+        const key = `${state}:${leaseOk}`;
+        if (key === lastConnection) return;
+        lastConnection = key;
+        diag("conn.state", { state, leaseOk });
+    } catch {
+        // Diagnostics are optional.
+    }
+}
+try {
+    onClientChange((client) =>
+        connection(client && client.connected !== false ? "ready" : "offline"),
+    );
+} catch {
+    // Diagnostics are optional.
+}
+const set = (state) => {
+    const result = Store.dispatch(setAuth(state));
+    if (state.phase === "connecting" || state.phase === "ready")
+        connection(state.phase);
+    else if (["signedOut", "link", "error"].includes(state.phase))
+        connection("offline", state.phase === "signedOut" ? false : diagLease);
+    return result;
+};
 
 async function closeQuickClient() {
     const temporary = quickClient;
@@ -439,11 +468,13 @@ export async function acquireLease(takeover) {
         return;
     }
     if (res.status === "granted") {
+        connection("leaseOk", true);
         leaseGrantedAt = Date.now();
         startHeartbeat();
         await connectTelegram();
         return;
     }
+    connection("leaseLost", false);
     set({ phase: "lease", lease: res });
     // keep asking: a waiting takeover gets the lease as soon as the other
     // browser lets go, and a plain "busy" clears when it closes
@@ -452,15 +483,17 @@ export async function acquireLease(takeover) {
             try {
                 const next = await api.lease(browserId(), false);
                 if (next.status === "granted") {
+                    connection("leaseOk", true);
                     clearInterval(leasePoll);
                     leaseGrantedAt = Date.now();
                     startHeartbeat();
-                    await refresh().catch(() => {});
+                    await refresh().catch(swallow("account.leaseRefresh"));
                     await connectTelegram();
                 } else {
                     set({ lease: next });
                 }
-            } catch {
+            } catch (error) {
+                swallow("account.leasePoll")(error);
                 // transient; the next tick tries again
             }
         },
@@ -480,7 +513,8 @@ function startHeartbeat() {
             // another browser asked to take over, or already holds it
             await yieldTelegram(res.status === "revoked");
             return;
-        } catch {
+        } catch (error) {
+            swallow("account.heartbeat")(error);
             // fall through to the grace check
         }
         if (Date.now() - leaseGrantedAt > LEASE_GRACE) {
@@ -496,6 +530,7 @@ function stopHeartbeat() {
 }
 
 async function yieldTelegram(release, notice) {
+    connection("leaseLost", false);
     stopHeartbeat();
     await stopClient();
     if (release) {

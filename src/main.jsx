@@ -17,6 +17,10 @@ import "@fontsource/roboto/700.css";
 
 import { makeTheme } from "./theme";
 import { startStreaming } from "./services/stream";
+import { setDiagScope } from "./services/diag";
+import { uploadScope } from "./services/uploadLog";
+
+setDiagScope(uploadScope);
 
 // videos play from Telegram as they download (services/stream.js)
 startStreaming();
