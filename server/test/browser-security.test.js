@@ -28,9 +28,189 @@ async function load(path, globals, exports) {
         setInterval,
         clearInterval,
         queueMicrotask,
+        swallow: (_site, fallback) => () => fallback,
         ...globals,
     });
     return vm.runInContext(`${source}\n;({${exports.join(",")}})`, context);
+}
+
+for (const result of ["skip", "denied", "throw", "granted"]) {
+    test(`write permission ${result} keeps uploads safe`, async () => {
+        let answer;
+        let skip;
+        const request = new Promise((resolve, reject) => {
+            answer =
+                result === "throw"
+                    ? () => reject(new Error("denied"))
+                    : resolve;
+        });
+        const skipped = new Promise((resolve) => {
+            skip = resolve;
+        });
+        const root = {
+            kind: "file",
+            requestPermission: () => request,
+            queryPermission: async () =>
+                result === "granted" ? "granted" : "prompt",
+        };
+        const entries = [{ handle: { root } }];
+        const pickers = await load("../../src/utils/pickers.js", {}, [
+            "waitForWrite",
+            "removePicked",
+            "KEPT",
+        ]);
+        const waiting = pickers.waitForWrite(entries, {}, skipped);
+        if (result === "skip") skip();
+        else answer(result === "granted" ? "granted" : "denied");
+        assert.equal(await waiting, result === "granted");
+        if (result !== "granted") {
+            assert.equal(
+                await pickers.removePicked(entries[0].handle, {}),
+                pickers.KEPT.permission,
+            );
+            if (result === "skip") {
+                answer("granted");
+                await request;
+                root.queryPermission = async () => "granted";
+                root.getFile = async () => ({ size: 1, lastModified: 1 });
+                root.remove = async () => {};
+                assert.equal(
+                    await pickers.removePicked(entries[0].handle, {
+                        size: 1,
+                        lastModified: 1,
+                    }),
+                    null,
+                );
+            }
+        }
+    });
+}
+
+test("failed enqueue is not counted as queued", async () => {
+    const actions = await load(
+        "../../src/utils/driveActions.js",
+        {
+            UPLOAD_OWNER: false,
+            SPLIT_RAW: true,
+            uploadScope: () => ({}),
+            uploadLimit: () => Infinity,
+            buildTreeFromPaths: () => ({
+                folders: [],
+                files: [{ file: { name: "a", size: 1 } }],
+            }),
+            getSnapshot: () => ({ records: [] }),
+            enqueueUpload: () => undefined,
+        },
+        ["uploadEntries"],
+    );
+    const counts = await actions.uploadEntries([], null);
+    assert.equal(counts.queued, 0);
+    assert.match(counts.reason, /Không thể/);
+});
+
+test("later batches do not prompt after permission was skipped", async () => {
+    const pickers = await load("../../src/utils/pickers.js", {}, [
+        "waitForWrite",
+    ]);
+    const entries = [
+        {
+            handle: {
+                root: {
+                    kind: "file",
+                    requestPermission() {
+                        throw new Error("unexpected prompt");
+                    },
+                },
+            },
+        },
+    ];
+    assert.equal(
+        await pickers.waitForWrite(entries, {}, new Promise(() => {}), true),
+        false,
+    );
+    assert.equal(entries[0].handle.permissionDenied, undefined);
+});
+
+test("chosen folder covers only its own loose files", async () => {
+    const file = { size: 1, lastModified: 1 };
+    let removed = false;
+    const first = { kind: "file" };
+    const second = { kind: "file", queryPermission: async () => "prompt" };
+    const folder = {
+        resolve: async (root) => (root === first ? ["a"] : null),
+        queryPermission: async () => "granted",
+        getFileHandle: async () => ({ getFile: async () => file }),
+        removeEntry: async () => {
+            removed = true;
+        },
+    };
+    const entries = [{ handle: { root: first } }, { handle: { root: second } }];
+    const run = {};
+    const pickers = await load(
+        "../../src/utils/pickers.js",
+        {
+            UPLOAD_OWNER: true,
+            uploadScope: () => "owner",
+            loadFolders: async () => [],
+            saveFolders: async () => {},
+            uuid4: () => "id",
+            window: { showDirectoryPicker: async () => folder },
+        },
+        ["waitForWrite", "removePicked", "KEPT"],
+    );
+    assert.equal(
+        await pickers.waitForWrite(entries, run, new Promise(() => {})),
+        false,
+    );
+    assert.equal(run.outsideFolder, 1);
+    assert.equal(entries[1].handle.root, second);
+    assert.equal(await pickers.removePicked(entries[0].handle, file), null);
+    assert.equal(removed, true);
+    assert.equal(
+        await pickers.removePicked(entries[1].handle, file),
+        pickers.KEPT.permission,
+    );
+});
+
+for (const scenario of ["skip", "switch", "switch-disabled"]) {
+    test(`abandoned folder picker: ${scenario}`, async () => {
+        let scope = {};
+        let choose, skip;
+        let saved = 0;
+        const picker = new Promise((resolve) => {
+            choose = resolve;
+        });
+        const skipped = new Promise((resolve) => {
+            skip = resolve;
+        });
+        const folder = { resolve: async () => ["a"] };
+        const pickers = await load(
+            "../../src/utils/pickers.js",
+            {
+                UPLOAD_OWNER: scenario !== "switch-disabled",
+                uploadScope: () => scope,
+                loadFolders: async () => [],
+                saveFolders: async () => {
+                    saved++;
+                },
+                uuid4: () => "id",
+                window: { showDirectoryPicker: () => picker },
+            },
+            ["waitForWrite"],
+        );
+        const entries = [
+            { handle: { root: { kind: "file" } } },
+            { handle: { root: { kind: "file" } } },
+        ];
+        const waiting = pickers.waitForWrite(entries, {}, skipped);
+        await new Promise(setImmediate);
+        if (scenario === "skip") skip();
+        else scope = {};
+        choose(folder);
+        await waiting;
+        await new Promise(setImmediate);
+        assert.equal(saved, scenario === "switch-disabled" ? 1 : 0);
+    });
 }
 
 for (const state of [

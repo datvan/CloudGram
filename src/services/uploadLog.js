@@ -1,3 +1,4 @@
+import { swallow } from "./diag";
 /**
  * A note, kept on this device, of every upload that has not finished, so a
  * tab closed halfway can offer to pick up where it stopped (uploadResume.js).
@@ -35,7 +36,7 @@ export const TAB = uuid4();
 // held until the tab goes away; the browser lets go of it then
 navigator.locks
     ?.request(TAB_LOCK + TAB, () => new Promise(() => {}))
-    .catch(() => {});
+    .catch(swallow("uploadLog.tabLock"));
 
 let username = null;
 let key = null;
@@ -219,7 +220,8 @@ export async function loadFolders() {
         );
         const folders = (await row)?.folders ?? [];
         return LOG_OWNER && readingScope !== scope ? [] : folders;
-    } catch {
+    } catch (error) {
+        swallow("uploadLog.loadFolders")(error);
         return [];
     }
 }
@@ -286,7 +288,8 @@ export async function readEntries() {
                 LABEL,
             );
             result.push({ ...entry, handle: handleOf.get(rows.keys[i]) });
-        } catch {
+        } catch (error) {
+            swallow("uploadLog.decrypt")(error);
             // sealed under an older key (another account on this browser
             // under the same name, recreated); nothing can read it
         }
@@ -303,7 +306,8 @@ export async function liveTabs() {
             if (lock.name.startsWith(TAB_LOCK))
                 live.add(lock.name.slice(TAB_LOCK.length));
         }
-    } catch {
+    } catch (error) {
+        swallow("uploadLog.liveTabs")(error);
         // no Web Locks: every other tab counts as gone
     }
     return live;

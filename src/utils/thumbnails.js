@@ -335,7 +335,7 @@ function retry(entry, error) {
     // a wait Telegram asked for is not a failure of this thumbnail
     const counts = isOnline() && !error?.seconds;
     if (counts && entry.attempts >= RETRY_DELAYS.length) {
-        console.log("No thumbnail for", entry.record.name, error);
+        console.log("No thumbnail", error?.name);
         pending.delete(entry.key);
         entry.resolve(null);
         return;

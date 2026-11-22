@@ -72,7 +72,7 @@ const note = (text) => {
  * one that reaches here is long and is rethrown, as is a long
  * FLOOD_PREMIUM_WAIT; both carry `seconds` so the upload queue can say so.
  */
-async function call(client, request, dcId, stats) {
+async function call(client, request, dcId, stats, onRetry) {
     for (let attempt = 0; ; attempt += 1) {
         flight.sender += 1;
         let sender;
@@ -90,6 +90,11 @@ async function call(client, request, dcId, stats) {
                 note(`Telegram bắt chờ ${premium} giây (giới hạn tốc độ tải)`);
                 stats.waits.push(premium);
                 if (premium <= MAX_SILENT_WAIT && attempt < ATTEMPTS - 1) {
+                    try {
+                        onRetry?.(error);
+                    } catch {
+                        /* Diagnostics are optional. */
+                    }
                     await helpers.sleep(premium * 1000);
                     continue;
                 }
@@ -103,6 +108,11 @@ async function call(client, request, dcId, stats) {
             }
             note(`lỗi ${error?.errorMessage ?? error?.message}, đang thử lại`);
             if (attempt < ATTEMPTS - 1 && !isFinal(error)) {
+                try {
+                    onRetry?.(error);
+                } catch {
+                    /* Diagnostics are optional. */
+                }
                 if (sender.isConnected()) stats.retries += 1;
                 else stats.reconnects += 1;
                 await helpers.sleep(500 * 2 ** attempt);
@@ -191,7 +201,7 @@ export const uploadRate = () => sentMeter.rate();
  */
 export async function uploadParts(client, file, options = {}) {
     const { partSize, inflight } = { ...UPLOAD_DEFAULTS, ...options };
-    const { onProgress, stats = newStats(), resume = {} } = options;
+    const { onProgress, stats = newStats(), resume = {}, onRetry } = options;
     const size = file.size;
     const parts = Math.max(1, Math.ceil(size / partSize));
     const big = size > BIG_FILE;
@@ -235,7 +245,7 @@ export async function uploadParts(client, file, options = {}) {
                   bytes,
               });
         try {
-            await call(client, request, dcId, stats);
+            await call(client, request, dcId, stats, onRetry);
         } catch (error) {
             failed = true;
             throw error;

@@ -1,4 +1,12 @@
 import {
+    diag,
+    diagRun,
+    diagStage,
+    diagStageEnd,
+    diagRunEnd,
+    swallow,
+} from "../../services/diag";
+import {
     useCallback,
     useEffect,
     useLayoutEffect,
@@ -91,6 +99,7 @@ import { activeEntry } from "../../redux/reducers/progressReducer";
 import * as drive from "../../services/drive";
 import { regenerateThumbnail } from "../../services/thumbnailOverride";
 import { uploadScope } from "../../services/uploadLog";
+import { UPLOAD_OWNER } from "../../config/security";
 import { startTreeBackup, stopTreeBackup } from "../../services/treeBackup";
 import {
     accountName,
@@ -111,7 +120,7 @@ import {
 } from "../../utils/driveActions";
 import { nameMatcher } from "../../utils/format";
 import {
-    askToWrite,
+    waitForWrite,
     canKeepHandles,
     isAbort,
     pickFiles,
@@ -120,6 +129,14 @@ import {
 } from "../../utils/pickers";
 import { isHidden, pathTo } from "../../utils/tree";
 import { retryUpload, sealPieces, watchPieces } from "../../utils/uploadQueue";
+
+const trace = (fn) => {
+    try {
+        fn();
+    } catch {
+        // Diagnostics are optional.
+    }
+};
 
 const VIEWS = {
     folder: {
@@ -239,6 +256,21 @@ export default function DriveApp({ mode, onToggleMode }) {
     const [busy, setBusy] = useState(false);
     const [thumbnailJobs, setThumbnailJobs] = useState(new Map());
     const [notice, setNotice] = useState(null);
+    useEffect(() => {
+        if (notice)
+            trace(() =>
+                diag("ui.notice", { sev: notice.severity, kind: notice.kind }),
+            );
+    }, [notice]);
+    const [writeWait, setWriteWait] = useState(null);
+    const mounted = useRef(true);
+    useEffect(() => {
+        mounted.current = true;
+        return () => {
+            mounted.current = false;
+            activeRun.current?.skipWrite?.();
+        };
+    }, []);
     const [dropping, setDropping] = useState(false);
     const dragDepth = useRef(0);
     const fileInput = useRef(null);
@@ -324,7 +356,9 @@ export default function DriveApp({ mode, onToggleMode }) {
 
         const dir = sort.dir === "asc" ? 1 : -1;
         const dateOf = (record) =>
-            inTrash ? record.trashedAt : record.modifiedAt ?? record.updatedAt;
+            inTrash
+                ? record.trashedAt
+                : (record.modifiedAt ?? record.updatedAt);
         return [...list].sort((a, b) => {
             // folders first, whatever the sort
             if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
@@ -443,6 +477,7 @@ export default function DriveApp({ mode, onToggleMode }) {
         (item) => {
             if (item.trashedAt) {
                 setNotice({
+                    kind: "openTrashed",
                     severity: "info",
                     text: "Khôi phục mục này để mở.",
                 });
@@ -499,6 +534,7 @@ export default function DriveApp({ mode, onToggleMode }) {
         } catch (e) {
             console.log(e);
             setNotice({
+                kind: "actionFailed",
                 severity: "error",
                 text: `${label}: ${describeError(e)}`,
             });
@@ -516,12 +552,14 @@ export default function DriveApp({ mode, onToggleMode }) {
             await regenerateThumbnail(record, { scope });
             if (uploadScope() === scope)
                 setNotice({
+                    kind: "thumbnailCreated",
                     severity: "success",
                     text: "Đã tạo lại hình thu nhỏ",
                 });
         } catch (error) {
             if (uploadScope() === scope && error.name !== "AbortError")
                 setNotice({
+                    kind: "thumbnailFailed",
                     severity: "error",
                     text: `Không tạo lại được hình thu nhỏ: ${error.message}`,
                 });
@@ -588,6 +626,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                 drive.trash(ids);
                 setSelected(new Set());
                 setNotice({
+                    kind: "trashed",
                     severity: "info",
                     text: `Đã chuyển ${targets.length} mục vào thùng rác.`,
                     undo: () => drive.restore(ids),
@@ -597,6 +636,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                 drive.restore(ids);
                 setSelected(new Set());
                 setNotice({
+                    kind: "restored",
                     severity: "success",
                     text: `Đã khôi phục ${targets.length} mục.`,
                 });
@@ -613,7 +653,11 @@ export default function DriveApp({ mode, onToggleMode }) {
             if (dialog.all) await emptyTrash({ withLinks });
             else await deleteForever(dialog.ids, { withLinks });
             setSelected(new Set());
-            setNotice({ severity: "success", text: "Đã xoá vĩnh viễn." });
+            setNotice({
+                kind: "deleted",
+                severity: "success",
+                text: "Đã xoá vĩnh viễn.",
+            });
         });
         setDialog(null);
     }
@@ -632,6 +676,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                 ? byId.get(destination)?.name
                 : "Drive của tôi";
             setNotice({
+                kind: "moved",
                 severity: "success",
                 text: `Đã chuyển ${moved.length} mục vào “${name}”.`,
             });
@@ -661,9 +706,18 @@ export default function DriveApp({ mode, onToggleMode }) {
      * the answer kept for every batch after.
      */
     function newRun() {
+        let diagId;
+        let diagStarted;
+        trace(() => {
+            diagId = diagRun();
+            diagStarted = Date.now();
+        });
         return {
+            diagId,
+            diagStarted,
             // fixed now; the user may browse away meanwhile
             target: uploadTarget,
+            scope: uploadScope(),
             found: 0,
             media: 0,
             // the whole folder is read, so `found` and `media` are final
@@ -690,6 +744,7 @@ export default function DriveApp({ mode, onToggleMode }) {
 
     function stopRun(run) {
         run.stopped = true;
+        run.skipWrite?.();
         run.stop?.();
     }
 
@@ -701,13 +756,22 @@ export default function DriveApp({ mode, onToggleMode }) {
             .catch((err) => {
                 stopRun(run);
                 endRun(run);
-                setNotice({ severity: "error", text: describeError(err) });
+                setNotice({
+                    kind: "uploadFailed",
+                    severity: "error",
+                    text: describeError(err),
+                });
             });
     }
 
     // a run stopped partway still says what its earlier batches queued
     function stopAndReport(run) {
         if (run.stopped) return;
+        trace(() => {
+            run.diagReason = "cancel";
+        });
+        run.cancelled = true;
+        run.reason ??= "Đã huỷ phần tải lên còn lại.";
         stopRun(run);
         finishRun(run);
     }
@@ -721,6 +785,20 @@ export default function DriveApp({ mode, onToggleMode }) {
         // only files picked with a handle (Chrome, Edge) can be deleted after
         const removable = entries.some((entry) => entry.handle);
         if (run.asMedia === undefined && (entries.some(isMedia) || removable)) {
+            const modeStarted = Date.now();
+            trace(() =>
+                diag("upload.mode.open", {
+                    run: run.diagId,
+                    total: run.found,
+                    media: run.media,
+                    removable,
+                    fsa: canKeepHandles,
+                }),
+            );
+            trace(() => {
+                run.diagStage = "modeDialog";
+                diagStage(run.diagId, "modeDialog");
+            });
             const answer = await new Promise((resolve) =>
                 setDialog({
                     type: "uploadMode",
@@ -733,6 +811,18 @@ export default function DriveApp({ mode, onToggleMode }) {
                     resolve,
                 }),
             );
+            trace(() =>
+                diag("upload.mode.answer", {
+                    run: run.diagId,
+                    answer: answer == null ? "cancel" : "start",
+                    asMedia: Boolean(answer?.asMedia),
+                    removeOriginal: Boolean(answer?.removeOriginal),
+                    ms: Date.now() - modeStarted,
+                }),
+            );
+            trace(() => {
+                if (run.diagStage === "modeDialog") diagStageEnd(run.diagId);
+            });
             if (answer == null) {
                 stopAndReport(run);
                 return;
@@ -744,8 +834,72 @@ export default function DriveApp({ mode, onToggleMode }) {
         }
         // the first batch is still inside the click; a later one with roots
         // of its own is refused without it, and its files stay
-        if (run.removeOriginal) await askToWrite(entries, run);
+        if (run.removeOriginal) {
+            const skip = new Promise((resolve) => {
+                run.skipWrite = resolve;
+            });
+            let allowed;
+            trace(() => diagStage(run.diagId, "perm"));
+            try {
+                const roots = [
+                    ...new Set(
+                        entries
+                            .map((entry) => entry.handle?.root)
+                            .filter(Boolean),
+                    ),
+                ];
+                const permissions = await Promise.all(
+                    roots.map((root) =>
+                        root
+                            .queryPermission({ mode: "readwrite" })
+                            .catch(swallow("driveApp.permission", null)),
+                    ),
+                );
+                if (run.stopped || !mounted.current) return;
+                if (
+                    !run.permissionDenied &&
+                    permissions.every((permission) => permission === "granted")
+                )
+                    allowed = true;
+                else {
+                    if (!run.permissionDenied)
+                        setWriteWait({ run, skip: run.skipWrite });
+                    allowed = await waitForWrite(
+                        entries,
+                        run,
+                        skip,
+                        run.permissionDenied,
+                    );
+                }
+            } finally {
+                trace(() => diagStageEnd(run.diagId));
+                if (mounted.current)
+                    setWriteWait((current) =>
+                        current?.run === run ? null : current,
+                    );
+                run.skipWrite = null;
+            }
+            if (run.stopped) return;
+            if (!allowed && run.writeDenied) run.permissionDenied = true;
+        }
+        if (
+            UPLOAD_OWNER &&
+            (run.scope === null || run.scope !== uploadScope())
+        ) {
+            trace(() => {
+                run.diagReason = "scope";
+            });
+            trace(() =>
+                diag("upload.entries.stop", {
+                    run: run.diagId,
+                    reason: "scope",
+                }),
+            );
+            run.reason ??= "Tài khoản đã thay đổi; không thể bắt đầu tải lên.";
+            return;
+        }
         const counts = await uploadEntries(entries, run.target, {
+            run,
             asMedia: run.asMedia ?? false,
             removeOriginal: run.removeOriginal,
             group: run.group,
@@ -756,7 +910,10 @@ export default function DriveApp({ mode, onToggleMode }) {
                 );
                 if (run.stopped) return "cancel";
                 run.choice = choice;
-                if (choice === "cancel") stopAndReport(run);
+                if (choice === "cancel") {
+                    run.reason ??= "Đã huỷ tải lên.";
+                    stopAndReport(run);
+                }
                 return choice;
             },
             // not waited for: the rest of the batch uploads meanwhile
@@ -772,31 +929,105 @@ export default function DriveApp({ mode, onToggleMode }) {
                 );
                 if (run.stopped) return "cancel";
                 run.link = link;
-                if (link === "cancel") stopAndReport(run);
+                if (link === "cancel") {
+                    run.reason ??= "Đã huỷ tải lên.";
+                    stopAndReport(run);
+                }
                 return link;
             },
         });
         for (const key of Object.keys(run.counts))
             run.counts[key] += counts[key];
+        if (counts.reason) {
+            trace(() => {
+                run.diagReason ??=
+                    counts.reason ===
+                    "Không thể đưa một số tệp vào hàng tải lên."
+                        ? "enqueueFailed"
+                        : counts.reason ===
+                            "Tài khoản đã thay đổi; không thể bắt đầu tải lên."
+                          ? "scope"
+                          : "cancel";
+            });
+            run.reason ??= counts.reason;
+        }
     }
 
     /** The run no longer needs the scan dialog, nor holds back new ones. */
+    function recordFinish(run, notice = "none", reason = "other") {
+        if (run.diagFinished) return;
+        run.diagFinished = true;
+        trace(() =>
+            diag("run.finish", {
+                run: run.diagId,
+                ...run.counts,
+                ms: Date.now() - run.diagStarted,
+                reason: run.diagReason ?? reason,
+                notice,
+            }),
+        );
+        trace(() => diagStageEnd(run.diagId));
+        trace(() => diagRunEnd(run.diagId));
+    }
+
     function endRun(run) {
         if (activeRun.current !== run) return;
+        recordFinish(run);
         activeRun.current = null;
         setScanning(null);
     }
 
     function finishRun(run) {
-        endRun(run);
         const { queued, resumed, replaced, renamed, linked, skipped } =
             run.counts;
         const { target } = run;
+        const going = queued + replaced + renamed;
+        const notice =
+            !going && !resumed && !skipped && !linked
+                ? run.found
+                    ? "warning"
+                    : "none"
+                : target &&
+                    !resumed &&
+                    !skipped &&
+                    !replaced &&
+                    !renamed &&
+                    !linked &&
+                    !run.permissionDenied &&
+                    !run.outsideFolder &&
+                    !run.reason
+                  ? "none"
+                  : "info";
+        recordFinish(run, notice, "none");
+        endRun(run);
         // what the banner offered to resume may have just been picked up
         if (resumed || skipped) setResumeScan((n) => n + 1);
-        const going = queued + replaced + renamed;
-        if (!going && !resumed && !skipped && !linked) return;
-        if (target && !resumed && !skipped && !replaced && !renamed && !linked)
+        if (!going && !resumed && !skipped && !linked) {
+            if (run.found)
+                setNotice({
+                    kind: "nothingQueued",
+                    severity: "warning",
+                    text:
+                        (run.reason ??
+                            "Đã dừng tải lên; các tệp gốc được giữ nguyên.") +
+                        (run.cancelled &&
+                        run.reason !== "Đã huỷ phần tải lên còn lại."
+                            ? " Đã huỷ phần tải lên còn lại."
+                            : ""),
+                });
+            return;
+        }
+        if (
+            target &&
+            !resumed &&
+            !skipped &&
+            !replaced &&
+            !renamed &&
+            !linked &&
+            !run.permissionDenied &&
+            !run.outsideFolder &&
+            !run.reason
+        )
             return;
         const text = [
             going &&
@@ -812,11 +1043,22 @@ export default function DriveApp({ mode, onToggleMode }) {
         // nothing is sent for these, so "xoá sau khi tải lên" leaves them
         const untouched = run.removeOriginal ? linked + skipped : 0;
         setNotice({
+            kind: "uploadStarted",
             severity: "info",
             text:
                 `${text[0].toUpperCase()}${text.slice(1)}.` +
                 (untouched
                     ? ` ${untouched} tệp bỏ qua hoặc liên kết không được tải lên, nên bản gốc trên máy được giữ nguyên.`
+                    : "") +
+                (run.permissionDenied
+                    ? " Chưa được phép xoá; bản gốc được giữ nguyên."
+                    : "") +
+                (run.outsideFolder
+                    ? ` ${run.outsideFolder} bản gốc ngoài thư mục đã chọn được giữ lại.`
+                    : "") +
+                (run.reason ? ` ${run.reason}` : "") +
+                (run.cancelled && run.reason !== "Đã huỷ phần tải lên còn lại."
+                    ? " Đã huỷ phần tải lên còn lại."
                     : ""),
         });
     }
@@ -827,11 +1069,31 @@ export default function DriveApp({ mode, onToggleMode }) {
      * dialog; until then the counts are kept quietly. finish() is for once
      * the walk is done, and does nothing after "Huỷ".
      */
-    function newScan() {
+    function newScan(via, nRoots) {
         const run = newRun();
+        const started = Date.now();
+        let files = 0;
+        let lastProgress = 0;
+        trace(() => diag("upload.start", { run: run.diagId, via, nRoots }));
+        trace(() => {
+            run.diagStage = "scan";
+            diagStage(run.diagId, "scan");
+        });
         activeRun.current = run;
         const scan = scanProgress(
-            (seen) => setScanning((now) => (now ? { ...now, ...seen } : now)),
+            (seen) => {
+                files = seen.files;
+                trace(() => {
+                    if (Date.now() - lastProgress >= 2000) {
+                        lastProgress = Date.now();
+                        diag("upload.scan.progress", {
+                            run: run.diagId,
+                            files,
+                        });
+                    }
+                });
+                setScanning((now) => (now ? { ...now, ...seen } : now));
+            },
             (entries) => addBatch(run, entries),
         );
         // stopping the run, e.g. "Huỷ tải lên" on a name conflict, also
@@ -842,6 +1104,16 @@ export default function DriveApp({ mode, onToggleMode }) {
             setScanning({ phase: "reading", files: 0, bytes: 0, cancel });
         // the walk may have finished just before the click reached it
         scan.finish = () => {
+            trace(() =>
+                diag("upload.scan.done", {
+                    run: run.diagId,
+                    files,
+                    ms: Date.now() - started,
+                }),
+            );
+            trace(() => {
+                if (run.diagStage === "scan") diagStageEnd(run.diagId);
+            });
             run.scanned = true;
             if (!run.stopped)
                 run.chain.then(() => {
@@ -851,14 +1123,32 @@ export default function DriveApp({ mode, onToggleMode }) {
         // what was handed over before the error keeps uploading; the rest
         // of the walk stops
         scan.fail = (err) => {
+            trace(() =>
+                diag("upload.scan.fail", {
+                    run: run.diagId,
+                    errName:
+                        typeof err?.name === "string" &&
+                        /^[A-Z][A-Za-z]{2,39}$/.test(err.name)
+                            ? err.name
+                            : "Error",
+                }),
+            );
+            trace(() => {
+                if (run.diagStage === "scan") diagStageEnd(run.diagId);
+            });
             if (isAbort(err)) {
-                endRun(run);
+                if (run.found) stopAndReport(run);
+                else endRun(run);
                 return;
             }
             stopRun(run);
             run.chain.then(() => {
                 endRun(run);
-                setNotice({ severity: "error", text: describeError(err) });
+                setNotice({
+                    kind: "scanFailed",
+                    severity: "error",
+                    text: describeError(err),
+                });
             });
         };
         return scan;
@@ -869,6 +1159,7 @@ export default function DriveApp({ mode, onToggleMode }) {
     function canStartRun() {
         if (!activeRun.current) return true;
         setNotice({
+            kind: "uploadBusy",
             severity: "warning",
             text: "Đang quét và đưa lên các tệp vừa chọn. Đợi xong rồi thêm tiếp nhé.",
         });
@@ -879,6 +1170,13 @@ export default function DriveApp({ mode, onToggleMode }) {
     function startUpload(entries) {
         if (!entries.length || !canStartRun()) return;
         const run = newRun();
+        trace(() =>
+            diag("upload.start", {
+                run: run.diagId,
+                via: "input",
+                nRoots: entries.length,
+            }),
+        );
         run.scanned = true;
         activeRun.current = run;
         addBatch(run, entries);
@@ -897,6 +1195,13 @@ export default function DriveApp({ mode, onToggleMode }) {
     function sendPieces(item, files) {
         if (!canStartRun()) return false;
         const run = newRun();
+        trace(() =>
+            diag("upload.start", {
+                run: run.diagId,
+                via: "pieces",
+                nRoots: files.length,
+            }),
+        );
         run.target = item.parentID;
         // already asked when the big file was picked
         run.asMedia = item.asMedia;
@@ -932,7 +1237,7 @@ export default function DriveApp({ mode, onToggleMode }) {
             return;
         }
         if (!canStartRun()) return;
-        const scan = newScan();
+        const scan = newScan("picker", 0);
         (folder ? pickFolder : pickFiles)({ onPicked: scan.show, scan }).then(
             scan.finish,
             scan.fail,
@@ -978,7 +1283,10 @@ export default function DriveApp({ mode, onToggleMode }) {
                   dragDepth.current = 0;
                   setDropping(false);
                   if (!canStartRun()) return;
-                  const scan = newScan();
+                  const scan = newScan(
+                      "drop",
+                      e.dataTransfer.items?.length ?? 0,
+                  );
                   scan.show();
                   readDrop(e.dataTransfer, scan).then(scan.finish, scan.fail);
               },
@@ -1036,6 +1344,7 @@ export default function DriveApp({ mode, onToggleMode }) {
             run("Không đăng xuất được", async () => {
                 await logoutOthers();
                 setNotice({
+                    kind: "sessionsLoggedOut",
                     severity: "success",
                     text: "Đã đăng xuất khỏi các thiết bị khác.",
                 });
@@ -1089,7 +1398,7 @@ export default function DriveApp({ mode, onToggleMode }) {
             ? undefined
             : (item) =>
                   item.parent
-                      ? byId.get(item.parent)?.name ?? "—"
+                      ? (byId.get(item.parent)?.name ?? "—")
                       : "Drive của tôi";
 
     const openDropbox = () =>
@@ -1486,7 +1795,12 @@ export default function DriveApp({ mode, onToggleMode }) {
                         )}
                     </Box>
 
-                    <ResumeBanner key={resumeScan} onNotice={setNotice} />
+                    <ResumeBanner
+                        key={resumeScan}
+                        onNotice={(value) =>
+                            setNotice({ ...value, kind: "resumeNotice" })
+                        }
+                    />
 
                     {/* the items */}
                     <Box
@@ -1752,6 +2066,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                     );
                     setDialog(null);
                     setNotice({
+                        kind: "dialogMoved",
                         severity: "success",
                         text: `Đã di chuyển ${moved.length} mục.`,
                     });
@@ -1848,6 +2163,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                 onDone={() => {
                     setDialog(null);
                     setNotice({
+                        kind: "passwordChanged",
                         severity: "success",
                         text: "Đã đổi mật khẩu.",
                     });
@@ -1857,7 +2173,13 @@ export default function DriveApp({ mode, onToggleMode }) {
                 open={dialog?.type === "share"}
                 id={dialog?.id}
                 onClose={() => setDialog(null)}
-                onNotice={(text) => setNotice({ severity: "success", text })}
+                onNotice={(text) =>
+                    setNotice({
+                        kind: "dialogNotice",
+                        severity: "success",
+                        text,
+                    })
+                }
             />
             <DropboxDialog
                 open={dialog?.type === "dropbox"}
@@ -1925,6 +2247,29 @@ export default function DriveApp({ mode, onToggleMode }) {
                 }
             />
             <TransferPanel />
+
+            <Snackbar
+                open={Boolean(writeWait)}
+                anchorOrigin={{ vertical: "top", horizontal: "center" }}
+            >
+                <Alert
+                    severity="info"
+                    variant="filled"
+                    action={
+                        <Button
+                            color="inherit"
+                            size="small"
+                            onClick={() => writeWait?.skip()}
+                        >
+                            Bỏ qua
+                        </Button>
+                    }
+                >
+                    Đang chờ Chrome cho phép xoá bản gốc. Hãy bấm Cho phép trong
+                    hộp thoại của trình duyệt; bấm Bỏ qua để chỉ tải lên và giữ
+                    bản gốc.
+                </Alert>
+            </Snackbar>
 
             <Snackbar
                 open={Boolean(notice)}
