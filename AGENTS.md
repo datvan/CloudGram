@@ -6,3 +6,5 @@ That document is the canonical flag contract and agent verification checklist.
 
 Before changing CSP, Cloudflare scripts or font allowlists, read
 [docs/csp.md](docs/csp.md) for the nonce and nginx deployment requirements.
+
+Browser diagnostics and their frontend/API flags follow [docs/security-flags.md](docs/security-flags.md).

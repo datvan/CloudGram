@@ -7,6 +7,8 @@ security exposure.
 
 | Flag                                  | Configuration              | Protection                                                                                                                                                                        |
 | ------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDGRAM_DIAG_LOG`                  | API environment            | `0` disables API access logs and client diagnostic ingestion at startup; `/api/log` returns 204                                                                                   |
+| `VITE_FEATURE_DIAG_LOG`               | Frontend build environment | `0` disables browser diagnostic collection, listeners and sending; rebuild and reload tabs                                                                                        |
 | `VITE_SECURITY_STREAM_GUARD`          | Frontend build environment | Stream requests require a requesting tab and audio/video destination; responses carry restrictive CSP and nosniff, with passive MIME fallback                                     |
 | `VITE_SECURITY_UPLOAD_OWNER`          | Frontend build environment | Queued, retrying and in-flight uploads remain bound to their original account session; stale dialogs, resume and Dropbox producers stop before enqueuing into a different account |
 | `VITE_SECURITY_LOG_OWNER`             | Frontend build environment | Pending upload-log batches capture owner and key before logout; reads discard results after an account switch                                                                     |
@@ -14,6 +16,13 @@ security exposure.
 | `CLOUDGRAM_SECURITY_SHARE_QUOTA`      | API environment            | Share count and quota checks run immediately before reservation without an intervening await                                                                                      |
 
 ## Frontend rollback
+
+Browser diagnostics default on. Set `VITE_FEATURE_DIAG_LOG=0` and rebuild to
+stop collection and sending; this removes browser evidence for upload debugging.
+`CLOUDGRAM_DIAG_LOG=0` separately disables API ingestion and access logs.
+Diagnostic events always use the current upload session scope, even when
+`VITE_SECURITY_UPLOAD_OWNER` or `VITE_SECURITY_LOG_OWNER` is off; those flags'
+existing upload and upload-log rollback behavior is unchanged.
 
 Set the affected `VITE_SECURITY_*` value to `0` in the build environment and
 rebuild with `npm run build`. Publish the resulting frontend using the normal
@@ -88,6 +97,10 @@ switch/resume and service-worker rollback still need browser validation.
 6. Update this canonical document, environment examples and both agent pointers
    together when the flag contract changes. Publish and deploy only with user
    authorization; verify deployed assets and API health after deployment.
+7. `CLOUDGRAM_DIAG_LOG` is an API startup flag, enabled unless set to `0`.
+   Test enabled and disabled ingest and access logging; restart the API after changes.
+   `VITE_FEATURE_DIAG_LOG` is a separate default-on frontend build flag; test
+   both branches and rebuild and reload tabs after changing it.
 
 ## Playing in an outside player (VPS relay)
 
@@ -124,15 +137,15 @@ the tab can put chunks at `VITE_PLAY_DIRECT_URL` (`https://up.example.com:8444`,
 frontend build environment; empty = through the page's address, and it falls
 back to that by itself when the direct address cannot be reached).
 
--   DNS: `up` as an A record to the VPS, **DNS only** (grey cloud).
--   `deploy/vps-direct-upload.sh` installs `deploy/nginx/cloudgram-upload.conf`,
-    gets a Let's Encrypt certificate (port 80 is opened by certbot's hook only
-    while it runs) and opens `8444/tcp` in ufw. Only that nginx listens on 8444;
-    it accepts nothing but `PUT /api/play/<id>/chunks/<n>` and
-    `GET /api/play/<id>/next` (Cloudflare answered the tab's quick polls with
-    429), so no other site on the VPS is reachable without Cloudflare.
--   No cookie crosses origins: the session has its own random key, sent as
-    `X-Play-Key` and checked in constant time (`server/play.js`). The origin IP
-    is now in public DNS for `up.example.com` (it was already in git history).
--   Rollback: remove the `cloudgram-upload.conf` site link, `ufw delete allow
+- DNS: `up` as an A record to the VPS, **DNS only** (grey cloud).
+- `deploy/vps-direct-upload.sh` installs `deploy/nginx/cloudgram-upload.conf`,
+  gets a Let's Encrypt certificate (port 80 is opened by certbot's hook only
+  while it runs) and opens `8444/tcp` in ufw. Only that nginx listens on 8444;
+  it accepts nothing but `PUT /api/play/<id>/chunks/<n>` and
+  `GET /api/play/<id>/next` (Cloudflare answered the tab's quick polls with
+  429), so no other site on the VPS is reachable without Cloudflare.
+- No cookie crosses origins: the session has its own random key, sent as
+  `X-Play-Key` and checked in constant time (`server/play.js`). The origin IP
+  is now in public DNS for `up.example.com` (it was already in git history).
+- Rollback: remove the `cloudgram-upload.conf` site link, `ufw delete allow
 8444/tcp`, reload nginx, restore `cloudgram.conf` from the script's backup.

@@ -1,3 +1,4 @@
+import { diag, swallow } from "./diag";
 /**
  * The file tree: held in memory, synced to the encrypted vault on the VPS.
  *
@@ -188,7 +189,7 @@ function markDirty(immediate) {
     publish();
     clearTimeout(pushTimer);
     pushTimer = setTimeout(
-        () => flush().catch(() => {}),
+        () => flush().catch(swallow("drive.scheduleFlush")),
         immediate ? 0 : PUSH_DELAY,
     );
 }
@@ -213,37 +214,58 @@ export function flush() {
 }
 
 async function push() {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-        dirty = false;
-        const cutoff = Date.now() - TOMBSTONE_TTL;
-        const list = [...records.values()].filter(
-            (r) => !(r.deleted && r.updatedAt < cutoff),
-        );
-        try {
-            const blob = await encryptJson(dek, { records: list }, LABEL);
-            const res = await api.putTree(blob, version);
-            version = res.version;
-            syncError = null;
-            return;
-        } catch (error) {
-            dirty = true;
-            if (error instanceof ApiError && error.status === 409) {
-                const remote = await pull();
-                version = remote.version;
-                merge(remote.records);
+    let started;
+    let retries409 = 0;
+    let ok = false;
+    try {
+        started = Date.now();
+    } catch {
+        // Diagnostics are optional.
+    }
+    try {
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+            if (attempt > 0) retries409 += 1;
+            dirty = false;
+            const cutoff = Date.now() - TOMBSTONE_TTL;
+            const list = [...records.values()].filter(
+                (r) => !(r.deleted && r.updatedAt < cutoff),
+            );
+            try {
+                const blob = await encryptJson(dek, { records: list }, LABEL);
+                const res = await api.putTree(blob, version);
+                version = res.version;
+                syncError = null;
+                ok = true;
+                return;
+            } catch (error) {
+                dirty = true;
+                if (error instanceof ApiError && error.status === 409) {
+                    const remote = await pull();
+                    version = remote.version;
+                    merge(remote.records);
+                    publish();
+                    continue;
+                }
+                syncError = error;
                 publish();
-                continue;
+                // try again later; the change is still in memory and still dirty
+                clearTimeout(pushTimer);
+                pushTimer = setTimeout(
+                    () => flush().catch(swallow("drive.retryFlush")),
+                    5000,
+                );
+                throw error;
             }
-            syncError = error;
-            publish();
-            // try again later; the change is still in memory and still dirty
-            clearTimeout(pushTimer);
-            pushTimer = setTimeout(() => flush().catch(() => {}), 5000);
-            throw error;
+        }
+        // still dirty: callers such as the upload queue must not take it as saved
+        throw new Error("The file list kept changing on the server; not saved");
+    } finally {
+        try {
+            diag("tree.save", { ok, ms: Date.now() - started, retries409 });
+        } catch {
+            // Diagnostics are optional.
         }
     }
-    // still dirty: callers such as the upload queue must not take it as saved
-    throw new Error("The file list kept changing on the server; not saved");
 }
 
 // ----- mutations ------------------------------------------------------------------
@@ -533,6 +555,6 @@ export const fileOps = {
     setFileId: async (id, file_id, extra = {}) => {
         update(id, { ...extra, file_id }, { immediate: true });
         // a failed push stays dirty and retries; the tab warns before closing
-        await flush().catch(() => {});
+        await flush().catch(swallow("drive.setFileId"));
     },
 };

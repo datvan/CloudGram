@@ -66,7 +66,7 @@ function largestPhotoSize(photo) {
     return Math.max(
         0,
         ...(photo?.sizes ?? []).map((s) =>
-            "sizes" in s ? Math.max(...s.sizes) : s.size ?? 0,
+            "sizes" in s ? Math.max(...s.sizes) : (s.size ?? 0),
         ),
     );
 }
@@ -139,6 +139,7 @@ export default async function uploadFile(
         onPiece,
         client: boundClient,
         assertCurrent,
+        onRetry,
     } = {},
 ) {
     // bigger than one message takes: raw slices, one message each
@@ -208,6 +209,7 @@ export default async function uploadFile(
     if (!cut) {
         const inputFile = await uploadParts(client, file, {
             resume,
+            onRetry,
             onProgress: (fraction) => report(fraction * file.size),
         });
         const message = await send(inputFile, options, true);
@@ -254,6 +256,7 @@ export default async function uploadFile(
         const base = offset;
         const inputFile = await uploadParts(client, piece, {
             resume,
+            onRetry,
             onProgress: (fraction) => report(base + fraction * piece.size),
         });
         // the first slice carries the picture the grid shows

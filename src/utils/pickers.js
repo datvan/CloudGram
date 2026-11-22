@@ -1,3 +1,4 @@
+import { diag, diagStage, diagStageEnd, swallow } from "../services/diag";
 /**
  * Choosing files to upload through the File System Access API where the
  * browser has it (Chrome, Edge), so the upload log can keep a handle to each
@@ -11,7 +12,8 @@
  */
 import { v4 as uuid4 } from "uuid";
 
-import { loadFolders, saveFolders } from "../services/uploadLog";
+import { loadFolders, saveFolders, uploadScope } from "../services/uploadLog";
+import { UPLOAD_OWNER } from "../config/security";
 
 export const canKeepHandles =
     typeof window !== "undefined" && "showOpenFilePicker" in window;
@@ -204,34 +206,241 @@ export function fileOpener() {
 // folders remembered for askToWrite, newest first
 const KEEP_FOLDERS = 20;
 
+// FileSystemDirectoryHandle.resolve walks the whole tree when the file is not
+// inside it. On a big remembered folder it never returned (VPS log, 2026-11-22:
+// resolveStored started, then run.stall twice), which left the upload waiting
+// with no prompt. Give up after a few seconds and treat it as "not inside".
+// A slow one also stops the search of the other remembered folders, so the
+// picker still opens inside the click's short user activation.
+const RESOLVE_TIMEOUT = 2000;
+function resolveWithin(folder, file, wait) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            if (wait) wait.resolveSlow = true;
+            resolve(null);
+        }, RESOLVE_TIMEOUT);
+        folder.resolve(file).then(
+            (path) => {
+                clearTimeout(timer);
+                resolve(path);
+            },
+            (error) => {
+                clearTimeout(timer);
+                reject(error);
+            },
+        );
+    });
+}
+
+// Same idea for isSameEntry: a remembered folder that stopped answering (its
+// resolve timed out too) must not hold the upload; it is dropped from the list.
+const SAME_TIMEOUT = 1000;
+function sameWithin(old, folder) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve("timeout"), SAME_TIMEOUT);
+        old.isSameEntry(folder).then(
+            (same) => {
+                clearTimeout(timer);
+                resolve(same);
+            },
+            (error) => {
+                clearTimeout(timer);
+                reject(error);
+            },
+        );
+    });
+}
+
+// Diagnostic only: names the await that never returns. The promise (and its
+// value or error) is handed back untouched; only a side chain reports.
+function traceStep(wait, step, make, n) {
+    const started = Date.now();
+    const report = (phase, error) => {
+        try {
+            const name = error?.name;
+            diag("upload.step", {
+                run: wait?.run?.diagId,
+                step,
+                phase,
+                ms: Date.now() - started,
+                ...(n === undefined ? {} : { n }),
+                ...(phase === "fail"
+                    ? {
+                          errName:
+                              typeof name === "string" &&
+                              /^[A-Z][A-Za-z]{2,39}$/.test(name)
+                                  ? name
+                                  : "Error",
+                      }
+                    : {}),
+            });
+        } catch {
+            // Diagnostics are optional.
+        }
+    };
+    report("start");
+    const promise = make();
+    try {
+        Promise.resolve(promise).then(
+            () => report("end"),
+            (error) => report("fail", error),
+        );
+    } catch {
+        // Diagnostics are optional.
+    }
+    return promise;
+}
+
+function permissionWait(wait, kind, n, root, q = "unknown") {
+    let pending;
+    try {
+        if (wait.skipped) return;
+        if (root && q === "unknown") {
+            try {
+                root.queryPermission?.({ mode: "readwrite" })?.catch(() => {});
+            } catch {
+                // Permission diagnostics must not interrupt the request.
+            }
+        }
+        pending = { started: Date.now() };
+        (wait.permissions ??= []).push(pending);
+        const run = wait.run;
+        if (run) run.diagStage = "perm";
+        diagStage(run?.diagId, "perm");
+        diag("upload.perm.wait", {
+            run: run?.diagId,
+            kind,
+            n,
+            q: ["granted", "prompt", "denied"].includes(q) ? q : "unknown",
+            act: Boolean(navigator.userActivation?.isActive),
+            focus: document.hasFocus(),
+        });
+    } catch {
+        // Diagnostics are optional.
+    }
+    return pending;
+}
+
+function permissionError(item, error) {
+    try {
+        const name = error?.name;
+        item.error = [
+            "Error",
+            "TypeError",
+            "AbortError",
+            "NotAllowedError",
+            "SecurityError",
+            "NotFoundError",
+            "InvalidStateError",
+        ].includes(name)
+            ? name
+            : "Error";
+    } catch {
+        // Diagnostics are optional.
+    }
+}
+
+function permissionEnd(wait, result, outside = 0) {
+    try {
+        for (const item of [...(wait.permissions ?? [])])
+            permissionEndOne(wait, item, result, outside);
+    } catch {
+        // Diagnostics are optional.
+    }
+}
+
+function permissionEndOne(wait, item, result, outside = 0) {
+    try {
+        const index = wait.permissions?.indexOf(item) ?? -1;
+        if (index < 0) return;
+        wait.permissions.splice(index, 1);
+        try {
+            diag("upload.perm.result", {
+                run: wait.run?.diagId,
+                result: item.error && result !== "skipped" ? "threw" : result,
+                ms: Date.now() - item.started,
+                outside,
+                ...(item.error && result !== "skipped"
+                    ? { errName: item.error }
+                    : {}),
+            });
+        } catch {
+            // Diagnostics are optional.
+        }
+        if (!wait.permissions.length) diagStageEnd(wait.run?.diagId);
+    } catch {
+        // Diagnostics are optional.
+    }
+}
+
 /**
  * A folder holding `file` with write access, or null. One picked before is
  * reused: no prompt while its access lasts, otherwise a single Allow. Only
  * the first time, or for a folder never picked, does the picker open.
  */
-async function writeFolderFor(file) {
-    const folders = await loadFolders();
+async function writeFolderFor(file, wait) {
+    const scope = uploadScope();
+    const stale = () =>
+        wait.skipped ||
+        (UPLOAD_OWNER && (scope === null || scope !== uploadScope()));
+    const folders = await traceStep(wait, "loadFolders", () => loadFolders());
+    if (stale()) return null;
     for (const folder of folders) {
-        if (!(await folder.resolve(file).catch(() => null))) continue;
+        if (wait.resolveSlow) break;
+        if (
+            !(await traceStep(wait, "resolveStored", () =>
+                resolveWithin(folder, file, wait).catch(
+                    swallow("pickers.writeFolder.resolve", null),
+                ),
+            ))
+        )
+            continue;
         const mode = { mode: "readwrite" };
-        if ((await folder.queryPermission(mode)) === "granted") return folder;
-        const answer = await folder.requestPermission(mode).catch(() => null);
+        const permission = await traceStep(wait, "queryStored", () =>
+            folder.queryPermission(mode),
+        );
+        if (permission === "granted") return stale() ? null : folder;
+        const pending = permissionWait(
+            wait,
+            "folder",
+            wait.n ?? 1,
+            null,
+            permission,
+        );
+        const answer = await folder.requestPermission(mode).catch((error) => {
+            permissionError(pending, error);
+            return swallow("pickers.writeFolder.permission", null)(error);
+        });
         // a refusal means delete nothing, as Huỷ on the picker would
-        return answer === "granted" ? folder : null;
+        return answer === "granted" && !stale() ? folder : null;
     }
     if (!window.showDirectoryPicker) return null;
-    const folder = await window
-        .showDirectoryPicker({
-            id: "cloudgram-originals",
-            mode: "readwrite",
-            startIn: file,
-        })
-        .catch(() => null);
+    const pending = permissionWait(wait, "picker", wait.n ?? 1);
+    const folder = await traceStep(wait, "picker", () =>
+        window
+            .showDirectoryPicker({
+                id: "cloudgram-originals",
+                mode: "readwrite",
+                startIn: file,
+            })
+            .catch((error) => {
+                permissionError(pending, error);
+                return swallow("pickers.writeFolder.picker", null)(error);
+            }),
+    );
+    if (stale()) return null;
     if (folder) {
         const others = [];
-        for (const old of folders)
-            if (!(await old.isSameEntry(folder))) others.push(old);
-        await saveFolders([folder, ...others].slice(0, KEEP_FOLDERS));
+        for (const old of folders) {
+            const same = await traceStep(wait, "sameEntry", () =>
+                sameWithin(old, folder),
+            );
+            if (same === false) others.push(old);
+        }
+        if (stale()) return null;
+        await traceStep(wait, "saveFolders", () =>
+            saveFolders([folder, ...others].slice(0, KEEP_FOLDERS)),
+        );
     }
     return folder;
 }
@@ -248,40 +457,143 @@ async function writeFolderFor(file) {
  * folder is kept on `run` for the batches after the first, and remembered
  * for later uploads from it (writeFolderFor).
  */
-export async function askToWrite(entries, run) {
-    const loose = new Set(
-        entries
-            .map((entry) => entry.handle?.root)
-            .filter((root) => root?.kind === "file"),
-    );
-    if (run.writeFolder === undefined && loose.size > 1) {
-        run.writeFolder = await writeFolderFor([...loose][0]);
-        run.writeFolderId = uuid4();
+export async function askToWrite(entries, run, wait = {}) {
+    const outsideBefore = run.outsideFolder ?? 0;
+    try {
+        wait.run ??= run;
+        wait.outsideBefore = outsideBefore;
+    } catch {
+        // Diagnostics are optional.
     }
-    const folder = run.writeFolder;
-    if (folder) {
-        for (const entry of entries) {
-            if (entry.handle?.root.kind !== "file") continue;
-            const path = await folder.resolve(entry.handle.root);
-            if (!path) continue;
-            entry.handle = {
-                rootId: run.writeFolderId,
-                root: folder,
-                sub: path.join("/"),
-                filesOnly: true,
-            };
+    try {
+        const loose = new Set(
+            entries
+                .map((entry) => entry.handle?.root)
+                .filter((root) => root?.kind === "file"),
+        );
+        try {
+            wait.n = loose.size;
+        } catch {
+            // Diagnostics are optional.
         }
+        if (run.writeFolder === undefined && loose.size > 1) {
+            run.writeFolder = await writeFolderFor([...loose][0], wait);
+            run.writeFolderId = uuid4();
+        }
+        const folder = run.writeFolder;
+        if (folder) {
+            await traceStep(
+                wait,
+                "resolveEach",
+                async () => {
+                    for (const entry of entries) {
+                        if (entry.handle?.root.kind !== "file") continue;
+                        const path = await resolveWithin(
+                            folder,
+                            entry.handle.root,
+                        );
+                        if (!path) {
+                            run.outsideFolder = (run.outsideFolder ?? 0) + 1;
+                            continue;
+                        }
+                        entry.handle = {
+                            rootId: run.writeFolderId,
+                            root: folder,
+                            sub: path.join("/"),
+                            filesOnly: true,
+                        };
+                    }
+                },
+                entries.length,
+            );
+        }
+        // what is left: picked folders, or the one loose file
+        const roots = new Set(entries.map((entry) => entry.handle?.root));
+        roots.delete(undefined);
+        roots.delete(folder);
+        if (folder !== undefined) for (const root of loose) roots.delete(root);
+        const answers = await Promise.all(
+            [...roots].map((root) => {
+                const pending = permissionWait(wait, "roots", roots.size, root);
+                const request = root
+                    .requestPermission({ mode: "readwrite" })
+                    .catch((error) => {
+                        permissionError(pending, error);
+                        return swallow(
+                            "pickers.roots.writePermission",
+                            null,
+                        )(error);
+                    });
+                try {
+                    request.then(
+                        (answer) =>
+                            permissionEndOne(
+                                wait,
+                                pending,
+                                (run.outsideFolder ?? 0) > outsideBefore
+                                    ? "outside"
+                                    : answer === "granted"
+                                      ? "granted"
+                                      : "denied",
+                                (run.outsideFolder ?? 0) - outsideBefore,
+                            ),
+                        () => {},
+                    );
+                } catch {
+                    // Diagnostics are optional.
+                }
+                return request;
+            }),
+        );
+        run.writeDenied = !(
+            !(folder === null && loose.size > 0) &&
+            answers.every((answer) => answer === "granted")
+        );
+        const outside = (run.outsideFolder ?? 0) - outsideBefore;
+        permissionEnd(
+            wait,
+            outside ? "outside" : run.writeDenied ? "denied" : "granted",
+            outside,
+        );
+        return !run.writeDenied && outside === 0;
+    } catch (error) {
+        for (const item of wait.permissions ?? []) permissionError(item, error);
+        permissionEnd(wait, "threw", (run.outsideFolder ?? 0) - outsideBefore);
+        throw error;
     }
-    // what is left: picked folders, or the one loose file
-    const roots = new Set(entries.map((entry) => entry.handle?.root));
-    roots.delete(undefined);
-    roots.delete(folder);
-    if (folder !== undefined) for (const root of loose) roots.delete(root);
-    await Promise.all(
-        [...roots].map((root) =>
-            root.requestPermission({ mode: "readwrite" }).catch(() => {}),
-        ),
-    );
+}
+
+// Keep late browser responses from changing entries after the user skips.
+export async function waitForWrite(entries, run, skip, alreadyDenied = false) {
+    const copies = entries.map((entry) => ({ ...entry }));
+    const pendingRun = { ...run };
+    const wait = { skipped: false, run };
+    const result = await Promise.race([
+        alreadyDenied
+            ? Promise.resolve(false)
+            : askToWrite(copies, pendingRun, wait)
+                  .then((allowed) => ({ allowed }))
+                  .catch(swallow("pickers.askToWrite", { allowed: false })),
+        skip.then(() => {
+            wait.skipped = true;
+            permissionEnd(
+                wait,
+                "skipped",
+                (pendingRun.outsideFolder ?? 0) - (wait.outsideBefore ?? 0),
+            );
+            return false;
+        }),
+    ]);
+    if (result) {
+        entries.forEach((entry, i) => {
+            entry.handle = copies[i].handle;
+        });
+        run.writeFolder = pendingRun.writeFolder;
+        run.writeFolderId = pendingRun.writeFolderId;
+        run.outsideFolder = pendingRun.outsideFolder;
+        run.writeDenied = pendingRun.writeDenied;
+    } else run.writeDenied = true;
+    return Boolean(result && result.allowed);
 }
 
 const sameFile = (a, b) =>
@@ -312,35 +624,68 @@ async function whenFree(remove) {
  * Telegram has are ever deleted. This is permanent: the browser does not use
  * the Recycle Bin. Resolves to null when the file went, else why it stayed.
  */
-export async function removePicked(handle, uploaded) {
-    const { root, sub } = handle;
-    if ((await root.queryPermission({ mode: "readwrite" })) !== "granted")
-        return KEPT.permission;
-    if (root.kind === "file") {
-        if (!sameFile(await root.getFile(), uploaded)) return KEPT.changed;
-        return (await whenFree(() => root.remove())) ?? null;
-    }
-    const folders = sub.split("/");
-    const name = folders.pop();
-    const dirs = [root];
-    for (const folder of folders)
-        dirs.push(await dirs[dirs.length - 1].getDirectoryHandle(folder));
-    const parent = dirs[dirs.length - 1];
-    if (!sameFile(await (await parent.getFileHandle(name)).getFile(), uploaded))
-        return KEPT.changed;
-    const locked = await whenFree(() => parent.removeEntry(name));
-    if (locked) return locked;
-    if (handle.filesOnly) return null;
-    // without `recursive` a folder that still holds anything refuses to go,
-    // which is what keeps files not (yet) uploaded
+export async function removePicked(handle, uploaded, job) {
+    const report = (value) => {
+        try {
+            diag("remove.original", {
+                ...(job?.run?.diagId ? { run: job.run.diagId } : {}),
+                ...(job?.diagFile ? { file: job.diagFile } : {}),
+                result:
+                    value === null
+                        ? "deleted"
+                        : value === KEPT.changed
+                          ? "changed"
+                          : value === KEPT.locked
+                            ? "locked"
+                            : value === KEPT.permission
+                              ? "permission"
+                              : "kept",
+            });
+        } catch {
+            // Diagnostics are optional.
+        }
+        return value;
+    };
     try {
-        for (let i = folders.length - 1; i >= 0; i -= 1)
-            await dirs[i].removeEntry(folders[i]);
-        await root.remove();
-    } catch {
-        // not empty yet; the last file out of it takes it along
+        const { root, sub } = handle;
+        if ((await root.queryPermission({ mode: "readwrite" })) !== "granted")
+            return report(KEPT.permission);
+        if (root.kind === "file") {
+            if (!sameFile(await root.getFile(), uploaded))
+                return report(KEPT.changed);
+            return report((await whenFree(() => root.remove())) ?? null);
+        }
+        const folders = sub.split("/");
+        const name = folders.pop();
+        const dirs = [root];
+        for (const folder of folders)
+            dirs.push(await dirs[dirs.length - 1].getDirectoryHandle(folder));
+        const parent = dirs[dirs.length - 1];
+        if (
+            !sameFile(
+                await (await parent.getFileHandle(name)).getFile(),
+                uploaded,
+            )
+        )
+            return report(KEPT.changed);
+        const locked = await whenFree(() => parent.removeEntry(name));
+        if (locked) return report(locked);
+        if (handle.filesOnly) return report(null);
+        // without `recursive` a folder that still holds anything refuses to go,
+        // which is what keeps files not (yet) uploaded
+        try {
+            for (let i = folders.length - 1; i >= 0; i -= 1)
+                await dirs[i].removeEntry(folders[i]);
+            await root.remove();
+        } catch (error) {
+            swallow("pickers.removeFolders")(error);
+            // not empty yet; the last file out of it takes it along
+        }
+        return report(null);
+    } catch (error) {
+        report("kept");
+        throw error;
     }
-    return null;
 }
 
 /** Why an original asked to be deleted after upload is still on disk. */
@@ -379,7 +724,9 @@ export async function askToRead(roots, write = false) {
     const mode = write ? "readwrite" : "read";
     const answers = await Promise.all(
         roots.map((root) =>
-            root.requestPermission({ mode }).catch(() => "denied"),
+            root
+                .requestPermission({ mode })
+                .catch(swallow("pickers.roots.permission", "denied")),
         ),
     );
     return roots.filter((_, i) => answers[i] === "granted");
