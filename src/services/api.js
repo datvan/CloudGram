@@ -69,7 +69,9 @@ export const api = {
     putSession: (session, browserId) =>
         request("PUT", "/vault/session", { session, browserId }),
     deleteSession: () => request("DELETE", "/vault/session"),
-    getTree: () => request("GET", "/vault/tree"),
+    getTree: (since = 0) =>
+        request("GET", `/vault/tree${since > 0 ? `?since=${since}` : ""}`),
+    putTreeShards: (body) => request("PUT", "/vault/tree/shards", body),
     putTree: (tree, baseVersion) =>
         request("PUT", "/vault/tree", { tree, baseVersion }),
     lease: (browserId, takeover) =>
@@ -201,6 +203,7 @@ const MESSAGES = {
     too_large:
         "Danh sách tệp quá lớn nên máy chủ chưa lưu được. Thay đổi vẫn nằm trong tab này; đừng đóng tab.",
     bad_tree: "Máy chủ từ chối danh sách tệp (dữ liệu không hợp lệ).",
+    tree_upgraded: "Danh sách tệp đã được nâng cấp; tải lại trang.",
     version_conflict:
         "Danh sách tệp vừa được thay đổi ở nơi khác. Đang đồng bộ lại.",
     bad_response: "Máy chủ trả lời không đúng dạng. Thử lại sau.",

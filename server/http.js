@@ -33,6 +33,7 @@ const ROUTES = {
     "DELETE /api/vault/session": "deleteSession",
     "GET /api/vault/tree": "getTree",
     "PUT /api/vault/tree": "putTree",
+    "PUT /api/vault/tree/shards": "putTreeShards",
     "POST /api/lease": "lease",
     "POST /api/lease/release": "release",
     "POST /api/shares": "shares.create",
@@ -294,6 +295,7 @@ export function createApiServer(
                         "unknown",
                 ),
                 params: found.params,
+                query: Object.fromEntries(url.searchParams),
                 body:
                     method === "GET" || found.raw
                         ? {}

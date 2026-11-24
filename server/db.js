@@ -77,6 +77,66 @@ export class Db {
 
     async deleteTree(userId) {
         await rm(this.#treePath(userId), { force: true });
+        await rm(this.#shardDir(userId), { recursive: true, force: true });
+    }
+
+    // A sharded tree: trees/<id>/meta.json says which version each shard was
+    // last written at; trees/<id>/<n>-<version>.json holds one shard's blob.
+    #shardDir(userId) {
+        this.#treePath(userId);
+        return join(this.dir, "trees", userId);
+    }
+
+    async readTreeMeta(userId) {
+        try {
+            return JSON.parse(
+                await readFile(
+                    join(this.#shardDir(userId), "meta.json"),
+                    "utf8",
+                ),
+            );
+        } catch (error) {
+            if (error.code === "ENOENT") return null;
+            throw error;
+        }
+    }
+
+    async readShard(userId, n, version) {
+        if (!Number.isInteger(n) || n < 0) throw new Error("bad shard");
+        if (!Number.isSafeInteger(version) || version < 1)
+            throw new Error("bad version");
+        return JSON.parse(
+            await readFile(
+                join(this.#shardDir(userId), `${n}-${version}.json`),
+                "utf8",
+            ),
+        );
+    }
+
+    /**
+     * Versioned shards first, then the meta that points at them. A crash
+     * before the meta write leaves the previous tree intact.
+     */
+    async writeShards(userId, shards, meta, previous) {
+        const dir = this.#shardDir(userId);
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        for (const [n, blob] of Object.entries(shards))
+            await this.#write(
+                join(dir, `${Number(n)}-${meta.version}.json`),
+                JSON.stringify(blob),
+            );
+        await this.#write(join(dir, "meta.json"), JSON.stringify(meta));
+        for (const n of Object.keys(shards)) {
+            const old = previous?.shards[n];
+            if (old)
+                await rm(join(dir, `${Number(n)}-${old}.json`), {
+                    force: true,
+                });
+        }
+    }
+
+    async dropLegacyTree(userId) {
+        await rm(this.#treePath(userId), { force: true });
     }
 
     #shareDir(id) {

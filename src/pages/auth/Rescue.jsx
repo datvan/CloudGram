@@ -4,13 +4,9 @@ import { Alert, Button, LinearProgress, Stack, TextField } from "@mui/material";
 
 import AuthShell from "./AuthShell";
 import { api, ApiError, describeError } from "../../services/api";
-import {
-    decryptJson,
-    deriveKeys,
-    encryptJson,
-    unwrapDek,
-} from "../../services/crypto";
+import { decryptJson, deriveKeys, unwrapDek } from "../../services/crypto";
 import { clearKey, peekKey } from "../../services/keystore";
+import { groupByShard, loadTree, saveShards } from "../../services/treeStore";
 
 // shortcut: a one-off page for the 2026-11-06 reset; the old tree's ciphertext
 // is put next to the app by hand and goes with the next deploy. Delete this
@@ -80,28 +76,28 @@ export default function Rescue() {
             const dek = await unwrapDek(kek, account.wrappedDek);
             // merge, newest edit of each record winning, as the drive does
             for (let attempt = 0; attempt < 5; attempt += 1) {
-                const blob = await api.getTree();
-                const now = blob.version
-                    ? (await decryptJson(dek, blob, LABEL)).records ?? []
-                    : [];
+                const tree = await loadTree(dek);
+                const now = tree.records;
                 const byId = new Map(found.records.map((r) => [r.id, r]));
                 for (const r of now) {
                     const old = byId.get(r.id);
                     if (!old || (r.updatedAt ?? 0) > (old.updatedAt ?? 0))
                         byId.set(r.id, r);
                 }
-                const merged = await encryptJson(
-                    dek,
-                    { records: [...byId.values()] },
-                    LABEL,
-                    { compress: true },
-                );
                 try {
-                    await api.putTree(merged, blob.version ?? 0);
+                    await saveShards(
+                        dek,
+                        tree,
+                        groupByShard(byId.values(), tree.count),
+                        { dropLegacy: tree.legacy },
+                    );
                     break;
                 } catch (e) {
                     if (
-                        !(e instanceof ApiError && e.status === 409) ||
+                        !(
+                            e instanceof ApiError &&
+                            e.code === "version_conflict"
+                        ) ||
                         attempt === 4
                     )
                         throw e;

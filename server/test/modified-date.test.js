@@ -10,7 +10,7 @@ async function harness() {
             "utf8",
         )
     )
-        .replace(/^import .*;\r?\n/gm, "")
+        .replace(/^import [\s\S]*?;\r?\n/gm, "")
         .replace(/\bexport /g, "");
     return vm.runInNewContext(
         `${source}\n;({ importLegacy, getRecord, update, rename, setLabel, merge, closeDrive })`,
@@ -21,6 +21,11 @@ async function harness() {
             Intl,
             setTimeout,
             clearTimeout,
+            SHARD_COUNT: 512,
+            shardOf: () => 0,
+            diag() {},
+            swallow: () => () => {},
+            flush: async () => {},
         },
     );
 }

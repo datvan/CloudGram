@@ -479,7 +479,9 @@ async function loadQueue({
         return 0;
     };
     const pickers = vm.runInContext(
-        `${await read("../../src/utils/pickers.js")}\n;({ removePicked, KEPT })`,
+        `${await read(
+            "../../src/utils/pickers.js",
+        )}\n;({ removePicked, KEPT })`,
         pickerContext,
     );
     let finish;
@@ -536,7 +538,9 @@ async function loadQueue({
         queueMicrotask,
     });
     const api = vm.runInContext(
-        `${await read("../../src/utils/uploadQueue.js")}\n;({ enqueueUpload, pump })`,
+        `${await read(
+            "../../src/utils/uploadQueue.js",
+        )}\n;({ enqueueUpload, pump })`,
         context,
     );
     const file = { name: record.name, size: 1, lastModified: 1 };
@@ -670,10 +674,15 @@ test("queue only reports pump state changes and diagnostic throws are harmless",
 
 test("tree saves report success and version conflict retries", async () => {
     const source = (
-        await readFile(
+        (await readFile(
+            new URL("../../src/services/treeStore.js", import.meta.url),
+            "utf8",
+        )) +
+        "\n" +
+        (await readFile(
             new URL("../../src/services/drive.js", import.meta.url),
             "utf8",
-        )
+        ))
     )
         .replace(/^import [\s\S]*?;\r?\n/gm, "")
         .replace(/\bexport /g, "");
@@ -684,6 +693,7 @@ test("tree saves report success and version conflict retries", async () => {
             constructor() {
                 super();
                 this.status = 409;
+                this.code = "version_conflict";
             }
         }
         const context = vm.createContext({
@@ -699,12 +709,12 @@ test("tree saves report success and version conflict retries", async () => {
             clearTimeout() {},
             api: {
                 getTree: async () => ({ version: 0 }),
-                putTree: async () => {
+                putTreeShards: async () => {
                     if (++attempts === 1) throw new ApiError();
                     return { version: 1 };
                 },
             },
-            encryptJson: async (_key, value) => value,
+            encryptJson: async (_key, value) => ({ ...value, ct: "x" }),
         });
         const drive = vm.runInContext(
             `${source}\n;({openDrive, createFile, flush})`,
