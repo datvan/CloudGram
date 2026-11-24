@@ -37,9 +37,9 @@ import { sanitizeDiag } from "./diagSchema.js";
 const scryptAsync = promisify(scrypt);
 
 export const LIMITS = {
-    treeBytes: 25 * 1024 * 1024,
+    treeBytes: 60 * 1024 * 1024,
     sessionBytes: 16 * 1024,
-    body: 26 * 1024 * 1024,
+    body: 64 * 1024 * 1024,
     diagBody: 32 * 1024,
 };
 
