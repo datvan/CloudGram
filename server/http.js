@@ -10,6 +10,7 @@ import { createServer } from "node:http";
 import { HttpError, LIMITS } from "./app.js";
 import { PlayReply } from "./play.js";
 import { FileReply, SHARE_LIMITS } from "./shares.js";
+import { accountId, errorDetails, requestId } from "./diag.js";
 
 const ROUTES = {
     "POST /api/auth/prelogin": "prelogin",
@@ -38,6 +39,7 @@ const ROUTES = {
     "POST /api/dropbox/resolve": "dropbox.resolve",
     "POST /api/play": "play.create",
     "GET /api/shares": "shares.list",
+    "POST /api/log": "diagnosticLog",
 };
 
 // routes with ids in the path; `raw` takes the body as bytes, not JSON
@@ -117,7 +119,11 @@ function route(method, pathname) {
         if (!match) continue;
         const params = {};
         pattern.keys.forEach((key, i) => (params[key] = match[i + 1]));
-        return { handler: pattern.handler, params, raw: pattern.raw };
+        return {
+            handler: pattern.handler,
+            params,
+            raw: pattern.raw,
+        };
     }
     return null;
 }
@@ -150,8 +156,8 @@ async function readBytes(req, limit) {
     return Buffer.concat(chunks);
 }
 
-async function readJson(req) {
-    const bytes = await readBytes(req, LIMITS.body);
+async function readJson(req, limit = LIMITS.body) {
+    const bytes = await readBytes(req, limit);
     if (!bytes.length) return {};
     try {
         const body = JSON.parse(bytes.toString("utf8"));
@@ -165,12 +171,56 @@ async function readJson(req) {
 
 export function createApiServer(
     api,
-    { origin, secureCookies = true, log = console } = {},
+    { origin, secureCookies = true, log = console, diagLog = true } = {},
 ) {
     return createServer(async (req, res) => {
+        const started = Date.now();
+        const id = requestId();
         const url = new URL(req.url, "http://localhost");
         const method = req.method === "HEAD" ? "GET" : req.method;
         const found = route(method, url.pathname);
+        let inputBytes = 0;
+        let outputBytes = 0;
+        let errorCode;
+        let request;
+        const writeLog = (record) => log.log?.(JSON.stringify(record));
+        if (diagLog) {
+            req.on("data", (chunk) => {
+                inputBytes += chunk.length;
+            });
+            const write = res.write;
+            const end = res.end;
+            res.write = function (chunk, ...args) {
+                if (typeof chunk === "string" || ArrayBuffer.isView(chunk))
+                    outputBytes += Buffer.byteLength(chunk);
+                return write.call(this, chunk, ...args);
+            };
+            res.end = function (chunk, ...args) {
+                if (typeof chunk === "string" || ArrayBuffer.isView(chunk))
+                    outputBytes += Buffer.byteLength(chunk);
+                return end.call(this, chunk, ...args);
+            };
+            let logged = false;
+            const access = () => {
+                if (logged) return;
+                logged = true;
+                writeLog({
+                    src: "api",
+                    ts: Date.now(),
+                    req: id,
+                    m: /^[A-Z]{1,12}$/.test(req.method) ? req.method : "-",
+                    route: found?.handler ?? "unmatched",
+                    status: res.statusCode,
+                    ...(errorCode ? { code: errorCode } : {}),
+                    ms: Date.now() - started,
+                    in: inputBytes,
+                    out: outputBytes,
+                    acct: accountId(api.pepper, request?.diagAccount),
+                });
+            };
+            res.on("finish", access);
+            res.on("close", access);
+        }
 
         const headers = {
             "Content-Type": "application/json; charset=utf-8",
@@ -204,6 +254,11 @@ export function createApiServer(
 
         try {
             if (!found) throw new HttpError(404, "not_found");
+            if (!diagLog && found.handler === "diagnosticLog") {
+                res.writeHead(204, headers);
+                res.end();
+                return;
+            }
 
             if (method !== "GET") {
                 // SameSite=Strict already keeps the cookie off cross-site
@@ -228,7 +283,7 @@ export function createApiServer(
                 }
             }
 
-            const request = {
+            request = {
                 headers: req.headers,
                 cookies: parseCookies(req.headers.cookie),
                 // ufw only lets Cloudflare reach nginx, so this header is the
@@ -239,15 +294,29 @@ export function createApiServer(
                         "unknown",
                 ),
                 params: found.params,
-                body: method === "GET" || found.raw ? {} : await readJson(req),
+                body:
+                    method === "GET" || found.raw
+                        ? {}
+                        : await readJson(
+                              req,
+                              found.handler === "diagnosticLog"
+                                  ? LIMITS.diagBody
+                                  : LIMITS.body,
+                          ),
                 raw: found.raw
                     ? await readBytes(req, SHARE_LIMITS.chunkBytes)
                     : undefined,
             };
+            request.logClient = (ev) =>
+                writeLog({
+                    src: "client",
+                    acct: accountId(api.pepper, request.diagAccount),
+                    ev,
+                });
             const result = await resolve(api, found.handler)(request, reply);
             // the player route writes its own response, bytes as they come
             if (result instanceof PlayReply)
-                return result.run(res, req.method === "HEAD");
+                return await result.run(res, req.method === "HEAD");
             if (result instanceof FileReply) {
                 res.writeHead(200, {
                     "Content-Type": "application/octet-stream",
@@ -263,6 +332,24 @@ export function createApiServer(
             }
             send(200, result);
         } catch (error) {
+            if (
+                error instanceof HttpError &&
+                typeof error.code === "string" &&
+                /^[a-z][a-z0-9_]{1,39}$/.test(error.code)
+            )
+                errorCode = error.code;
+            if (res.headersSent) {
+                if (!(error instanceof HttpError))
+                    writeLog({
+                        src: "api",
+                        lvl: "error",
+                        ts: Date.now(),
+                        req: id,
+                        ...errorDetails(error),
+                    });
+                res.destroy();
+                return;
+            }
             if (error instanceof HttpError) {
                 if (error.extra?.retryAfter)
                     headers["Retry-After"] = String(error.extra.retryAfter);
@@ -270,7 +357,13 @@ export function createApiServer(
                     headers["Content-Range"] = error.extra.contentRange;
                 send(error.status, { error: error.code, ...error.extra });
             } else {
-                log.error(error);
+                writeLog({
+                    src: "api",
+                    lvl: "error",
+                    ts: Date.now(),
+                    req: id,
+                    ...errorDetails(error),
+                });
                 send(500, { error: "internal" });
             }
         }

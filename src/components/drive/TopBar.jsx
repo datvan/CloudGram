@@ -33,6 +33,8 @@ import TelegramIcon from "@mui/icons-material/Telegram";
 
 import { describeError } from "../../services/api";
 import { useDrive } from "../../services/drive";
+import { downloadDiag, diagTab } from "../../services/diag";
+import { DIAG_LOG } from "../../config/features";
 
 // where the user was before searching, which clearing the box goes back to;
 // outside the component so it outlives re-renders
@@ -309,6 +311,31 @@ export default function TopBar({
                     {mode === "light" ? "Giao diện tối" : "Giao diện sáng"}
                 </MenuItem>
                 <Divider />
+                {DIAG_LOG && (
+                    <MenuItem
+                        onClick={() => {
+                            const url = URL.createObjectURL(
+                                new Blob([downloadDiag()], {
+                                    type: "application/json",
+                                }),
+                            );
+                            const link = document.createElement("a");
+                            link.href = url;
+                            link.download = `cloudgram-diag-${diagTab}.json`;
+                            link.click();
+                            URL.revokeObjectURL(url);
+                            setAnchor(null);
+                        }}
+                    >
+                        <Stack>
+                            Tải nhật ký chẩn đoán
+                            <Typography variant="caption">
+                                Chỉ gồm sự kiện kỹ thuật, không có tên tệp hay
+                                nội dung.
+                            </Typography>
+                        </Stack>
+                    </MenuItem>
+                )}
                 <MenuItem onClick={() => pick("logout")}>
                     <ListItemIcon>
                         <LogoutIcon fontSize="small" />

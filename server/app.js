@@ -32,6 +32,7 @@ import { promisify } from "node:util";
 import { Dropbox } from "./dropbox.js";
 import { Play } from "./play.js";
 import { Shares } from "./shares.js";
+import { sanitizeDiag } from "./diagSchema.js";
 
 const scryptAsync = promisify(scrypt);
 
@@ -39,6 +40,7 @@ export const LIMITS = {
     treeBytes: 60 * 1024 * 1024,
     sessionBytes: 16 * 1024,
     body: 64 * 1024 * 1024,
+    diagBody: 32 * 1024,
 };
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -198,6 +200,7 @@ export class CloudGramApi {
         this.loginByUser = new RateLimiter(20, 15 * 60 * 1000);
         this.preloginByIp = new RateLimiter(60, 15 * 60 * 1000);
         this.setupByIp = new RateLimiter(20, 15 * 60 * 1000);
+        this.diagBySession = new RateLimiter(30, 60 * 1000);
         this.shares = new Shares({
             db,
             now,
@@ -313,22 +316,23 @@ export class CloudGramApi {
     }
 
     /** Resolve the cookie to an account, sliding a remembered session forward. */
-    async authenticate(req, res) {
+    async authenticate(req, res, { renew = true } = {}) {
         const token = req.cookies[COOKIE];
         if (!token) throw new HttpError(401, "not_signed_in");
         const key = sha256(token);
         const session = this.db.data.sessions[key];
         const user = session && this.db.data.users[session.username];
         if (!session || session.expiresAt <= this.now() || !user?.verifier) {
-            if (session) {
+            if (session && renew) {
                 delete this.db.data.sessions[key];
                 await this.db.save();
             }
-            res.clearCookie(COOKIE);
+            if (renew) res.clearCookie(COOKIE);
             throw new HttpError(401, "not_signed_in");
         }
         // slide only once a day, so a busy tab does not rewrite db.json constantly
         if (
+            renew &&
             session.remember &&
             session.expiresAt - this.now() < REMEMBER_TTL - DAY
         ) {
@@ -336,7 +340,24 @@ export class CloudGramApi {
             await this.db.save();
             res.cookie(COOKIE, token, REMEMBER_TTL / 1000);
         }
+        req.diagAccount = user.username;
         return { user, sessionKey: key, session };
+    }
+
+    async diagnosticLog(req, res) {
+        const { sessionKey } = await this.authenticate(req, res, {
+            renew: false,
+        });
+        this.diagBySession.take(sessionKey, this.now());
+        if (!Array.isArray(req.body.events) || req.body.events.length > 100)
+            throw new HttpError(400, "bad_batch");
+        let dropped = 0;
+        for (const item of req.body.events) {
+            const result = sanitizeDiag(item);
+            dropped += result.dropped;
+            if (result.event) req.logClient(result.event);
+        }
+        return { ok: true, dropped };
     }
 
     // ----- handlers -----------------------------------------------------------
@@ -848,5 +869,6 @@ export class CloudGramApi {
         this.loginByUser.sweep();
         this.preloginByIp.sweep();
         this.setupByIp.sweep();
+        this.diagBySession.sweep(this.now());
     }
 }

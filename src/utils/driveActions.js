@@ -30,6 +30,15 @@ import { messagesOf } from "./splitPlan";
 import { uploadLimit } from "./uploadLimit";
 import { dropShares } from "../services/shares";
 import { getClient } from "../services/telegram";
+import { diag } from "../services/diag";
+
+const trace = (fn) => {
+    try {
+        fn();
+    } catch {
+        // Diagnostics are optional.
+    }
+};
 
 /**
  * Upload loose files, or a picked/dropped folder, under `parentID`.
@@ -72,8 +81,16 @@ export async function uploadEntries(
         onElsewhere,
         onTooBig,
         group,
+        run,
     } = {},
 ) {
+    trace(() =>
+        diag("upload.entries.start", { run: run?.diagId, n: entries.length }),
+    );
+    if (!entries.length)
+        trace(() =>
+            diag("upload.entries.stop", { run: run?.diagId, reason: "empty" }),
+        );
     const scope = uploadScope();
     const tree = buildTreeFromPaths(entries);
     const records = getSnapshot().records;
@@ -111,7 +128,7 @@ export async function uploadEntries(
         const parent = parentOf(entry);
         const name = entry.name ?? entry.file.name;
         const there =
-            parent === MISSING ? [] : named.get(nameKey(parent, name)) ?? [];
+            parent === MISSING ? [] : (named.get(nameKey(parent, name)) ?? []);
         const files = there.filter((r) => r.type === "file");
         return {
             entry,
@@ -175,13 +192,13 @@ export async function uploadEntries(
 
     const conflicts = placed.filter((p) => !p.unfinished && p.taken);
     const choice = conflicts.length
-        ? (await onConflict?.(
+        ? ((await onConflict?.(
               conflicts.map((p) => ({
                   name: p.name,
                   size: p.entry.file.size,
                   existingSize: p.taken.size,
               })),
-          )) ?? "skip"
+          )) ?? "skip")
         : null;
 
     const counts = {
@@ -192,11 +209,16 @@ export async function uploadEntries(
         linked: 0,
         skipped: oversize.length,
     };
-    if (choice === "cancel") return counts;
+    if (choice === "cancel") {
+        trace(() =>
+            diag("upload.entries.stop", { run: run?.diagId, reason: "cancel" }),
+        );
+        return { ...counts, reason: "Đã huỷ tải lên." };
+    }
 
     const found = placed.filter((p) => p.elsewhere);
     const link = found.length
-        ? (await onElsewhere?.(
+        ? ((await onElsewhere?.(
               found.map((p) => ({
                   name: p.name,
                   size: p.entry.file.size,
@@ -205,13 +227,23 @@ export async function uploadEntries(
                       records.find((r) => r.id === p.elsewhere.parent)?.name ??
                       null,
               })),
-          )) ?? "upload"
+          )) ?? "upload")
         : null;
-    if (
-        link === "cancel" ||
-        (UPLOAD_OWNER && (scope === null || scope !== uploadScope()))
-    )
-        return counts;
+    if (link === "cancel") {
+        trace(() =>
+            diag("upload.entries.stop", { run: run?.diagId, reason: "cancel" }),
+        );
+        return { ...counts, reason: "Đã huỷ tải lên." };
+    }
+    if (UPLOAD_OWNER && (scope === null || scope !== uploadScope())) {
+        trace(() =>
+            diag("upload.entries.stop", { run: run?.diagId, reason: "scope" }),
+        );
+        return {
+            ...counts,
+            reason: "Tài khoản đã thay đổi; không thể bắt đầu tải lên.",
+        };
+    }
 
     for (const folder of missing) {
         const record = createFolder(folder.name, parentOf(folder));
@@ -226,6 +258,12 @@ export async function uploadEntries(
             asMedia,
             removeOriginal,
             group,
+            run,
+            diagKind: extra.replaces
+                ? "replace"
+                : extra.name
+                  ? "rename"
+                  : "new",
             parentID: parentOf(p.entry),
             ...extra,
         });
@@ -245,6 +283,38 @@ export async function uploadEntries(
 
     for (const p of oversize) keep(p, KEPT.tooBig);
 
+    trace(() => {
+        const plan = {
+            queued: 0,
+            replaced: 0,
+            renamed: 0,
+            linked: 0,
+            skipped: counts.skipped,
+        };
+        for (const p of placed) {
+            if (p.unfinished) {
+                const log = logOf.get(p.unfinished.id);
+                if (
+                    isQueued(p.unfinished.id) ||
+                    (log && log.tab !== TAB && live.has(log.tab)) ||
+                    log?.messageId ||
+                    log?.sending
+                )
+                    plan.skipped++;
+            } else if (p.elsewhere && link === "link") plan.linked++;
+            else if (!p.taken) plan.queued++;
+            else if (choice === "replace") plan.replaced++;
+            else if (choice === "keep") plan.renamed++;
+            else plan.skipped++;
+        }
+        diag("upload.entries.plan", {
+            run: run?.diagId,
+            ...plan,
+            oversize: oversize.length,
+            unfinished: placed.filter((p) => p.unfinished).length,
+            elsewhere: found.length,
+        });
+    });
     for (const p of placed) {
         const { entry, unfinished, taken } = p;
         if (unfinished) {
@@ -264,7 +334,7 @@ export async function uploadEntries(
             const unchanged =
                 log?.lastModified == null ||
                 log.lastModified === entry.file.lastModified;
-            enqueueUpload({
+            const record = enqueueUpload({
                 file: entry.file,
                 recordId: unfinished.id,
                 handle: entry.handle,
@@ -274,31 +344,40 @@ export async function uploadEntries(
                 replaces: log?.replaces,
                 // picked again just now, so what was chosen just now
                 removeOriginal,
+                run,
             });
-            counts.resumed += 1;
+            if (record) counts.resumed += 1;
+            else counts.reason = "Không thể đưa một số tệp vào hàng tải lên.";
         } else if (p.elsewhere && link === "link") {
             // p.parent is MISSING for a folder made only just now
             linkFile(p.elsewhere, parentOf(entry), p.name);
             counts.linked += 1;
             keep(p, KEPT.linked);
         } else if (!taken) {
-            queue(p);
-            counts.queued += 1;
+            if (queue(p)) counts.queued += 1;
+            else counts.reason = "Không thể đưa một số tệp vào hàng tải lên.";
         } else if (choice === "replace") {
-            queue(p, { replaces: taken.id });
-            counts.replaced += 1;
+            if (queue(p, { replaces: taken.id })) counts.replaced += 1;
+            else counts.reason = "Không thể đưa một số tệp vào hàng tải lên.";
         } else if (choice === "keep") {
             const name = freeName(named, parentOf(entry), p.name);
             // taken from now on, for the next file of this batch
             named.set(nameKey(parentOf(entry), name), [{ name }]);
             // renamed, so it is no piece of the cut: not counted for the group
-            queue(p, { name, group: undefined });
-            counts.renamed += 1;
+            if (queue(p, { name, group: undefined })) counts.renamed += 1;
+            else counts.reason = "Không thể đưa một số tệp vào hàng tải lên.";
         } else {
             counts.skipped += 1;
             keep(p, KEPT.skipped);
         }
     }
+    if (counts.reason)
+        trace(() =>
+            diag("upload.entries.stop", {
+                run: run?.diagId,
+                reason: "enqueueFailed",
+            }),
+        );
     return counts;
 }
 
