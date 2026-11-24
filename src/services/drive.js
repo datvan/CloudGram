@@ -27,16 +27,25 @@ import { diag, swallow } from "./diag";
 import { useSyncExternalStore } from "react";
 import { v4 as uuid4 } from "uuid";
 
-import { api, ApiError } from "./api";
-import { decryptJson, encryptJson } from "./crypto";
+import { ApiError } from "./api";
+import {
+    groupByShard,
+    loadTree,
+    saveShards,
+    shardOf,
+    SHARD_COUNT,
+} from "./treeStore";
 import { fold } from "../utils/format";
 
-const LABEL = "file-tree";
 const TOMBSTONE_TTL = 90 * 24 * 60 * 60 * 1000;
 const PUSH_DELAY = 400;
 
 let dek = null;
 let version = 0;
+let shardCount = SHARD_COUNT;
+let legacy = false;
+let dirtyShards = new Map();
+let revision = 0;
 let records = new Map();
 let snapshot = {
     records: [],
@@ -130,35 +139,40 @@ export function wasDeleted(id) {
 
 // ----- loading and merging -----------------------------------------------------
 
-function merge(incoming) {
+function touch(id) {
+    dirtyShards.set(shardOf(id, shardCount), ++revision);
+}
+
+function merge(incoming, track = false) {
     let changed = false;
     for (const record of incoming) {
         const mine = records.get(record.id);
         if (!mine || (record.updatedAt ?? 0) > (mine.updatedAt ?? 0)) {
             records.set(record.id, record);
+            if (track) touch(record.id);
             changed = true;
         }
     }
     return changed;
 }
 
-async function pull() {
-    const blob = await api.getTree();
-    if (!blob.version) return { version: 0, records: [] };
-    const tree = await decryptJson(dek, blob, LABEL);
-    return { version: blob.version, records: tree.records ?? [] };
-}
-
 export async function openDrive(key) {
     dek = key;
     records = new Map();
     dirty = false;
+    dirtyShards = new Map();
     syncError = null;
-    const remote = await pull();
+    const remote = await loadTree(dek);
     version = remote.version;
+    shardCount = remote.count;
+    legacy = remote.legacy;
     merge(remote.records);
     noteSaved(remote.records);
     publish();
+    if (legacy) {
+        for (let n = 0; n < shardCount; n += 1) dirtyShards.set(n, ++revision);
+        markDirty(true);
+    }
 }
 
 export function closeDrive() {
@@ -168,6 +182,9 @@ export function closeDrive() {
     records = new Map();
     savedFileIds = new Map();
     dirty = false;
+    dirtyShards = new Map();
+    shardCount = SHARD_COUNT;
+    legacy = false;
     syncError = null;
     publish();
 }
@@ -175,11 +192,11 @@ export function closeDrive() {
 /** Pick up what another device wrote, e.g. after taking the lease back. */
 export async function refresh() {
     if (!dek) return;
-    const remote = await pull();
+    const remote = await loadTree(dek, version);
     if (remote.version !== version) {
         version = remote.version;
         noteSaved(remote.records, false);
-        if (merge(remote.records)) publish();
+        if (merge(remote.records, dirty)) publish();
     }
 }
 
@@ -198,7 +215,7 @@ export function importLegacy(legacy) {
             updatedAt: record.updatedAt ?? now,
         }));
     if (!incoming.length) return 0;
-    merge(incoming);
+    merge(incoming, true);
     markDirty(true);
     return incoming.length;
 }
@@ -246,28 +263,50 @@ async function push() {
     try {
         for (let attempt = 0; attempt < 5; attempt += 1) {
             if (attempt > 0) retries409 += 1;
-            dirty = false;
             const cutoff = Date.now() - TOMBSTONE_TTL;
-            const list = [...records.values()].filter(
-                (r) => !(r.deleted && r.updatedAt < cutoff),
+            for (const [id, record] of records) {
+                if (record.deleted && record.updatedAt < cutoff) {
+                    records.delete(id);
+                    touch(id);
+                }
+            }
+            const sent = new Map(dirtyShards);
+            const groups = groupByShard(
+                records.values(),
+                shardCount,
+                sent.keys(),
             );
             try {
-                const blob = await encryptJson(dek, { records: list }, LABEL, {
-                    compress: true,
+                await saveShards(dek, { version, count: shardCount }, groups, {
+                    dropLegacy: legacy,
+                    onSaved: (indexes, nextVersion) => {
+                        version = nextVersion;
+                        for (const n of indexes) {
+                            for (const id of savedFileIds.keys())
+                                if (shardOf(id, shardCount) === n)
+                                    savedFileIds.delete(id);
+                            noteSaved(groups.get(n), false);
+                            if (dirtyShards.get(n) === sent.get(n))
+                                dirtyShards.delete(n);
+                        }
+                        dirty = dirtyShards.size > 0;
+                    },
                 });
-                const res = await api.putTree(blob, version);
-                version = res.version;
+                legacy = false;
+                dirty = dirtyShards.size > 0;
                 syncError = null;
-                noteSaved(list);
                 ok = true;
                 return;
             } catch (error) {
                 dirty = true;
-                if (error instanceof ApiError && error.status === 409) {
-                    const remote = await pull();
+                if (
+                    error instanceof ApiError &&
+                    error.code === "version_conflict"
+                ) {
+                    const remote = await loadTree(dek, version);
                     version = remote.version;
                     noteSaved(remote.records, false);
-                    merge(remote.records);
+                    merge(remote.records, true);
                     publish();
                     continue;
                 }
@@ -308,6 +347,7 @@ function put(record, { preserveModifiedAt = false } = {}) {
             : now,
         updatedAt: Math.max(now, (record.updatedAt ?? 0) + 1),
     });
+    touch(record.id);
 }
 
 /**

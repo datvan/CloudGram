@@ -15,7 +15,17 @@ import {
 } from "../../src/utils/splitPlan.js";
 
 async function load(path, globals, exports) {
-    const source = (await readFile(new URL(path, import.meta.url), "utf8"))
+    const treeStore = path.endsWith("/drive.js")
+        ? await readFile(
+              new URL("../../src/services/treeStore.js", import.meta.url),
+              "utf8",
+          )
+        : "";
+    const source = (
+        treeStore +
+        "\n" +
+        (await readFile(new URL(path, import.meta.url), "utf8"))
+    )
         .replace(/^import [\s\S]*?;\r?\n/gm, "")
         .replace(/\bexport default /g, "")
         .replace(/\bexport /g, "");
@@ -233,16 +243,16 @@ for (const state of [
                 uuid4: () => (nextRecord++ === 0 ? "upload" : "folder"),
                 api: {
                     getTree: async () => ({ version: 0 }),
-                    putTree: async (blob) => {
+                    putTreeShards: async ({ shards }) => {
                         if (unavailable) throw new Error("offline");
-                        savedMessage = blob.records.find(
-                            (record) => record.id === "upload",
-                        )?.file_id;
+                        savedMessage = Object.values(shards)
+                            .flatMap((blob) => blob.records)
+                            .find((record) => record.id === "upload")?.file_id;
                         afterSave();
                         return { version: 1 };
                     },
                 },
-                encryptJson: async (_, value) => value,
+                encryptJson: async (_, value) => ({ ...value, ct: "x" }),
                 setTimeout: () => 0,
             },
             [

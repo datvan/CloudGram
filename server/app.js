@@ -41,6 +41,9 @@ export const LIMITS = {
     sessionBytes: 16 * 1024,
     body: 64 * 1024 * 1024,
     diagBody: 32 * 1024,
+    // a sharded tree: no request carries the whole tree any more
+    shardBytes: 4 * 1024 * 1024,
+    shardCount: 4096,
 };
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -745,26 +748,129 @@ export class CloudGramApi {
         return { ok: true };
     }
 
+    /**
+     * The tree: the old single blob, or once sharded every shard written
+     * after `?since=` (all of them without it), plus the old blob while the
+     * browser has not finished moving its records out of it.
+     */
     async getTree(req, res) {
         const { user } = await this.authenticate(req, res);
-        const tree = await this.db.readTree(user.id);
-        return tree ?? { version: 0 };
+        return this.#lockTree(user.id, async () => {
+            const meta = await this.db.readTreeMeta(user.id);
+            const legacy = await this.db.readTree(user.id);
+            if (!meta) return legacy ?? { version: 0 };
+            const since = Number(req.query?.since) || 0;
+            const shards = {};
+            for (const [n, at] of Object.entries(meta.shards))
+                if (at > since)
+                    shards[n] = await this.db.readShard(user.id, Number(n), at);
+            return {
+                version: meta.version,
+                count: meta.count,
+                shards,
+                ...(legacy && !since
+                    ? { legacy: { iv: legacy.iv, ct: legacy.ct } }
+                    : {}),
+            };
+        });
+    }
+
+    #treeLocks = new Map();
+
+    /** One tree write at a time per account, so compare-and-swap holds. */
+    async #lockTree(userId, run) {
+        const before = this.#treeLocks.get(userId) ?? Promise.resolve();
+        const mine = before.then(run, run);
+        const tail = mine.catch(() => {});
+        this.#treeLocks.set(userId, tail);
+        try {
+            return await mine;
+        } finally {
+            if (this.#treeLocks.get(userId) === tail)
+                this.#treeLocks.delete(userId);
+        }
+    }
+
+    async #treeVersion(userId) {
+        const meta = await this.db.readTreeMeta(userId);
+        if (meta) return { meta, version: meta.version };
+        return {
+            meta: null,
+            version: (await this.db.readTree(userId))?.version ?? 0,
+        };
     }
 
     /**
-     * Compare-and-swap on the tree. The server cannot merge what it cannot read,
-     * so on a version mismatch the browser pulls, merges and tries again.
+     * Compare-and-swap on the old single-blob tree. The server cannot merge
+     * what it cannot read, so on a version mismatch the browser pulls, merges
+     * and tries again. Refused once the account is sharded: a tab still on
+     * the old app would otherwise write a tree nobody reads.
      */
     async putTree(req, res) {
         const { user } = await this.authenticate(req, res);
         const blob = requireBlob(req.body.tree, LIMITS.treeBytes, "bad_tree");
         const base = Number(req.body.baseVersion);
-        const current = (await this.db.readTree(user.id))?.version ?? 0;
-        if (base !== current)
-            throw new HttpError(409, "version_conflict", { version: current });
-        const tree = { version: current + 1, ...blob, updatedAt: this.now() };
-        await this.db.writeTree(user.id, tree);
-        return { version: tree.version };
+        return this.#lockTree(user.id, async () => {
+            const { meta, version: current } = await this.#treeVersion(user.id);
+            if (meta) throw new HttpError(409, "tree_upgraded");
+            if (base !== current)
+                throw new HttpError(409, "version_conflict", {
+                    version: current,
+                });
+            const tree = {
+                version: current + 1,
+                ...blob,
+                updatedAt: this.now(),
+            };
+            await this.db.writeTree(user.id, tree);
+            return { version: tree.version };
+        });
+    }
+
+    /**
+     * Compare-and-swap on some shards of the tree. Each shard is a blob of
+     * its own, so a save carries only what changed and no single request
+     * grows with the tree.
+     */
+    async putTreeShards(req, res) {
+        const { user } = await this.authenticate(req, res);
+        const base = Number(req.body.baseVersion);
+        const count = Number(req.body.count);
+        if (!Number.isInteger(count) || count < 1 || count > LIMITS.shardCount)
+            throw new HttpError(400, "bad_tree");
+        const input = req.body.shards;
+        if (!input || typeof input !== "object" || Array.isArray(input))
+            throw new HttpError(400, "bad_tree");
+        const shards = {};
+        for (const [key, value] of Object.entries(input)) {
+            const n = Number(key);
+            if (!/^\d+$/.test(key) || n >= count)
+                throw new HttpError(400, "bad_tree");
+            shards[n] = requireBlob(value, LIMITS.shardBytes, "bad_tree");
+        }
+        const dropLegacy = req.body.dropLegacy === true;
+        return this.#lockTree(user.id, async () => {
+            const { meta, version: current } = await this.#treeVersion(user.id);
+            if (base !== current)
+                throw new HttpError(409, "version_conflict", {
+                    version: current,
+                });
+            if (meta && meta.count !== count)
+                throw new HttpError(400, "bad_tree");
+            const version = current + 1;
+            const next = {
+                version,
+                count,
+                shards: { ...(meta?.shards ?? {}) },
+                updatedAt: this.now(),
+            };
+            for (const n of Object.keys(shards)) next.shards[n] = version;
+            if (dropLegacy && Object.keys(next.shards).length !== count)
+                throw new HttpError(400, "bad_tree");
+            await this.db.writeShards(user.id, shards, next, meta);
+            if (dropLegacy) await this.db.dropLegacyTree(user.id);
+            return { version };
+        });
     }
 
     // ----- Telegram lease -----------------------------------------------------

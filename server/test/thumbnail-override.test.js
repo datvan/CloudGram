@@ -269,7 +269,17 @@ test("image original regenerated; over 100 MiB rejected immediately", async () =
 });
 
 async function load(path, globals, exports) {
-    const source = (await readFile(new URL(path, import.meta.url), "utf8"))
+    const treeStore = path.endsWith("/drive.js")
+        ? await readFile(
+              new URL("../../src/services/treeStore.js", import.meta.url),
+              "utf8",
+          )
+        : "";
+    const source = (
+        treeStore +
+        "\n" +
+        (await readFile(new URL(path, import.meta.url), "utf8"))
+    )
         .replace(/^import [\s\S]*?;\r?\n/gm, "")
         .replace(/\bexport default /g, "")
         .replace(/\bexport /g, "");
@@ -350,12 +360,12 @@ test("thumbnail survives encrypted drive save/load round trip", async () => {
             setTimeout: () => 0,
             api: {
                 getTree: async () => stored,
-                putTree: async (tree) => {
-                    stored = { ...tree, version: 1 };
+                putTreeShards: async ({ shards, count }) => {
+                    stored = { shards, count, version: 1 };
                     return { version: 1 };
                 },
             },
-            encryptJson: async (_, tree) => tree,
+            encryptJson: async (_, tree) => ({ ...tree, ct: "x" }),
             decryptJson: async (_, tree) => tree,
         },
         "openDrive,closeDrive,createFile,update,flush,getRecord",
