@@ -201,6 +201,7 @@ export default async function uploadFile(
         assertCurrent,
         onRetry,
         onEncryption,
+        onProgress,
     } = {},
 ) {
     // bigger than one message takes: raw slices, one message each
@@ -237,7 +238,9 @@ export default async function uploadFile(
     let told = 0;
     // `sentBytes` of the whole file are out by now
     const report = (sentBytes) => {
+        assertCurrent?.();
         const fraction = sentBytes / Math.max(1, file.size);
+        onProgress?.(fraction * 100);
         const rate = speed(sentBytes);
         const now = performance.now();
         if (fraction < 1 && now - told < PROGRESS_EVERY) return;

@@ -136,8 +136,16 @@ async function diskTarget(id, size) {
  * Blob; a small one, or one where the browser has no disk area, is held in
  * memory.
  */
-export async function fetchFile(id, file_id, { quiet = false } = {}) {
-    const dispatch = quiet ? () => {} : Store.dispatch;
+export async function fetchFile(
+    id,
+    file_id,
+    { quiet = false, client = getClient(), onProgress, signal } = {},
+) {
+    const dispatch = (action) => {
+        signal?.throwIfAborted();
+        if (action.type === "DOWNLOADING") onProgress?.(action.percentage);
+        if (!quiet) Store.dispatch(action);
+    };
     dispatch(downloadProgress(id, 0));
     try {
         // a cut file is several messages; `file_id` may also be another
@@ -152,11 +160,12 @@ export async function fetchFile(id, file_id, { quiet = false } = {}) {
                 record.mime,
                 dispatch,
                 record.parts,
+                client,
             );
             dispatch(completedProgress(id));
             return blob;
         }
-        const message = await getClient().getMessages("me", { ids: file_id });
+        const message = await client.getMessages("me", { ids: file_id });
         const media = message[0]?.media;
 
         if (!media) {
@@ -172,10 +181,10 @@ export async function fetchFile(id, file_id, { quiet = false } = {}) {
             const chunks = [];
             try {
                 if (!size)
-                    await encryptedRange(getClient(), file, record.enc, 0, -1);
+                    await encryptedRange(client, file, record.enc, 0, -1);
                 for (let start = 0; start < size; start += CHUNK) {
                     const bytes = await encryptedRange(
-                        getClient(),
+                        client,
                         file,
                         record.enc,
                         start,
@@ -214,25 +223,25 @@ export async function fetchFile(id, file_id, { quiet = false } = {}) {
         try {
             if (!file) throw new Error("Unknown media");
             if (disk) {
-                await downloadParts(getClient(), file, {
+                await downloadParts(client, file, {
                     onProgress: report,
                     write: disk.write,
                 });
                 data = await disk.finish();
             } else {
-                data = await downloadParts(getClient(), file, {
+                data = await downloadParts(client, file, {
                     onProgress: report,
                 });
             }
         } catch (error) {
-            if (disk) {
+            if (disk || signal?.aborted) {
                 // GramJS's own download would hold it all in memory, which a
                 // file this large is written to disk to avoid
-                await disk.abort();
+                await disk?.abort();
                 throw error;
             }
             console.log("Parallel download failed, retrying slowly", error);
-            data = await getClient().downloadMedia(media, {
+            data = await client.downloadMedia(media, {
                 progressCallback: (downloaded) =>
                     report(Number(downloaded.value ?? downloaded)),
             });
@@ -252,8 +261,7 @@ export async function fetchFile(id, file_id, { quiet = false } = {}) {
  * other into one file on disk. Needs the disk area: a file this big does not
  * fit in memory.
  */
-async function fetchSlices(id, ids, mime, dispatch, records) {
-    const client = getClient();
+async function fetchSlices(id, ids, mime, dispatch, records, client) {
     const messages = await client.getMessages("me", { ids });
     const files = messages.map((m) => m?.media && locate(m.media));
     if (files.length !== ids.length || files.some((f) => !f))
