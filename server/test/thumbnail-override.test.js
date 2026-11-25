@@ -17,6 +17,8 @@ async function harness({
     online = () => true,
     image = false,
     onSeek = () => {},
+    fetchFile = async () => new Blob(),
+    shrink = async () => new Blob(["jpeg"]),
 } = {}) {
     const records = [
         { id: "a", file_id: 1, thumbnail: 50 },
@@ -107,7 +109,8 @@ async function harness({
                 captured.push(video.index);
                 return new Blob(["jpeg"]);
             },
-            shrink: async () => new Blob(["jpeg"]),
+            shrink,
+            fetchFile,
             typeOf: () => "image/jpeg",
             evictThumbnails: (rs) => evicted.push(...rs.map((r) => r.id)),
             console: { log() {} },
@@ -266,6 +269,32 @@ test("image original regenerated; over 100 MiB rejected immediately", async () =
     big.records[0].size = 100 * 1024 * 1024 + 1;
     await assert.rejects(make(big), /100 MiB/);
     assert.equal(big.stats().sent, 0);
+});
+
+test("encrypted image regeneration uses decrypted original", async () => {
+    const plain = Uint8Array.of(4, 5, 6);
+    let reads = 0;
+    const h = await harness({
+        image: true,
+        fetchFile: async (id, fileId, options) => {
+            assert.equal(id, "a");
+            assert.equal(fileId, 1);
+            assert.equal(options.quiet, true);
+            reads++;
+            return new Blob([plain]);
+        },
+        shrink: async (blob) => {
+            assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), plain);
+            return new Blob(["jpeg"]);
+        },
+    });
+    h.records[0].enc = { size: 3 };
+    h.client.downloadMedia = async () => {
+        throw new Error("must not read ciphertext");
+    };
+    await make(h);
+    assert.equal(reads, 1);
+    assert.equal(h.records[0].thumbnail, 101);
 });
 
 async function load(path, globals, exports) {

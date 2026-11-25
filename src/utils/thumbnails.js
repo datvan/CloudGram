@@ -6,6 +6,7 @@ import {
     isOnline,
     onClientChange,
 } from "../services/telegram";
+import { fetchFile } from "./downloadFile";
 
 // Telegram's own limit for a document thumbnail: JPEG, at most 320px a side
 const SIZE = 320;
@@ -303,7 +304,8 @@ async function thumbFrom(message, record, client) {
     const sizes = doc ? doc.thumbs : media?.photo?.sizes;
     if (!doc && !sizes) return null;
 
-    const size = pickSize(sizes);
+    const encrypted = record.enc || record.parts?.some((part) => part.enc);
+    const size = encrypted ? null : pickSize(sizes);
     if (size) {
         const bytes = await client.downloadMedia(media, { thumb: size });
         if (bytes?.length) {
@@ -318,9 +320,14 @@ async function thumbFrom(message, record, client) {
     if (
         doc &&
         isImageType(type) &&
-        Number(doc.size?.value ?? doc.size) <= FALLBACK_LIMIT
+        Number(
+            record.enc?.size ??
+                (encrypted ? record.size : doc.size?.value ?? doc.size),
+        ) <= FALLBACK_LIMIT
     ) {
-        const bytes = await client.downloadMedia(media, {});
+        const bytes = encrypted
+            ? await fetchFile(record.id, record.file_id, { quiet: true })
+            : await client.downloadMedia(media, {});
         // a picture this browser cannot decode will not decode on a retry
         // either, and each retry would download the whole file again
         return shrink(new Blob([bytes], { type }), type).catch(() => null);

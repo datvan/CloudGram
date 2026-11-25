@@ -2,3 +2,5 @@
 *.sh text eol=lf
 deploy/cloudgram-admin text eol=lf
 *.service text eol=lf
+
+src/utils/downloadFile.js text eol=lf

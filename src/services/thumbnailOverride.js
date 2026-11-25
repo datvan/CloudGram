@@ -4,6 +4,7 @@ import { getRecord, getSnapshot, update, flush } from "./drive";
 import { uploadScope } from "./uploadLog";
 import { streamUrl, canStream } from "./stream";
 import { uploadParts } from "../utils/transfer";
+import { fetchFile } from "../utils/downloadFile";
 import {
     shrink,
     encodeScaled,
@@ -206,13 +207,16 @@ async function draw(record, client, op) {
     op.assert();
     if (!message?.media) throw permanent("Không tìm thấy ảnh gốc");
     const size = Number(
-        message.media.document?.size?.value ??
+        record.enc?.size ??
+            message.media.document?.size?.value ??
             message.media.document?.size ??
             record.size,
     );
     if (size > 100 * 1024 * 1024)
         throw permanent("Ảnh lớn hơn 100 MiB; không thể tạo lại hình thu nhỏ");
-    const bytes = await client.downloadMedia(message.media, {});
+    const bytes = record.enc || record.parts?.some((part) => part.enc)
+        ? await fetchFile(record.id, record.file_id, { quiet: true })
+        : await client.downloadMedia(message.media, {});
     op.assert();
     try {
         return await shrink(
