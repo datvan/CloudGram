@@ -222,9 +222,10 @@ export function createApiServer(
         let request;
         const writeLog = (record) => log.log?.(JSON.stringify(record));
         if (diagLog) {
-            req.on("data", (chunk) => {
-                inputBytes += chunk.length;
-            });
+            if (found?.handler !== "tgxPart")
+                req.on("data", (chunk) => {
+                    inputBytes += chunk.length;
+                });
             const write = res.write;
             const end = res.end;
             res.write = function (chunk, ...args) {
@@ -341,14 +342,20 @@ export function createApiServer(
                                   ? LIMITS.diagBody
                                   : LIMITS.body,
                           ),
-                raw: found.raw
-                    ? await readBytes(
-                          req,
-                          found.handler === "tgxPart"
-                              ? 524288
-                              : SHARE_LIMITS.chunkBytes,
-                      )
-                    : undefined,
+                raw:
+                    found.raw && found.handler !== "tgxPart"
+                        ? await readBytes(req, SHARE_LIMITS.chunkBytes)
+                        : undefined,
+                readBody:
+                    found.handler === "tgxPart"
+                        ? () => {
+                              if (diagLog)
+                                  req.on("data", (chunk) => {
+                                      inputBytes += chunk.length;
+                                  });
+                              return readBytes(req, 524288);
+                          }
+                        : undefined,
             };
             request.logClient = (ev) =>
                 writeLog({

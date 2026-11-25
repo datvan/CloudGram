@@ -12,12 +12,26 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         maxActive = 0,
         retried = false;
     let hold = false;
+    let partError;
+    let partCalls = 0;
+    const waits = [];
     let stored;
     const fetch = async (url, options) => {
         calls.push(url);
+        assert.equal(options.headers["X-CloudGram-Browser"], "browser");
         let result = {};
         if (url.endsWith("/upload/start")) result = { uploadId: "u" };
         else if (/\/upload\/u\/\d+$/.test(url)) {
+            partCalls += 1;
+            if (partError) {
+                const error = partError;
+                partError = null;
+                return {
+                    ok: false,
+                    status: error.status,
+                    json: async () => error.body,
+                };
+            }
             if (hold)
                 await new Promise((resolve, reject) => {
                     options.signal.addEventListener(
@@ -86,7 +100,7 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
             "utf8",
         )
     )
-        .replace('import { ApiError } from "./api";', "")
+        .replace(/^import .*;\s*$/gm, "")
         .replaceAll("export const ", "const ");
     const clientSource = (
         await readFile(
@@ -100,9 +114,11 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
             "function createProxyClient",
         );
     class ApiError extends Error {
-        constructor(status, message) {
+        constructor(status, message, body) {
             super(message);
             this.status = status;
+            this.code = message;
+            this.body = body;
         }
     }
     const context = vm.createContext({
@@ -111,7 +127,13 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         Uint8Array,
         fetch,
         ApiError,
-        setTimeout,
+        browserId: () => "browser",
+        AbortController,
+        AbortSignal,
+        setTimeout: (fn, ms) => {
+            waits.push(ms);
+            return setTimeout(fn, ms >= 500 ? 0 : ms);
+        },
         clearTimeout,
     });
     vm.runInContext(
@@ -171,6 +193,46 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
     assert.ok(calls.includes("/api/tgx/upload/u/cancel"));
     assert.ok(calls.every((url) => url.startsWith("/api/tgx/")));
     assert.ok(calls.includes("/api/tgx/delete"));
+
+    hold = false;
+    const small = new Blob(["x"]);
+    small.name = "small";
+    partCalls = 0;
+    partError = { status: 409, body: { error: "lease_required" } };
+    await assert.rejects(
+        client.proxyUpload(small),
+        (error) =>
+            error instanceof ApiError &&
+            error.status === 409 &&
+            error.code === "lease_required",
+    );
+    assert.equal(partCalls, 1);
+    partError = { status: 429, body: { error: "busy", seconds: 3 } };
+    await client.proxyUpload(small);
+    assert.ok(waits.includes(3000));
+
+    hold = true;
+    const inFlight = client.proxyUpload(small);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    client.destroy();
+    await assert.rejects(inFlight, { message: "Telegram is not connected" });
+    assert.equal(client.connected, false);
+    const count = calls.length;
+    for (const call of [
+        () => client.proxyUpload(small),
+        () => client.sendFile("me", {}),
+        () => client.getMessages("me", { ids: [1] }),
+        () => client.deleteMessages("me", [1]),
+        () => client.invoke({}),
+        () => client.downloadMedia({}),
+        () => client.getSender(),
+        () => client.getMe(),
+        () => client.iterMessages(),
+        () => client._borrowExportedSender(),
+        () => client.auth.signIn(),
+    ])
+        await assert.rejects(call(), { message: "Telegram is not connected" });
+    assert.equal(calls.length, count);
 });
 
 test("non-admin installs proxy only after lease and stops it on lease loss", async () => {

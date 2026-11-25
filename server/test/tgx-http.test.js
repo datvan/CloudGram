@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +17,7 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
     try {
         const db = await new Db(dir).open();
         for (const name of ["alice", "bob"]) {
-            db.data.users[name] = { username: name, verifier: {} };
+            db.data.users[name] = { id: name, username: name, verifier: {} };
             db.data.sessions[createHash("sha256").update(name).digest("hex")] =
                 {
                     username: name,
@@ -60,9 +61,15 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
         };
         const tgx = new TelegramProxy({ owners, telegram });
         const api = new CloudGramApi({ db, pepper: "x".repeat(40), tgx });
+        for (const name of ["alice", "bob"])
+            api.leases.set(name, {
+                holder: "browser",
+                expires: Date.now() + 60000,
+            });
         server = createApiServer(api, {
             origin: "https://cg.test",
-            diagLog: false,
+            diagLog: true,
+            log: { log() {} },
         });
         await new Promise((resolve, reject) =>
             server.listen(0, "127.0.0.1", resolve).on("error", reject),
@@ -73,6 +80,7 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
                 method,
                 headers: {
                     Origin: "https://cg.test",
+                    "X-CloudGram-Browser": "browser",
                     ...(user ? { Cookie: `cg_session=${user}` } : {}),
                     ...(method === "GET"
                         ? {}
@@ -86,6 +94,55 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
                     ? {}
                     : { body: raw ? body : JSON.stringify(body ?? {}) }),
             });
+        const early = await new Promise((resolve, reject) => {
+            const req = httpRequest(
+                base + "/upload/x/0",
+                {
+                    method: "PUT",
+                    headers: {
+                        Origin: "https://cg.test",
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": "99999999",
+                    },
+                },
+                (res) => {
+                    res.resume();
+                    resolve(res.statusCode);
+                    req.destroy();
+                },
+            );
+            req.on("error", reject);
+            req.flushHeaders();
+        });
+        assert.equal(early, 401);
+        api.leases.delete("alice");
+        for (const [method, path, body, raw] of [
+            ["POST", "/upload/start", { size: 1, parts: 1 }],
+            ["PUT", "/upload/x/0", Buffer.from("x"), true],
+            ["POST", "/upload/x/finish", {}],
+            ["POST", "/upload/x/cancel", {}],
+            ["POST", "/delete", { ids: [] }],
+        ])
+            assert.equal(
+                (await call(method, path, body, "alice", raw)).status,
+                409,
+            );
+        assert.equal(
+            (await call("POST", "/messages", { ids: [] })).status,
+            200,
+        );
+        api.leases.set("alice", {
+            holder: "other",
+            expires: Date.now() + 60000,
+        });
+        assert.equal(
+            (await call("POST", "/upload/start", { size: 1, parts: 1 })).status,
+            409,
+        );
+        api.leases.set("alice", {
+            holder: "browser",
+            expires: Date.now() + 60000,
+        });
         assert.equal(
             (await call("POST", "/upload/start", { size: 5, parts: 1 }, null))
                 .status,
@@ -214,6 +271,31 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
         }
     } finally {
         if (server) await new Promise((resolve) => server.close(resolve));
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test("reset preserves ownership and deleting then recreating username drops it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tgx-account-"));
+    try {
+        const db = await new Db(dir).open();
+        const owners = await new Owners(dir).open(db.data.users);
+        const api = new CloudGramApi({ db, owners, pepper: "x".repeat(40) });
+        await api.issueSetup("alice");
+        const oldId = db.data.users.alice.id;
+        await owners.add(oldId, 7);
+        await api.issueSetup("alice", { reset: true });
+        assert.equal(owners.owns(oldId, 7), true);
+        await api.deleteUser("alice");
+        await api.issueSetup("alice");
+        const newId = db.data.users.alice.id;
+        assert.notEqual(newId, oldId);
+        assert.equal(owners.owns(newId, 7), false);
+        assert.equal(
+            (await new Owners(dir).open(db.data.users)).owns(newId, 7),
+            false,
+        );
+    } finally {
         await rm(dir, { recursive: true, force: true });
     }
 });

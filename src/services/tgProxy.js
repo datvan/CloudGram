@@ -1,20 +1,24 @@
 import { ApiError } from "./api";
+import { browserId } from "./keystore";
 
 async function request(method, path, body, binary = false, signal) {
+    signal?.throwIfAborted();
     let response;
     try {
         response = await fetch(`/api/tgx${path}`, {
             method,
             credentials: "same-origin",
             signal,
-            headers:
-                body === undefined
+            headers: {
+                "X-CloudGram-Browser": browserId(),
+                ...(body === undefined
                     ? {}
                     : {
                           "Content-Type": binary
                               ? "application/octet-stream"
                               : "application/json",
-                      },
+                      }),
+            },
             body:
                 body === undefined
                     ? undefined
@@ -32,6 +36,7 @@ async function request(method, path, body, binary = false, signal) {
     try {
         data = await response.json();
     } catch {
+        signal?.throwIfAborted();
         throw new ApiError(
             response.status,
             response.status === 502 ? "server_down" : "bad_response",
@@ -42,8 +47,8 @@ async function request(method, path, body, binary = false, signal) {
     return data;
 }
 
-export const startUpload = (size, parts) =>
-    request("POST", "/upload/start", { size, parts });
+export const startUpload = (size, parts, signal) =>
+    request("POST", "/upload/start", { size, parts }, false, signal);
 export const putPart = (id, index, bytes, signal) =>
     request(
         "PUT",
@@ -52,19 +57,33 @@ export const putPart = (id, index, bytes, signal) =>
         true,
         signal,
     );
-export const finishUpload = (id, metadata) =>
-    request("POST", `/upload/${encodeURIComponent(id)}/finish`, metadata);
-export const cancelUpload = (id) =>
-    request("POST", `/upload/${encodeURIComponent(id)}/cancel`, {});
-export const getMessages = async (ids) =>
-    (await request("POST", "/messages", { ids })).messages;
-export const readFile = (id, offset, limit) =>
+export const finishUpload = (id, metadata, signal) =>
+    request(
+        "POST",
+        `/upload/${encodeURIComponent(id)}/finish`,
+        metadata,
+        false,
+        signal,
+    );
+export const cancelUpload = (id, signal) =>
+    request(
+        "POST",
+        `/upload/${encodeURIComponent(id)}/cancel`,
+        {},
+        false,
+        signal,
+    );
+export const getMessages = async (ids, signal) =>
+    (await request("POST", "/messages", { ids }, false, signal)).messages;
+export const readFile = (id, offset, limit, signal) =>
     request(
         "GET",
         `/file/${id}?offset=${offset}&limit=${limit}`,
         undefined,
         true,
+        signal,
     );
-export const thumb = (id) => request("GET", `/thumb/${id}`, undefined, true);
-export const deleteMessages = async (ids) =>
-    (await request("POST", "/delete", { ids })).deleted;
+export const thumb = (id, signal) =>
+    request("GET", `/thumb/${id}`, undefined, true, signal);
+export const deleteMessages = async (ids, signal) =>
+    (await request("POST", "/delete", { ids }, false, signal)).deleted;

@@ -23,6 +23,12 @@ security exposure.
 
 Shared Telegram grants each authorized admin a full session for the same Telegram account, including all its messages. The API host can decrypt the root session. Unlinking does not revoke issued sessions; revoke them in Telegram settings.
 
+The Telegram proxy binds ownership to the immutable account ID; startup migrates
+known username ledgers and leaves unmatched ledgers untouched. Deleting an
+account drops its ledger; setup reset preserves it. Mutations require the live
+browser lease. Proxy calls are rate limited and Telegram calls share a bounded
+concurrency queue. Deploy compatible browser and API changes together.
+
 The API host also stores the 2FA password encrypted with `CLOUDGRAM_TG_ROOT_KEY`. A VPS compromise could take over the Telegram account. Roll back with `CLOUDGRAM_SHARED_TELEGRAM=0` or `cloudgram-admin telegram-password-clear`.
 
 ## Frontend rollback

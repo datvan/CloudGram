@@ -8,6 +8,27 @@ import { TelegramProxy, gramTelegram } from "../tg-proxy.js";
 import { Api } from "telegram";
 import bigInt from "big-integer";
 
+test("global Telegram queue times out", async () =>
+    fixture(
+        async ({ proxy, telegram, owners }) => {
+            await owners.add("a", 7);
+            await owners.add("b", 8);
+            let release;
+            telegram.getMessages = () =>
+                new Promise((resolve) => {
+                    release = resolve;
+                });
+            const first = proxy.messages("a", [7]);
+            await assert.rejects(
+                proxy.messages("b", [8]),
+                (e) => e.status === 503 && e.code === "telegram_busy",
+            );
+            release([]);
+            await first;
+        },
+        { global: 1, queueWait: 10 },
+    ));
+
 const doc = {
     id: 4,
     accessHash: 1,
@@ -209,4 +230,57 @@ test("flood, concurrency and expiry limits", async () =>
             await pending;
         },
         { uploads: 1, requests: 1, ttl: 10 },
+    ));
+
+test("rate windows, retries and global Telegram queue", async () =>
+    fixture(
+        async ({ proxy, telegram, tick }) => {
+            for (let i = 0; i < 200; i++) await proxy.messages("rate", []);
+            await assert.rejects(
+                proxy.messages("rate", []),
+                (e) => e.status === 429 && e.extra.seconds === 10,
+            );
+            tick(10000);
+            await proxy.messages("rate", []);
+            const { uploadId } = await proxy.startUpload("a", {
+                size: 1,
+                parts: 1,
+            });
+            for (let i = 0; i < 4; i++)
+                await proxy.putPart("a", uploadId, 0, Buffer.alloc(1));
+            await assert.rejects(
+                proxy.putPart("a", uploadId, 0, Buffer.alloc(1)),
+                code("chunk_retry_limit"),
+            );
+            for (let i = 0; i < 64; i++)
+                await assert.rejects(
+                    proxy.putPart("rate", "missing", 0, Buffer.alloc(1)),
+                    code("not_found"),
+                );
+            await assert.rejects(
+                proxy.putPart("rate", "missing", 0, Buffer.alloc(1)),
+                (e) => e.status === 429 && e.extra.seconds === 10,
+            );
+            let release;
+            let calls = 0;
+            telegram.getMessages = () => {
+                calls++;
+                return new Promise((resolve) => {
+                    release = resolve;
+                });
+            };
+            await proxy.owners.add("a", 7);
+            await proxy.owners.add("b", 8);
+            const first = proxy.messages("a", [7]);
+            const second = proxy.messages("b", [8]);
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.equal(calls, 1);
+            release([]);
+            await first;
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.equal(calls, 2);
+            release([]);
+            await second;
+        },
+        { global: 1 },
     ));

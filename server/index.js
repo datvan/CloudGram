@@ -22,7 +22,7 @@ const db = await new Db(
     process.env.CLOUDGRAM_DATA ?? "/var/lib/cloudgram-api",
 ).open();
 const sharedTelegram = new SharedTelegram(db.dir);
-const owners = await new Owners(db.dir).open();
+const owners = await new Owners(db.dir).open(db.data.users);
 let client;
 let connecting;
 async function telegramClient() {

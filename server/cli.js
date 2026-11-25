@@ -14,6 +14,7 @@
 import { CloudGramApi } from "./app.js";
 import { Db } from "./db.js";
 import { SharedTelegram } from "./shared-telegram.js";
+import { Owners } from "./owners.js";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 
@@ -22,7 +23,12 @@ const site = process.env.CLOUDGRAM_ORIGIN ?? "https://cloudgram.example.com";
 const db = await new Db(
     process.env.CLOUDGRAM_DATA ?? "/var/lib/cloudgram-api",
 ).open();
-const api = new CloudGramApi({ db, pepper: process.env.CLOUDGRAM_PEPPER });
+const owners = await new Owners(db.dir).open(db.data.users);
+const api = new CloudGramApi({
+    db,
+    owners,
+    pepper: process.env.CLOUDGRAM_PEPPER,
+});
 const telegram = new SharedTelegram(db.dir);
 
 async function askPassword() {

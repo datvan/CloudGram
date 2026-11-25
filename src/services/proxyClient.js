@@ -34,14 +34,24 @@ function message(view) {
 }
 
 export function createProxyClient() {
+    const controller = new AbortController();
+    const disconnected = () => controller.signal.throwIfAborted();
     const client = {
         connected: true,
         session: { dcId: 0 },
         async proxyUpload(file, options = {}) {
-            const { signal, stats } = options;
+            disconnected();
+            const { stats } = options;
+            const signal = options.signal
+                ? AbortSignal.any([controller.signal, options.signal])
+                : controller.signal;
             signal?.throwIfAborted();
             const parts = Math.ceil(file.size / PART);
-            const { uploadId } = await proxy.startUpload(file.size, parts);
+            const { uploadId } = await proxy.startUpload(
+                file.size,
+                parts,
+                signal,
+            );
             let sent = 0;
             let next = 0;
             let failed = false;
@@ -90,7 +100,15 @@ export function createProxyClient() {
                                     };
                                     const timer = setTimeout(
                                         done,
-                                        500 * 2 ** attempt,
+                                        Math.max(
+                                            500 * 2 ** attempt,
+                                            error.status === 429 &&
+                                                error.code === "busy"
+                                                ? (Number(
+                                                      error.body?.seconds,
+                                                  ) || 0) * 1000
+                                                : 0,
+                                        ),
                                     );
                                     const abort = () => {
                                         clearTimeout(timer);
@@ -136,56 +154,75 @@ export function createProxyClient() {
                     mime: file.type || "application/octet-stream",
                 };
             } catch (error) {
-                await proxy.cancelUpload(uploadId).catch(() => {});
+                if (!controller.signal.aborted)
+                    await proxy
+                        .cancelUpload(uploadId, controller.signal)
+                        .catch(() => {});
                 throw error;
             }
         },
         async sendFile(peer, options) {
+            disconnected();
             if (peer !== "me" || !options.file?.uploadId) return unavailable();
             const video = options.attributes?.find(
                 (a) => a.className === "DocumentAttributeVideo",
             );
-            const result = await proxy.finishUpload(options.file.uploadId, {
-                name: options.file.name,
-                mime: options.file.mime,
-                caption: options.caption,
-                video: video
-                    ? {
-                          duration: video.duration,
-                          w: video.w,
-                          h: video.h,
-                          supportsStreaming: video.supportsStreaming,
-                      }
-                    : undefined,
-                forceDocument: options.forceDocument || undefined,
-            });
+            const result = await proxy.finishUpload(
+                options.file.uploadId,
+                {
+                    name: options.file.name,
+                    mime: options.file.mime,
+                    caption: options.caption,
+                    video: video
+                        ? {
+                              duration: video.duration,
+                              w: video.w,
+                              h: video.h,
+                              supportsStreaming: video.supportsStreaming,
+                          }
+                        : undefined,
+                    forceDocument: options.forceDocument || undefined,
+                },
+                controller.signal,
+            );
             return message(result.message);
         },
         async getMessages(peer, { ids } = {}) {
+            disconnected();
             if (peer !== "me" || ids == null) return unavailable();
             const all = Array.isArray(ids) ? ids : [ids];
             const result = [];
             for (let i = 0; i < all.length; i += 100)
                 result.push(
-                    ...(await proxy.getMessages(all.slice(i, i + 100))).map(
-                        message,
-                    ),
+                    ...(
+                        await proxy.getMessages(
+                            all.slice(i, i + 100),
+                            controller.signal,
+                        )
+                    ).map(message),
                 );
             return result;
         },
         async deleteMessages(peer, ids) {
+            disconnected();
             if (peer !== "me") return unavailable();
             const deleted = [];
             for (let i = 0; i < ids.length; i += 100)
                 deleted.push(
-                    ...(await proxy.deleteMessages(ids.slice(i, i + 100))),
+                    ...(await proxy.deleteMessages(
+                        ids.slice(i, i + 100),
+                        controller.signal,
+                    )),
                 );
             return deleted;
         },
         getSender() {
-            return { isConnected: () => true };
+            if (controller.signal.aborted)
+                return Promise.reject(controller.signal.reason);
+            return { isConnected: () => client.connected };
         },
         async invoke(request) {
+            disconnected();
             if (
                 !(request instanceof Api.upload.GetFile) ||
                 !(request.location instanceof Api.InputDocumentFileLocation)
@@ -193,18 +230,21 @@ export function createProxyClient() {
                 return unavailable();
             const id = Number(request.location.id);
             const bytes = request.location.thumbSize
-                ? await proxy.thumb(id)
+                ? await proxy.thumb(id, controller.signal)
                 : await proxy.readFile(
                       id,
                       Number(request.offset),
                       request.limit,
+                      controller.signal,
                   );
             return new Api.upload.File({ bytes: Buffer.from(bytes) });
         },
         async downloadMedia(media, options = {}) {
+            disconnected();
             const doc = (media.media ?? media).document;
             if (!doc) return unavailable();
-            if (options.thumb != null) return proxy.thumb(Number(doc.id));
+            if (options.thumb != null)
+                return proxy.thumb(Number(doc.id), controller.signal);
             const size = Number(doc.size);
             const out = new Uint8Array(size);
             for (let offset = 0; offset < size; offset += READ) {
@@ -212,6 +252,7 @@ export function createProxyClient() {
                     Number(doc.id),
                     offset,
                     Math.min(READ, size - offset),
+                    controller.signal,
                 );
                 if (!bytes.length) throw new Error("File truncated");
                 out.set(bytes, offset);
@@ -225,11 +266,31 @@ export function createProxyClient() {
         },
         destroy() {
             client.connected = false;
+            controller.abort(new Error("Telegram is not connected"));
         },
-        iterMessages: unavailable,
-        getMe: unavailable,
-        _borrowExportedSender: unavailable,
-        auth: new Proxy({}, { get: () => unavailable }),
+        iterMessages: async (...args) => {
+            disconnected();
+            return unavailable(...args);
+        },
+        getMe: async (...args) => {
+            disconnected();
+            return unavailable(...args);
+        },
+        _borrowExportedSender: async (...args) => {
+            disconnected();
+            return unavailable(...args);
+        },
+        auth: new Proxy(
+            {},
+            {
+                get:
+                    () =>
+                    async (...args) => {
+                        disconnected();
+                        return unavailable(...args);
+                    },
+            },
+        ),
     };
     return client;
 }

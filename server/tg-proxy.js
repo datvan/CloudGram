@@ -97,21 +97,83 @@ export function gramTelegram(client) {
 export class TelegramProxy {
     constructor({ owners, telegram, now = Date.now, limits = {} }) {
         this.owners = owners;
-        this.telegram = telegram.savePart ? telegram : gramTelegram(telegram);
+        const transport = telegram.savePart ? telegram : gramTelegram(telegram);
+        this.telegram = Object.fromEntries(
+            [
+                "savePart",
+                "send",
+                "getMessages",
+                "getFile",
+                "deleteMessages",
+            ].map((name) => [
+                name,
+                (...args) => this.#telegramCall(() => transport[name](...args)),
+            ]),
+        );
         this.now = now;
         this.limits = {
             uploads: 24,
             requests: 16,
             ttl: 6 * 60 * 60 * 1000,
+            global: 24,
+            queueWait: 30000,
             ...limits,
         };
         this.uploads = new Map();
         this.active = new Map();
+        this.rates = new Map();
+        this.telegramActive = 0;
+        this.telegramQueue = [];
     }
 
-    async #run(user, fn) {
+    async #telegramCall(fn) {
+        if (this.telegramActive >= this.limits.global) {
+            await new Promise((resolve, reject) => {
+                const entry = {
+                    resolve,
+                    timer: setTimeout(() => {
+                        this.telegramQueue.splice(
+                            this.telegramQueue.indexOf(entry),
+                            1,
+                        );
+                        reject(new HttpError(503, "telegram_busy"));
+                    }, this.limits.queueWait),
+                };
+                this.telegramQueue.push(entry);
+            });
+        } else this.telegramActive++;
+        try {
+            return await fn();
+        } finally {
+            const next = this.telegramQueue.shift();
+            if (next) {
+                clearTimeout(next.timer);
+                next.resolve();
+            } else this.telegramActive--;
+        }
+    }
+
+    async #run(user, fn, part = false) {
+        const now = this.now();
+        let rate = this.rates.get(user);
+        if (!rate || now - rate.start >= 10000) {
+            for (const [account, value] of this.rates)
+                if (now - value.start >= 10000) this.rates.delete(account);
+            rate = { start: now, part: 0, other: 0 };
+            this.rates.set(user, rate);
+        }
+        const kind = part ? "part" : "other";
+        if (rate[kind] >= (part ? 64 : 200))
+            throw new HttpError(429, "busy", {
+                seconds: Math.max(
+                    1,
+                    Math.ceil((rate.start + 10000 - now) / 1000),
+                ),
+            });
+        rate[kind]++;
         const active = this.active.get(user) ?? 0;
-        if (active >= this.limits.requests) throw new HttpError(429, "busy");
+        if (active >= this.limits.requests)
+            throw new HttpError(429, "busy", { seconds: 1 });
         this.active.set(user, active + 1);
         try {
             return await fn();
@@ -169,7 +231,7 @@ export class TelegramProxy {
                 [...this.uploads.values()].filter((u) => u.user === user)
                     .length >= this.limits.uploads
             )
-                throw new HttpError(429, "busy");
+                throw new HttpError(429, "busy", { seconds: 1 });
             const uploadId = randomBytes(16).toString("hex");
             const fileId = bigInt(randomBytes(8).toString("hex"), 16).subtract(
                 bigInt(2).pow(63),
@@ -182,34 +244,43 @@ export class TelegramProxy {
                 big: size > 10 * 1024 * 1024,
                 created: this.now(),
                 done: new Set(),
+                attempts: new Map(),
                 locked: false,
                 pending: 0,
             });
             return { uploadId };
         });
     }
-    putPart(user, id, index, bytes) {
-        return this.#run(user, async () => {
-            const u = this.#upload(user, id);
-            if (u.locked) throw new HttpError(409, "busy");
-            if (
-                !Number.isInteger(index) ||
-                index < 0 ||
-                index >= u.parts ||
-                !Buffer.isBuffer(bytes) ||
-                bytes.length !== Math.min(PART, u.size - index * PART)
-            )
-                throw new HttpError(400, "bad_chunk");
-            u.pending++;
-            try {
-                if (!(await this.telegram.savePart(u, index, bytes)))
-                    throw new Error("part rejected");
-                u.done.add(index);
-            } finally {
-                u.pending--;
-            }
-            return { ok: true };
-        });
+    putPart(user, id, index, body) {
+        return this.#run(
+            user,
+            async () => {
+                const u = this.#upload(user, id);
+                if (u.locked) throw new HttpError(409, "busy");
+                if (!Number.isInteger(index) || index < 0 || index >= u.parts)
+                    throw new HttpError(400, "bad_chunk");
+                if ((u.attempts.get(index) ?? 0) >= 4)
+                    throw new HttpError(409, "chunk_retry_limit");
+                u.attempts.set(index, (u.attempts.get(index) ?? 0) + 1);
+                u.pending++;
+                try {
+                    const bytes =
+                        typeof body === "function" ? await body() : body;
+                    if (
+                        !Buffer.isBuffer(bytes) ||
+                        bytes.length !== Math.min(PART, u.size - index * PART)
+                    )
+                        throw new HttpError(400, "bad_chunk");
+                    if (!(await this.telegram.savePart(u, index, bytes)))
+                        throw new Error("part rejected");
+                    u.done.add(index);
+                } finally {
+                    u.pending--;
+                }
+                return { ok: true };
+            },
+            true,
+        );
     }
     finishUpload(user, id, body) {
         return this.#run(user, async () => {
@@ -279,7 +350,7 @@ export class TelegramProxy {
             );
             return {
                 messages: ids.map((id) =>
-                    this.owners.owns(user, id) ? byId.get(id) ?? null : null,
+                    this.owners.owns(user, id) ? (byId.get(id) ?? null) : null,
                 ),
             };
         });

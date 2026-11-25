@@ -193,6 +193,7 @@ export class CloudGramApi {
         play = {},
         sharedTelegram = {},
         tgx,
+        owners = tgx?.owners,
         admins = (process.env.CLOUDGRAM_ADMINS ?? "").split(","),
     }) {
         if (!pepper || pepper.length < 32)
@@ -206,6 +207,7 @@ export class CloudGramApi {
         this.credentialGuard = credentialGuard;
         this.sharedTelegram = sharedTelegram;
         this.tgx = tgx;
+        this.owners = owners;
         this.telegramApprovals = new RateLimiter(5, 10 * 60 * 1000);
         this.leases = new Map();
         this.loginByIp = new RateLimiter(10, 15 * 60 * 1000);
@@ -286,6 +288,7 @@ export class CloudGramApi {
         await this.db.deleteTree(user.id);
         await this.shares.dropOwner(name);
         await this.play.dropOwner(name);
+        await this.owners?.drop(user.id);
         delete this.db.data.users[name];
         this.#dropSessions(name);
         await this.db.save();
@@ -675,28 +678,34 @@ export class CloudGramApi {
 
     async tgxStart(req, res) {
         const { user } = await this.authenticate(req, res);
-        return this.tgx.startUpload(user.username, req.body);
+        this.#requireLease(user.username, req.headers["x-cloudgram-browser"]);
+        return this.tgx.startUpload(user.id, req.body);
     }
     async tgxPart(req, res) {
         const { user } = await this.authenticate(req, res);
+        this.#requireLease(user.username, req.headers["x-cloudgram-browser"]);
+        if (Number(req.headers["content-length"]) > 524288)
+            throw new HttpError(413, "too_large");
         return this.tgx.putPart(
-            user.username,
+            user.id,
             req.params.id,
             Number(req.params.index),
-            req.raw,
+            req.readBody,
         );
     }
     async tgxFinish(req, res) {
         const { user } = await this.authenticate(req, res);
-        return this.tgx.finishUpload(user.username, req.params.id, req.body);
+        this.#requireLease(user.username, req.headers["x-cloudgram-browser"]);
+        return this.tgx.finishUpload(user.id, req.params.id, req.body);
     }
     async tgxCancel(req, res) {
         const { user } = await this.authenticate(req, res);
-        return this.tgx.cancelUpload(user.username, req.params.id);
+        this.#requireLease(user.username, req.headers["x-cloudgram-browser"]);
+        return this.tgx.cancelUpload(user.id, req.params.id);
     }
     async tgxMessages(req, res) {
         const { user } = await this.authenticate(req, res);
-        return this.tgx.messages(user.username, req.body.ids);
+        return this.tgx.messages(user.id, req.body.ids);
     }
     async tgxFile(req, res) {
         const { user } = await this.authenticate(req, res);
@@ -705,7 +714,7 @@ export class CloudGramApi {
                 ? Number(value)
                 : NaN;
         return this.tgx.readFile(
-            user.username,
+            user.id,
             Number(req.params.id),
             integer(req.query.offset),
             integer(req.query.limit),
@@ -713,11 +722,12 @@ export class CloudGramApi {
     }
     async tgxThumb(req, res) {
         const { user } = await this.authenticate(req, res);
-        return this.tgx.thumb(user.username, Number(req.params.id));
+        return this.tgx.thumb(user.id, Number(req.params.id));
     }
     async tgxDelete(req, res) {
         const { user } = await this.authenticate(req, res);
-        return this.tgx.deleteMessages(user.username, req.body.ids);
+        this.#requireLease(user.username, req.headers["x-cloudgram-browser"]);
+        return this.tgx.deleteMessages(user.id, req.body.ids);
     }
 
     async issueTelegramSession(req, res) {
@@ -1063,8 +1073,10 @@ export class CloudGramApi {
         const lease = this.leases.get(username);
         if (
             !lease ||
+            typeof browserId !== "string" ||
+            !browserId ||
             lease.holder !== browserId ||
-            lease.expires <= this.now()
+            !(lease.expires > this.now())
         ) {
             throw new HttpError(409, "lease_required");
         }
