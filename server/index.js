@@ -22,30 +22,55 @@ const db = await new Db(
     process.env.CLOUDGRAM_DATA ?? "/var/lib/cloudgram-api",
 ).open();
 const sharedTelegram = new SharedTelegram(db.dir);
-const owners = await new Owners(db.dir).open(db.data.users);
+const owners = await new Owners(db.dir).open();
 let client;
 let connecting;
+let generation = 0;
 async function telegramClient() {
     if (client?.connected) return client;
-    if (!connecting)
-        connecting = (async () => {
+    if (!connecting) {
+        const current = generation;
+        const pending = (async () => {
             const session = await sharedTelegram.load();
             if (!session) throw new HttpError(503, "telegram_not_linked");
-            if (!client) client = await sharedTelegram.client(session);
-            await client.connect();
-            return client;
-        })().finally(() => {
-            connecting = null;
-        });
+            const next = client ?? (await sharedTelegram.client(session));
+            await next.connect();
+            if (generation === current) client = next;
+            return next;
+        })();
+        connecting = pending;
+        pending.then(
+            () => {
+                if (connecting === pending) connecting = null;
+            },
+            () => {
+                if (connecting === pending) connecting = null;
+            },
+        );
+    }
     return connecting;
 }
 const telegram = Object.fromEntries(
     ["invoke", "getMessages", "sendFile", "deleteMessages"].map((method) => [
         method,
-        async (...args) => (await telegramClient())[method](...args),
+        async (...args) => {
+            const current = generation;
+            const connected = await telegramClient();
+            if (current !== generation)
+                throw new HttpError(503, "telegram_busy");
+            return connected[method](...args);
+        },
     ]),
 );
-const tgx = new TelegramProxy({ owners, telegram });
+const tgx = new TelegramProxy({
+    owners,
+    telegram,
+    onTimeout: () => {
+        generation++;
+        client = null;
+        connecting = null;
+    },
+});
 const api = new CloudGramApi({
     db,
     pepper: process.env.CLOUDGRAM_PEPPER,

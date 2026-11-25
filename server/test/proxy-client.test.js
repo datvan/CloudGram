@@ -14,6 +14,10 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
     let hold = false;
     let partError;
     let partCalls = 0;
+    let finishFailures = [];
+    let finishCalls = 0;
+    let finishStarted;
+    let releaseFinish;
     const waits = [];
     let stored;
     const fetch = async (url, options) => {
@@ -54,6 +58,24 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
             }
             parts[Number(url.split("/").pop())] = Buffer.from(options.body);
         } else if (url.endsWith("/finish")) {
+            finishCalls += 1;
+            if (finishStarted) {
+                finishStarted();
+                await new Promise((resolve, reject) => {
+                    releaseFinish = resolve;
+                    options.signal?.addEventListener("abort", () =>
+                        reject(options.signal.reason),
+                    );
+                });
+            }
+            const failure = finishFailures.shift();
+            if (failure === "network") throw new TypeError("network error");
+            if (failure)
+                return {
+                    ok: false,
+                    status: failure.status,
+                    json: async () => ({ error: failure.code }),
+                };
             stored = Buffer.concat(parts);
             const metadata = JSON.parse(options.body);
             result = {
@@ -210,6 +232,33 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
     partError = { status: 429, body: { error: "busy", seconds: 3 } };
     await client.proxyUpload(small);
     assert.ok(waits.includes(3000));
+
+    finishFailures = ["network", { status: 502, code: "server_down" }];
+    finishCalls = 0;
+    assert.equal((await client.sendFile("me", { file: token })).id, 42);
+    assert.equal(finishCalls, 3);
+    finishFailures = Array(4).fill("network");
+    finishCalls = 0;
+    await assert.rejects(client.sendFile("me", { file: token }), { status: 0 });
+    assert.equal(finishCalls, 4);
+    finishFailures = [{ status: 503, code: "telegram_busy" }];
+    finishCalls = 0;
+    await assert.rejects(client.sendFile("me", { file: token }), {
+        code: "telegram_busy",
+    });
+    assert.equal(finishCalls, 1);
+
+    const finishingClient = context.create();
+    const started = new Promise((resolve) => (finishStarted = resolve));
+    const finishing = finishingClient.sendFile("me", { file: token });
+    await started;
+    finishingClient.destroy();
+    releaseFinish();
+    assert.equal((await finishing).id, 42);
+    await assert.rejects(finishingClient.sendFile("me", { file: token }), {
+        message: "Telegram is not connected",
+    });
+    finishStarted = null;
 
     hold = true;
     const inFlight = client.proxyUpload(small);

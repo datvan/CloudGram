@@ -42,7 +42,7 @@ const doc = {
     ],
 };
 const message = { id: 7, date: 1, message: "", document: doc };
-async function fixture(fn, limits) {
+async function fixture(fn, limits, onTimeout) {
     const dir = await mkdtemp(join(tmpdir(), "proxy-"));
     const owners = await new Owners(dir).open();
     const telegram = {
@@ -58,6 +58,7 @@ async function fixture(fn, limits) {
         telegram,
         now: () => time,
         limits,
+        onTimeout,
     });
     try {
         await fn({
@@ -73,6 +74,113 @@ async function fixture(fn, limits) {
     }
 }
 const code = (expected) => (e) => e.code === expected;
+
+test("all Telegram calls time out and release the global slot", async () => {
+    let timeouts = 0;
+    await fixture(
+        async ({ proxy, telegram, owners }) => {
+            await owners.add("a", 7);
+            for (const method of [
+                "savePart",
+                "getMessages",
+                "getFile",
+                "deleteMessages",
+                "send",
+            ]) {
+                const original = telegram[method];
+                telegram[method] = () => new Promise(() => {});
+                const { uploadId } = await proxy.startUpload("a", {
+                    size: 1,
+                    parts: 1,
+                });
+                if (method === "send")
+                    await proxy.putPart("a", uploadId, 0, Buffer.alloc(1));
+                const invoke = {
+                    savePart: () =>
+                        proxy.putPart("a", uploadId, 0, Buffer.alloc(1)),
+                    getMessages: () => proxy.messages("a", [7]),
+                    getFile: () => proxy.readFile("a", 7, 0, 1),
+                    deleteMessages: () => proxy.deleteMessages("a", [7]),
+                    send: () =>
+                        proxy.finishUpload("a", uploadId, {
+                            name: "x",
+                            mime: "text/plain",
+                        }),
+                };
+                const logs = [];
+                const log = console.log;
+                console.log = (line) => logs.push(line);
+                try {
+                    await assert.rejects(
+                        invoke[method](),
+                        (e) => e.status === 503 && e.code === "telegram_busy",
+                    );
+                } finally {
+                    console.log = log;
+                }
+                if (method === "send") {
+                    assert.deepEqual(logs, [
+                        '{"src":"tgx","sendTimeout":true}',
+                    ]);
+                    await assert.rejects(invoke.send(), code("not_found"));
+                    assert.equal(owners.count("a"), 1);
+                }
+                telegram[method] = original;
+                assert.equal(
+                    (await proxy.messages("a", [7])).messages[0].id,
+                    7,
+                );
+            }
+        },
+        { global: 1, callTimeout: 10, sendTimeout: 10 },
+        () => timeouts++,
+    );
+    assert.equal(timeouts, 5);
+});
+
+test("finish is busy while sending and replayable for its TTL only by owner", async () =>
+    fixture(
+        async ({ proxy, telegram, tick }) => {
+            const { uploadId } = await proxy.startUpload("a", {
+                size: 1,
+                parts: 1,
+            });
+            await proxy.putPart("a", uploadId, 0, Buffer.alloc(1));
+            let release;
+            let calls = 0;
+            telegram.send = () => {
+                calls++;
+                return new Promise((resolve) => {
+                    release = resolve;
+                });
+            };
+            const first = proxy.finishUpload("a", uploadId, {
+                name: "x",
+                mime: "text/plain",
+            });
+            await assert.rejects(
+                proxy.finishUpload("a", uploadId, {}),
+                code("busy"),
+            );
+            release(message);
+            const result = await first;
+            assert.deepEqual(
+                await proxy.finishUpload("a", uploadId, {}),
+                result,
+            );
+            await assert.rejects(
+                proxy.finishUpload("b", uploadId, {}),
+                code("not_found"),
+            );
+            assert.equal(calls, 1);
+            tick(10);
+            await assert.rejects(
+                proxy.finishUpload("a", uploadId, {}),
+                code("not_found"),
+            );
+        },
+        { ttl: 10 },
+    ));
 
 test("GramJS adapter builds Telegram requests with supplied metadata", async () => {
     const requests = [];

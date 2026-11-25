@@ -167,24 +167,20 @@ export function createProxyClient() {
             const video = options.attributes?.find(
                 (a) => a.className === "DocumentAttributeVideo",
             );
-            const result = await proxy.finishUpload(
-                options.file.uploadId,
-                {
-                    name: options.file.name,
-                    mime: options.file.mime,
-                    caption: options.caption,
-                    video: video
-                        ? {
-                              duration: video.duration,
-                              w: video.w,
-                              h: video.h,
-                              supportsStreaming: video.supportsStreaming,
-                          }
-                        : undefined,
-                    forceDocument: options.forceDocument || undefined,
-                },
-                controller.signal,
-            );
+            const result = await proxy.finishUpload(options.file.uploadId, {
+                name: options.file.name,
+                mime: options.file.mime,
+                caption: options.caption,
+                video: video
+                    ? {
+                          duration: video.duration,
+                          w: video.w,
+                          h: video.h,
+                          supportsStreaming: video.supportsStreaming,
+                      }
+                    : undefined,
+                forceDocument: options.forceDocument || undefined,
+            });
             return message(result.message);
         },
         async getMessages(peer, { ids } = {}) {

@@ -23,8 +23,8 @@ security exposure.
 
 Shared Telegram grants each authorized admin a full session for the same Telegram account, including all its messages. The API host can decrypt the root session. Unlinking does not revoke issued sessions; revoke them in Telegram settings.
 
-The Telegram proxy binds ownership to the immutable account ID; startup migrates
-known username ledgers and leaves unmatched ledgers untouched. Deleting an
+The Telegram proxy binds ownership to the immutable account ID; startup refuses
+any ledger file that is not ID-keyed (no username migration). Deleting an
 account drops its ledger; setup reset preserves it. Mutations require the live
 browser lease. Proxy calls are rate limited and Telegram calls share a bounded
 concurrency queue. Deploy compatible browser and API changes together.

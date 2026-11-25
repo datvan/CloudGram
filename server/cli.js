@@ -23,7 +23,7 @@ const site = process.env.CLOUDGRAM_ORIGIN ?? "https://cloudgram.example.com";
 const db = await new Db(
     process.env.CLOUDGRAM_DATA ?? "/var/lib/cloudgram-api",
 ).open();
-const owners = await new Owners(db.dir).open(db.data.users);
+const owners = await new Owners(db.dir).open();
 const api = new CloudGramApi({
     db,
     owners,

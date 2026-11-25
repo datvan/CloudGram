@@ -95,7 +95,13 @@ export function gramTelegram(client) {
 }
 
 export class TelegramProxy {
-    constructor({ owners, telegram, now = Date.now, limits = {} }) {
+    constructor({
+        owners,
+        telegram,
+        now = Date.now,
+        limits = {},
+        onTimeout = () => {},
+    }) {
         this.owners = owners;
         const transport = telegram.savePart ? telegram : gramTelegram(telegram);
         this.telegram = Object.fromEntries(
@@ -107,7 +113,8 @@ export class TelegramProxy {
                 "deleteMessages",
             ].map((name) => [
                 name,
-                (...args) => this.#telegramCall(() => transport[name](...args)),
+                (...args) =>
+                    this.#telegramCall(name, () => transport[name](...args)),
             ]),
         );
         this.now = now;
@@ -117,16 +124,20 @@ export class TelegramProxy {
             ttl: 6 * 60 * 60 * 1000,
             global: 24,
             queueWait: 30000,
+            callTimeout: 60000,
+            sendTimeout: 120000,
             ...limits,
         };
         this.uploads = new Map();
+        this.finished = new Map();
+        this.onTimeout = onTimeout;
         this.active = new Map();
         this.rates = new Map();
         this.telegramActive = 0;
         this.telegramQueue = [];
     }
 
-    async #telegramCall(fn) {
+    async #telegramCall(name, fn) {
         if (this.telegramActive >= this.limits.global) {
             await new Promise((resolve, reject) => {
                 const entry = {
@@ -142,9 +153,26 @@ export class TelegramProxy {
                 this.telegramQueue.push(entry);
             });
         } else this.telegramActive++;
+        let timer;
         try {
-            return await fn();
+            return await Promise.race([
+                fn(),
+                new Promise((_, reject) => {
+                    timer = setTimeout(
+                        () => {
+                            this.onTimeout();
+                            const error = new HttpError(503, "telegram_busy");
+                            error.telegramTimeout = true;
+                            reject(error);
+                        },
+                        name === "send"
+                            ? this.limits.sendTimeout
+                            : this.limits.callTimeout,
+                    );
+                }),
+            ]);
         } finally {
+            clearTimeout(timer);
             const next = this.telegramQueue.shift();
             if (next) {
                 clearTimeout(next.timer);
@@ -194,6 +222,9 @@ export class TelegramProxy {
         }
     }
     #expire() {
+        for (const [id, result] of this.finished)
+            if (this.now() - result.created >= this.limits.ttl)
+                this.finished.delete(id);
         for (const [id, upload] of this.uploads)
             if (
                 this.now() - upload.created >= this.limits.ttl &&
@@ -284,6 +315,9 @@ export class TelegramProxy {
     }
     finishUpload(user, id, body) {
         return this.#run(user, async () => {
+            this.#expire();
+            const finished = this.finished.get(id);
+            if (finished?.user === user) return { message: finished.message };
             const u = this.#upload(user, id);
             if (u.locked || u.pending) throw new HttpError(409, "busy");
             if (u.done.size !== u.parts)
@@ -311,20 +345,38 @@ export class TelegramProxy {
                 throw new HttpError(400, "bad_meta");
             u.locked = true;
             try {
-                const message = await this.telegram.send(u, body);
+                let message;
+                try {
+                    message = await this.telegram.send(u, body);
+                } catch (error) {
+                    if (error.telegramTimeout) {
+                        this.uploads.delete(id);
+                        console.log(
+                            JSON.stringify({ src: "tgx", sendTimeout: true }),
+                        );
+                    }
+                    throw error;
+                }
                 if (!validId(message?.id) || !view(message))
                     throw new Error("bad Telegram message");
                 // Never resend a message after Telegram accepted it, even if ledger persistence fails.
-                this.uploads.delete(id);
                 try {
                     await this.owners.add(user, message.id);
                 } catch {
+                    this.uploads.delete(id);
                     console.log(
                         JSON.stringify({ src: "tgx", orphan: message.id }),
                     );
                     throw new HttpError(500, "internal");
                 }
-                return { message: view(message) };
+                const messageView = view(message);
+                this.finished.set(id, {
+                    user,
+                    message: messageView,
+                    created: this.now(),
+                });
+                this.uploads.delete(id);
+                return { message: messageView };
             } finally {
                 u.locked = false;
             }

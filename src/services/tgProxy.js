@@ -57,14 +57,29 @@ export const putPart = (id, index, bytes, signal) =>
         true,
         signal,
     );
-export const finishUpload = (id, metadata, signal) =>
-    request(
-        "POST",
-        `/upload/${encodeURIComponent(id)}/finish`,
-        metadata,
-        false,
-        signal,
-    );
+export const finishUpload = async (id, metadata) => {
+    for (let attempt = 0; ; attempt += 1) {
+        try {
+            return await request(
+                "POST",
+                `/upload/${encodeURIComponent(id)}/finish`,
+                metadata,
+            );
+        } catch (error) {
+            if (
+                attempt >= 3 ||
+                !(error instanceof ApiError) ||
+                (error.status !== 0 &&
+                    (error.status < 500 || error.status >= 600)) ||
+                (error.status === 503 && error.code === "telegram_busy")
+            )
+                throw error;
+            await new Promise((resolve) =>
+                setTimeout(resolve, 500 * 2 ** attempt),
+            );
+        }
+    }
+};
 export const cancelUpload = (id, signal) =>
     request(
         "POST",

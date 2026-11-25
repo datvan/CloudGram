@@ -20,27 +20,13 @@ export class Owners {
         this.queue = Promise.resolve();
     }
 
-    async open(users) {
+    async open() {
         await mkdir(this.dir, { recursive: true, mode: 0o700 });
-        const files = await readdir(this.dir);
-        for (const user of Object.values(users ?? {})) {
-            const old = `${key(user.username)}.json`;
-            const target = `${key(user.id)}.json`;
-            if (!files.includes(old) || old === target) continue;
-            if (files.includes(target))
-                throw new Error("ownership ledger migration conflict");
-            await rename(join(this.dir, old), join(this.dir, target));
-        }
         for (const file of await readdir(this.dir)) {
-            if (!/^[a-f0-9]{64}\.json$/.test(file)) continue;
-            const account = file.slice(0, 64);
-            if (
-                users &&
-                !Object.values(users ?? {}).some((u) => key(u.id) === account)
-            ) {
-                console.log(JSON.stringify({ src: "tgx", unmatched: file }));
-                continue;
-            }
+            if (!file.endsWith(".json")) continue;
+            if (!/^id-[a-f0-9]{64}\.json$/.test(file))
+                throw new Error("bad ownership ledger filename");
+            const account = file.slice(3, 67);
             const data = JSON.parse(
                 await readFile(join(this.dir, file), "utf8"),
             );
@@ -73,7 +59,7 @@ export class Owners {
         const run = async () => {
             const ids = new Set(this.accounts.get(account) ?? []);
             change(ids, account);
-            const path = join(this.dir, `${account}.json`);
+            const path = join(this.dir, `id-${account}.json`);
             const temp = `${path}.${randomBytes(8).toString("hex")}.tmp`;
             try {
                 await writeFile(temp, JSON.stringify({ v: 1, ids: [...ids] }), {
@@ -111,7 +97,7 @@ export class Owners {
         const account = key(user);
         const run = async () => {
             const ids = this.accounts.get(account) ?? new Set();
-            await rm(join(this.dir, `${account}.json`), { force: true });
+            await rm(join(this.dir, `id-${account}.json`), { force: true });
             for (const id of ids) this.reverse.delete(id);
             this.accounts.delete(account);
             console.log(JSON.stringify({ src: "tgx", dropped: ids.size }));

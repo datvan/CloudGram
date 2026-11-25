@@ -59,7 +59,11 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
                 message = null;
             },
         };
-        const tgx = new TelegramProxy({ owners, telegram });
+        const tgx = new TelegramProxy({
+            owners,
+            telegram,
+            limits: { callTimeout: 10 },
+        });
         const api = new CloudGramApi({ db, pepper: "x".repeat(40), tgx });
         for (const name of ["alice", "bob"])
             api.leases.set(name, {
@@ -200,6 +204,23 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
         ).json();
         assert.equal(finish.message.id, 7);
         assert.deepEqual(
+            await (
+                await call("POST", `/upload/${start.uploadId}/finish`, {})
+            ).json(),
+            finish,
+        );
+        assert.equal(
+            (await call("POST", `/upload/${start.uploadId}/finish`, {}, "bob"))
+                .status,
+            404,
+        );
+        const getMessages = telegram.getMessages;
+        telegram.getMessages = () => new Promise(() => {});
+        const timeout = await call("POST", "/messages", { ids: [7] });
+        assert.equal(timeout.status, 503);
+        assert.deepEqual(await timeout.json(), { error: "telegram_busy" });
+        telegram.getMessages = getMessages;
+        assert.deepEqual(
             (
                 await (
                     await call("POST", "/messages", { ids: [7] }, "bob")
@@ -279,7 +300,7 @@ test("reset preserves ownership and deleting then recreating username drops it",
     const dir = await mkdtemp(join(tmpdir(), "tgx-account-"));
     try {
         const db = await new Db(dir).open();
-        const owners = await new Owners(dir).open(db.data.users);
+        const owners = await new Owners(dir).open();
         const api = new CloudGramApi({ db, owners, pepper: "x".repeat(40) });
         await api.issueSetup("alice");
         const oldId = db.data.users.alice.id;
@@ -291,10 +312,7 @@ test("reset preserves ownership and deleting then recreating username drops it",
         const newId = db.data.users.alice.id;
         assert.notEqual(newId, oldId);
         assert.equal(owners.owns(newId, 7), false);
-        assert.equal(
-            (await new Owners(dir).open(db.data.users)).owns(newId, 7),
-            false,
-        );
+        assert.equal((await new Owners(dir).open()).owns(newId, 7), false);
     } finally {
         await rm(dir, { recursive: true, force: true });
     }

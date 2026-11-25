@@ -15,7 +15,7 @@ test("ledger persists, reloads and enforces one owner", async () => {
         const path = join(
             dir,
             "owners",
-            `${createHash("sha256").update("alice").digest("hex")}.json`,
+            `id-${createHash("sha256").update("alice").digest("hex")}.json`,
         );
         assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
             v: 1,
@@ -34,28 +34,30 @@ test("ledger persists, reloads and enforces one owner", async () => {
     }
 });
 
-test("migrates current usernames and leaves unmatched ledgers untouched", async () => {
+test("rejects legacy and unexpected JSON ledgers without moving them", async () => {
     const dir = await mkdtemp(join(tmpdir(), "owners-migrate-"));
     const hash = (value) => createHash("sha256").update(value).digest("hex");
     try {
         await mkdir(join(dir, "owners"));
-        for (const name of ["alice", "gone"])
+        for (const name of ["alice", "unexpected"])
             await writeFile(
-                join(dir, "owners", `${hash(name)}.json`),
-                JSON.stringify({ v: 1, ids: [name === "alice" ? 1 : 2] }),
+                join(
+                    dir,
+                    "owners",
+                    name === "alice" ? `${hash(name)}.json` : "unexpected.json",
+                ),
+                JSON.stringify({ v: 1, ids: [1] }),
             );
-        const owners = await new Owners(dir).open({
-            alice: { username: "alice", id: "old-id" },
-        });
-        assert.equal(owners.owns("old-id", 1), true);
-        assert.equal(owners.owns("new-id", 1), false);
-        assert.ok(await readFile(join(dir, "owners", `${hash("gone")}.json`)));
-        await owners.drop("old-id");
-        assert.equal(owners.owns("old-id", 1), false);
-        const reloaded = await new Owners(dir).open({
-            alice: { username: "alice", id: "new-id" },
-        });
-        assert.equal(reloaded.owns("new-id", 1), false);
+        await assert.rejects(
+            new Owners(dir).open(),
+            /bad ownership ledger filename/,
+        );
+        assert.ok(await readFile(join(dir, "owners", `${hash("alice")}.json`)));
+        await rm(join(dir, "owners", `${hash("alice")}.json`));
+        await assert.rejects(
+            new Owners(dir).open(),
+            /bad ownership ledger filename/,
+        );
     } finally {
         await rm(dir, { recursive: true, force: true });
     }
