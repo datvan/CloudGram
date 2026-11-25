@@ -23,8 +23,8 @@ async function request(method, path, body, binary = false, signal) {
                 body === undefined
                     ? undefined
                     : binary
-                    ? body
-                    : JSON.stringify(body),
+                      ? body
+                      : JSON.stringify(body),
         });
     } catch (error) {
         if (signal?.aborted) throw signal.reason;
@@ -58,7 +58,8 @@ export const putPart = (id, index, bytes, signal) =>
         signal,
     );
 export const finishUpload = async (id, metadata) => {
-    for (let attempt = 0; ; attempt += 1) {
+    const deadline = Date.now() + 180000;
+    for (let delay = 500; ; delay = Math.min(delay * 2, 5000)) {
         try {
             return await request(
                 "POST",
@@ -67,16 +68,19 @@ export const finishUpload = async (id, metadata) => {
             );
         } catch (error) {
             if (
-                attempt >= 3 ||
                 !(error instanceof ApiError) ||
                 (error.status !== 0 &&
+                    !(error.status === 409 && error.code === "busy") &&
                     (error.status < 500 || error.status >= 600)) ||
                 (error.status === 503 && error.code === "telegram_busy")
             )
                 throw error;
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) throw error;
             await new Promise((resolve) =>
-                setTimeout(resolve, 500 * 2 ** attempt),
+                setTimeout(resolve, Math.min(delay, remaining)),
             );
+            if (Date.now() >= deadline) throw error;
         }
     }
 };

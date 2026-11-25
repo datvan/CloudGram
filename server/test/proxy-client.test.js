@@ -19,6 +19,7 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
     let finishStarted;
     let releaseFinish;
     const waits = [];
+    let now = 0;
     let stored;
     const fetch = async (url, options) => {
         calls.push(url);
@@ -152,8 +153,14 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         browserId: () => "browser",
         AbortController,
         AbortSignal,
+        Date: class extends Date {
+            static now() {
+                return now;
+            }
+        },
         setTimeout: (fn, ms) => {
             waits.push(ms);
+            if (ms >= 500) now += ms;
             return setTimeout(fn, ms >= 500 ? 0 : ms);
         },
         clearTimeout,
@@ -237,10 +244,25 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
     finishCalls = 0;
     assert.equal((await client.sendFile("me", { file: token })).id, 42);
     assert.equal(finishCalls, 3);
-    finishFailures = Array(4).fill("network");
+    finishFailures = [
+        { status: 504, code: "bad_response" },
+        { status: 409, code: "busy" },
+    ];
     finishCalls = 0;
+    assert.equal((await client.sendFile("me", { file: token })).id, 42);
+    assert.equal(finishCalls, 3);
+    finishFailures = [{ status: 409, code: "chunk_missing" }];
+    finishCalls = 0;
+    await assert.rejects(client.sendFile("me", { file: token }), {
+        code: "chunk_missing",
+    });
+    assert.equal(finishCalls, 1);
+    finishFailures = Array(100).fill("network");
+    finishCalls = 0;
+    const startedAt = now;
     await assert.rejects(client.sendFile("me", { file: token }), { status: 0 });
-    assert.equal(finishCalls, 4);
+    assert.equal(now - startedAt, 180000);
+    assert.ok(finishCalls > 4);
     finishFailures = [{ status: 503, code: "telegram_busy" }];
     finishCalls = 0;
     await assert.rejects(client.sendFile("me", { file: token }), {
