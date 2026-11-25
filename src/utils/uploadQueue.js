@@ -24,6 +24,7 @@ import {
     uploadScope,
 } from "../services/uploadLog";
 import { UPLOAD_OWNER } from "../config/security";
+import { FILE_ENCRYPTION } from "../config/features";
 import { Store } from "../redux/store";
 import {
     batchProgress,
@@ -128,21 +129,28 @@ let announce = [];
 // A cut file (resume.pieces, see uploadFile.js) saves the slices whose message
 // is out, not the slice in flight, which a reopened tab sends again.
 const saveResume = (resume) => {
-    if (resume?.pieces?.length) return { pieces: resume.pieces };
-    return resume?.fileId && !resume.pieces
-        ? { fileId: resume.fileId.toString(), done: [...resume.done] }
-        : undefined;
+    if (!resume) return undefined;
+    return {
+        encrypted: resume.encrypted,
+        enc: resume.enc,
+        name: resume.name,
+        thumbData: resume.thumbData,
+        pieces: resume.pieces,
+        fileId: resume.fileId?.toString(),
+        done: resume.done ? [...resume.done] : undefined,
+    };
 };
 const loadResume = (saved) => {
     // `verify`: uploadFile checks those messages are still in Saved Messages
-    if (saved?.pieces?.length)
-        return { pieces: saved.pieces.map((p) => ({ ...p })), verify: true };
-    return saved?.fileId
-        ? {
-              fileId: helpers.returnBigInt(saved.fileId),
-              done: new Set(saved.done),
-          }
-        : {};
+    if (!saved) return { encrypted: FILE_ENCRYPTION };
+    return {
+        ...saved,
+        encrypted: saved.encrypted ?? false,
+        pieces: saved.pieces?.map((p) => ({ ...p })),
+        verify: Boolean(saved.pieces?.length),
+        fileId: saved.fileId ? helpers.returnBigInt(saved.fileId) : undefined,
+        done: saved.done ? new Set(saved.done) : undefined,
+    };
 };
 
 /** Is this record's upload queued or running here (not waiting for Retry)? */
@@ -460,6 +468,11 @@ async function run(job, release) {
             ...(UPLOAD_OWNER ? { client, assertCurrent } : {}),
             asMedia,
             resume: job.resume,
+            onEncryption: async () => {
+                assertCurrent();
+                patchEntry(id, { resume: saveResume(job.resume) });
+                await settleWrites(true);
+            },
             onRetry: (error) =>
                 trace(() => {
                     job.diagRetries = (job.diagRetries ?? 0) + 1;
@@ -472,9 +485,11 @@ async function run(job, release) {
                 }),
             // a slice of a cut file is out: on disk before the next one starts,
             // so a reopened tab goes on from there
-            onPiece: () => {
-                if (owns(job))
+            onPiece: async () => {
+                if (owns(job)) {
                     patchEntry(id, { resume: saveResume(job.resume) });
+                    await settleWrites(job.resume.encrypted);
+                }
             },
             // on disk before the message goes, so a reopened tab knows to
             // look for it in Saved Messages before sending another copy
@@ -503,7 +518,13 @@ async function run(job, release) {
         console.log(error);
         // slices already sent stay sent
         if (partsLost(error))
-            job.resume = job.resume.pieces ? { pieces: job.resume.pieces } : {};
+            job.resume = {
+                encrypted: job.resume.encrypted,
+                pieces: job.resume.pieces,
+                enc: job.resume.enc,
+                name: job.resume.name,
+                thumbData: job.resume.thumbData,
+            };
         // Telegram refused it, so nothing went out
         if (!error?.maybeSent)
             patchEntry(id, {
@@ -571,7 +592,7 @@ async function run(job, release) {
         await settle(id, result, job.replaces, job);
         if (!owns(job)) return forget(job);
         // while the file is still at hand, for the player's seek bar
-        if (!job.removeOriginal) fromUpload(id, file);
+        if (!job.removeOriginal && !job.resume.encrypted) fromUpload(id, file);
     } catch (error) {
         trace(() =>
             emit("file.fail", {
@@ -849,12 +870,15 @@ export async function retryRemoveOriginals(ids) {
  * `kind` is how that tab sent it (photo, video or file), `replaces` the file
  * it was to take the place of.
  */
-export function adoptMessage(id, message, kind, replaces) {
+export function adoptMessage(id, message, kind, replaces, enc, thumbData) {
     return settle(
         id,
         {
             message,
-            changes: sentChanges(message, kind, getRecord(id)?.size),
+            changes: {
+                ...sentChanges(message, kind, getRecord(id)?.size),
+                ...(enc ? { enc, thumbData } : {}),
+            },
         },
         replaces,
     );
