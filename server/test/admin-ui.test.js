@@ -6,14 +6,14 @@ import vm from "node:vm";
 const source = (path) =>
     readFile(new URL(`../../src/${path}`, import.meta.url), "utf8");
 
-test("account state tracks admin and blocks storage entry", async () => {
+test("account state tracks admin and uses proxy storage entry", async () => {
     const account = await source("services/account.js");
     assert.match(account, /admin: account\.admin/);
     assert.match(account, /admin: current\.admin/);
     assert.match(account, /phase: "signedOut"[\s\S]*?admin: false/);
     assert.match(
         account,
-        /async function enter\(key\) \{[\s\S]*?if \(!account\.admin\) \{[\s\S]*?phase: "link"[\s\S]*?return;[\s\S]*?openDrive/,
+        /async function enter\(key\) \{[\s\S]*?openDrive[\s\S]*?if \(!account\.admin\) \{[\s\S]*?setClient\(createProxyClient\(\)\)[\s\S]*?phase: "ready"/,
     );
 });
 

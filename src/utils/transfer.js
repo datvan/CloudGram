@@ -209,6 +209,7 @@ export const uploadRate = () => sentMeter.rate();
  * sends only what is missing. Empty it to start over.
  */
 export async function uploadParts(client, file, options = {}) {
+    if (client.proxyUpload) return client.proxyUpload(file, options);
     const { partSize, inflight } = { ...UPLOAD_DEFAULTS, ...options };
     const { onProgress, stats = newStats(), resume = {}, onRetry } = options;
     const size = file.size;

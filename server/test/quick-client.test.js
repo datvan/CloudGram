@@ -218,6 +218,7 @@ test("account rolls back only the newly sent key when enable fails", async () =>
         kdf: {},
         wrappedDek: {},
         via: "password",
+        admin: true,
     };
     const api = {
         me: async () => current,

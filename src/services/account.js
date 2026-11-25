@@ -1,4 +1,5 @@
 import { diag, swallow } from "./diag";
+import { createProxyClient } from "./proxyClient";
 /**
  * The sign-in flow, from a local CloudGram account down to a live Telegram
  * connection:
@@ -479,10 +480,6 @@ export async function logout() {
 
 async function enter(key) {
     dek = key;
-    if (!account.admin) {
-        set({ phase: "link", username: account.username });
-        return;
-    }
     set({ phase: "connecting", username: account.username });
     try {
         await openDrive(dek);
@@ -590,6 +587,11 @@ async function yieldTelegram(release, notice) {
 
 async function connectTelegram() {
     set({ phase: "connecting", notice: null });
+    if (!account.admin) {
+        setClient(createProxyClient());
+        set({ phase: "ready", me: null });
+        return;
+    }
     try {
         const { session } = await api.getSession();
         if (!session) {
@@ -651,7 +653,7 @@ export async function getTelegramMode(client) {
     if (!session) return null;
     const saved = await decryptJson(dek, session, SESSION_LABEL);
     return saved.session && (!client || sessionString(client) === saved.session)
-        ? (saved.telegramMode ?? "private")
+        ? saved.telegramMode ?? "private"
         : null;
 }
 

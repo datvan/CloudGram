@@ -35,7 +35,7 @@ async function vaultFor(key) {
             api: {
                 prelogin: async () => ({ kdf: {} }),
                 login: async () => ({}),
-                me: async () => ({}),
+                me: async () => ({ admin: true }),
                 lease: async () => ({ status: "busy" }),
             },
             Store: { dispatch() {} },
