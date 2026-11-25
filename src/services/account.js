@@ -122,7 +122,7 @@ export async function boot() {
     set({ phase: "loading" });
     try {
         account = await api.me();
-        set({ quick: account.quick, via: account.via });
+        set({ quick: account.quick, via: account.via, admin: account.admin });
     } catch (error) {
         if (error instanceof ApiError && error.status === 401) {
             set({ phase: "signedOut" });
@@ -154,7 +154,7 @@ async function loginSuccess(key, remember) {
     else await clearKey();
     const current = await api.me();
     account = current;
-    set({ quick: current.quick, via: current.via });
+    set({ quick: current.quick, via: current.via, admin: current.admin });
     await enter(key);
 }
 
@@ -471,6 +471,7 @@ export async function logout() {
         notice: null,
         quick: false,
         via: null,
+        admin: false,
     });
 }
 
@@ -478,6 +479,10 @@ export async function logout() {
 
 async function enter(key) {
     dek = key;
+    if (!account.admin) {
+        set({ phase: "link", username: account.username });
+        return;
+    }
     set({ phase: "connecting", username: account.username });
     try {
         await openDrive(dek);
@@ -646,7 +651,7 @@ export async function getTelegramMode(client) {
     if (!session) return null;
     const saved = await decryptJson(dek, session, SESSION_LABEL);
     return saved.session && (!client || sessionString(client) === saved.session)
-        ? saved.telegramMode ?? "private"
+        ? (saved.telegramMode ?? "private")
         : null;
 }
 

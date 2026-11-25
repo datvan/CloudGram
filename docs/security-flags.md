@@ -19,7 +19,9 @@ security exposure.
 | `CLOUDGRAM_SHARED_TELEGRAM` | API environment | `0` disables shared sessions and approval (404); restart API |
 | `VITE_FEATURE_SHARED_TELEGRAM` | Frontend build environment | `0` uses manual linking; rebuild and reload |
 
-Shared Telegram grants each CloudGram account a full session for the same Telegram account, including all its messages. The API host can decrypt the root session. Unlinking does not revoke issued sessions; revoke them in Telegram settings.
+`CLOUDGRAM_ADMINS` lists admin usernames, comma-separated and case-insensitive. Unset or empty means no admins. Only admins can obtain, store or fetch Telegram sessions or enable and use quick login. Restart the API after changes.
+
+Shared Telegram grants each authorized admin a full session for the same Telegram account, including all its messages. The API host can decrypt the root session. Unlinking does not revoke issued sessions; revoke them in Telegram settings.
 
 The API host also stores the 2FA password encrypted with `CLOUDGRAM_TG_ROOT_KEY`. A VPS compromise could take over the Telegram account. Roll back with `CLOUDGRAM_SHARED_TELEGRAM=0` or `cloudgram-admin telegram-password-clear`.
 

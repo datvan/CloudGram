@@ -272,6 +272,7 @@ export default function DriveApp({ mode, onToggleMode }) {
         };
     }, [migrationScan]);
     const via = useSelector((state) => state.auth.via);
+    const admin = useSelector((state) => state.auth.admin);
     const [busy, setBusy] = useState(false);
     const [thumbnailJobs, setThumbnailJobs] = useState(new Map());
     const [notice, setNotice] = useState(null);
@@ -375,7 +376,9 @@ export default function DriveApp({ mode, onToggleMode }) {
 
         const dir = sort.dir === "asc" ? 1 : -1;
         const dateOf = (record) =>
-            inTrash ? record.trashedAt : record.modifiedAt ?? record.updatedAt;
+            inTrash
+                ? record.trashedAt
+                : (record.modifiedAt ?? record.updatedAt);
         return [...list].sort((a, b) => {
             // folders first, whatever the sort
             if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
@@ -972,9 +975,9 @@ export default function DriveApp({ mode, onToggleMode }) {
                     "Không thể đưa một số tệp vào hàng tải lên."
                         ? "enqueueFailed"
                         : counts.reason ===
-                          "Tài khoản đã thay đổi; không thể bắt đầu tải lên."
-                        ? "scope"
-                        : "cancel";
+                            "Tài khoản đã thay đổi; không thể bắt đầu tải lên."
+                          ? "scope"
+                          : "cancel";
             });
             run.reason ??= counts.reason;
         }
@@ -1015,16 +1018,16 @@ export default function DriveApp({ mode, onToggleMode }) {
                     ? "warning"
                     : "none"
                 : target &&
-                  !resumed &&
-                  !skipped &&
-                  !replaced &&
-                  !renamed &&
-                  !linked &&
-                  !run.permissionDenied &&
-                  !run.outsideFolder &&
-                  !run.reason
-                ? "none"
-                : "info";
+                    !resumed &&
+                    !skipped &&
+                    !replaced &&
+                    !renamed &&
+                    !linked &&
+                    !run.permissionDenied &&
+                    !run.outsideFolder &&
+                    !run.reason
+                  ? "none"
+                  : "info";
         recordFinish(run, notice, "none");
         endRun(run);
         // what the banner offered to resume may have just been picked up
@@ -1354,6 +1357,7 @@ export default function DriveApp({ mode, onToggleMode }) {
     // ----- account menu ---------------------------------------------------------------------------
 
     function onAccountAction(action) {
+        if (!admin && ["quick", "unlink", "backup"].includes(action)) return;
         if (
             via === "quick" &&
             ["quick", "unlink", "password", "recovery"].includes(action)
@@ -1425,7 +1429,7 @@ export default function DriveApp({ mode, onToggleMode }) {
             ? undefined
             : (item) =>
                   item.parent
-                      ? byId.get(item.parent)?.name ?? "—"
+                      ? (byId.get(item.parent)?.name ?? "—")
                       : "Drive của tôi";
 
     const openDropbox = () =>

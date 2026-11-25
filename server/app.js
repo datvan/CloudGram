@@ -192,9 +192,13 @@ export class CloudGramApi {
         shareQuotaGuard = true,
         play = {},
         sharedTelegram = {},
+        admins = (process.env.CLOUDGRAM_ADMINS ?? "").split(","),
     }) {
         if (!pepper || pepper.length < 32)
             throw new Error("CLOUDGRAM_PEPPER must be set (32+ chars)");
+        this.admins = new Set(
+            admins.filter((name) => String(name).trim()).map(normalizeUsername),
+        );
         this.db = db;
         this.pepper = pepper;
         this.now = now;
@@ -226,6 +230,14 @@ export class CloudGramApi {
             fetch: dropboxFetch,
             authenticate: (req, res) => this.authenticate(req, res),
         });
+    }
+
+    #isAdmin(user) {
+        return Boolean(user && this.admins.has(user.username));
+    }
+
+    #requireAdmin(user) {
+        if (!this.#isAdmin(user)) throw new HttpError(403, "admin_only");
     }
 
     // ----- accounts (CLI side) -------------------------------------------
@@ -437,6 +449,7 @@ export class CloudGramApi {
             user.quick !== quick
         )
             throw new HttpError(401, "bad_credentials");
+        this.#requireAdmin(user);
         this.loginByUser.clear(name);
         await this.#startSession(
             res,
@@ -448,15 +461,20 @@ export class CloudGramApi {
         return this.#accountView(user, quick.wrappedDek);
     }
 
-    async #passwordSession(req, res) {
+    async #passwordSession(req, res, admin = false) {
         const auth = await this.authenticate(req, res);
+        if (admin) this.#requireAdmin(auth.user);
         if (auth.session.via === "quick")
             throw new HttpError(403, "password_required");
         return auth;
     }
 
-    async #checkPassword(req, res) {
-        const { user, sessionKey } = await this.#passwordSession(req, res);
+    async #checkPassword(req, res, admin = false) {
+        const { user, sessionKey } = await this.#passwordSession(
+            req,
+            res,
+            admin,
+        );
         this.loginByUser.take(user.username);
         const verifier = user.verifier;
         if (req.body.loginKey == null)
@@ -475,7 +493,7 @@ export class CloudGramApi {
     }
 
     async enableQuick(req, res) {
-        const user = await this.#checkPassword(req, res);
+        const user = await this.#checkPassword(req, res, true);
         const proof = requireProof(req.body.proof);
         const wrappedDek = requireBlob(
             req.body.wrappedDek,
@@ -559,6 +577,7 @@ export class CloudGramApi {
     #accountView(user, wrappedDek = user.wrappedDek) {
         return {
             username: user.username,
+            admin: this.#isAdmin(user),
             kdf: user.kdf,
             wrappedDek,
             hasTelegram: Boolean(user.session),
@@ -656,6 +675,7 @@ export class CloudGramApi {
         if (this.sharedTelegram.enabled === false)
             throw new HttpError(404, "not_found");
         const { user } = await this.authenticate(req, res);
+        this.#requireAdmin(user);
         this.telegramApprovals.take(user.username, this.now());
         try {
             return await this.sharedTelegram.issue();
@@ -676,6 +696,7 @@ export class CloudGramApi {
         if (this.sharedTelegram.enabled === false)
             throw new HttpError(404, "not_found");
         const { user } = await this.authenticate(req, res);
+        this.#requireAdmin(user);
         this.telegramApprovals.take(user.username, this.now());
         const token = req.body.token;
         if (
@@ -765,11 +786,12 @@ export class CloudGramApi {
 
     async getSession(req, res) {
         const { user } = await this.authenticate(req, res);
+        this.#requireAdmin(user);
         return { session: user.session ?? null };
     }
 
     async putSession(req, res) {
-        const { user } = await this.#passwordSession(req, res);
+        const { user } = await this.#passwordSession(req, res, true);
         this.#requireLease(user.username, req.body.browserId);
         user.session = {
             ...requireBlob(

@@ -16,7 +16,11 @@ function fixture() {
         save: async () => {},
         deleteTree: async () => {},
     };
-    const api = new CloudGramApi({ db, pepper: "x".repeat(40) });
+    const api = new CloudGramApi({
+        db,
+        pepper: "x".repeat(40),
+        admins: ["alice", "legacy"],
+    });
     function client(ip = "one") {
         let cookie;
         return async (method, body = {}) => {

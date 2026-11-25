@@ -33,7 +33,9 @@ import { newClient } from "../../services/telegram";
  * this is sealed into the vault, so later sign-ins on any device skip the OTP.
  */
 export default function TelegramLink() {
-    const { hasLegacy, notice, username } = useSelector((state) => state.auth);
+    const { admin, hasLegacy, notice, username } = useSelector(
+        (state) => state.auth,
+    );
     const clientRef = useRef(null);
 
     const [step, setStep] = useState(SHARED_TELEGRAM ? "auto" : "phone");
@@ -45,6 +47,7 @@ export default function TelegramLink() {
     const [error, setError] = useState(null);
 
     useEffect(() => {
+        if (!admin) return;
         const controller = new AbortController();
         let cancelled = false;
         (async () => {
@@ -101,7 +104,7 @@ export default function TelegramLink() {
             controller.abort();
             clientRef.current?.destroy().catch(() => {});
         };
-    }, []);
+    }, [admin]);
 
     async function finish() {
         const client = clientRef.current;
@@ -155,6 +158,19 @@ export default function TelegramLink() {
         code: "Xác minh",
         password: "Đăng nhập",
     };
+
+    if (!admin)
+        return (
+            <AuthShell title="CloudGram">
+                <Stack spacing={2}>
+                    <Typography>
+                        Tài khoản này chưa được cấp quyền lưu trữ. Liên hệ quản
+                        trị viên.
+                    </Typography>
+                    <Button onClick={logout}>Đăng xuất</Button>
+                </Stack>
+            </AuthShell>
+        );
 
     return (
         <AuthShell

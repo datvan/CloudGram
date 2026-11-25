@@ -14,6 +14,7 @@ export default function reducer(
         setupToken: null,
         quick: false,
         via: null,
+        admin: false,
     },
     action,
 ) {

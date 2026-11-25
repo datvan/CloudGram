@@ -40,6 +40,7 @@ test("encrypted root and authenticated approval", async () => {
         const api = new CloudGramApi({
             db,
             pepper: "x".repeat(40),
+            admins: ["alice"],
             sharedTelegram: shared,
         });
         server = createApiServer(api, {
@@ -109,6 +110,7 @@ test("session issuance authenticates, limits, maps errors and never logs session
         const api = new CloudGramApi({
             db,
             pepper: "x".repeat(40),
+            admins: ["alice"],
             sharedTelegram: shared,
             now: () => now,
         });

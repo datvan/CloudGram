@@ -75,10 +75,10 @@ export default function TopBar({
 }) {
     const navigate = useNavigate();
     const location = useLocation();
-    const { username, me } = useSelector((state) => state.auth);
+    const { username, me, admin } = useSelector((state) => state.auth);
     const params = new URLSearchParams(location.search);
     const [query, setQuery] = useState(
-        location.pathname === "/search" ? params.get("q") ?? "" : "",
+        location.pathname === "/search" ? (params.get("q") ?? "") : "",
     );
     const [anchor, setAnchor] = useState(null);
 
@@ -243,7 +243,7 @@ export default function TopBar({
                         {(username ?? "?").slice(0, 1).toUpperCase()}
                     </Avatar>
                     <Typography variant="h6">{username}</Typography>
-                    {me && (
+                    {admin && me && (
                         <Stack
                             direction="row"
                             spacing={0.5}
@@ -261,12 +261,14 @@ export default function TopBar({
                     )}
                 </Stack>
                 <Divider />
-                <MenuItem onClick={() => pick("quick")}>
-                    <ListItemIcon>
-                        <TelegramIcon fontSize="small" />
-                    </ListItemIcon>
-                    Đăng nhập nhanh bằng Telegram
-                </MenuItem>
+                {admin && (
+                    <MenuItem onClick={() => pick("quick")}>
+                        <ListItemIcon>
+                            <TelegramIcon fontSize="small" />
+                        </ListItemIcon>
+                        Đăng nhập nhanh bằng Telegram
+                    </MenuItem>
+                )}
                 <MenuItem onClick={() => pick("password")}>
                     <ListItemIcon>
                         <KeyIcon fontSize="small" />
@@ -279,24 +281,28 @@ export default function TopBar({
                     </ListItemIcon>
                     Mã khôi phục
                 </MenuItem>
-                <MenuItem onClick={() => pick("backup")}>
-                    <ListItemIcon>
-                        <BackupIcon fontSize="small" />
-                    </ListItemIcon>
-                    Sao lưu cây thư mục
-                </MenuItem>
+                {admin && (
+                    <MenuItem onClick={() => pick("backup")}>
+                        <ListItemIcon>
+                            <BackupIcon fontSize="small" />
+                        </ListItemIcon>
+                        Sao lưu cây thư mục
+                    </MenuItem>
+                )}
                 <MenuItem onClick={() => pick("logoutOthers")}>
                     <ListItemIcon>
                         <DevicesOtherIcon fontSize="small" />
                     </ListItemIcon>
                     Đăng xuất khỏi các thiết bị khác
                 </MenuItem>
-                <MenuItem onClick={() => pick("unlink")}>
-                    <ListItemIcon>
-                        <LinkOffIcon fontSize="small" />
-                    </ListItemIcon>
-                    Huỷ liên kết Telegram
-                </MenuItem>
+                {admin && (
+                    <MenuItem onClick={() => pick("unlink")}>
+                        <ListItemIcon>
+                            <LinkOffIcon fontSize="small" />
+                        </ListItemIcon>
+                        Huỷ liên kết Telegram
+                    </MenuItem>
+                )}
                 <MenuItem
                     onClick={onToggleMode}
                     sx={{ display: { sm: "none" } }}

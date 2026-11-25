@@ -183,6 +183,8 @@ export function releaseOnUnload(browserId) {
 }
 
 const MESSAGES = {
+    admin_only:
+        "Tài khoản này chưa được cấp quyền lưu trữ. Liên hệ quản trị viên.",
     bad_credentials: "Sai tên đăng nhập hoặc mật khẩu.",
     bad_recovery: "Sai tên đăng nhập hoặc mã khôi phục.",
     rate_limited: "Thử quá nhiều lần. Đợi một lúc rồi thử lại.",

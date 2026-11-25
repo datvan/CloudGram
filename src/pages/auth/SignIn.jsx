@@ -1,5 +1,6 @@
 import { useState } from "react";
 import PropTypes from "prop-types";
+import { useSelector } from "react-redux";
 
 import {
     Alert,
@@ -21,6 +22,7 @@ import { login, unlock } from "../../services/account";
  * valid and only the password is needed to open the key on this device.
  */
 export default function SignIn({ locked, username: knownUser, onSwitchUser }) {
+    const admin = useSelector((state) => state.auth.admin);
     const [username, setUsername] = useState(knownUser ?? "");
     const [password, setPassword] = useState("");
     const [remember, setRemember] = useState(true);
@@ -42,7 +44,7 @@ export default function SignIn({ locked, username: knownUser, onSwitchUser }) {
         }
     }
 
-    if (quick) return <QuickLogin onBack={() => setQuick(false)} />;
+    if (admin && quick) return <QuickLogin onBack={() => setQuick(false)} />;
 
     if (forgot)
         return (
@@ -63,7 +65,7 @@ export default function SignIn({ locked, username: knownUser, onSwitchUser }) {
         >
             <form onSubmit={submit}>
                 <Stack spacing={2}>
-                    {!locked && (
+                    {admin && !locked && (
                         <TextField
                             label="Tên đăng nhập"
                             autoComplete="username"

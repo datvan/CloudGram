@@ -19,7 +19,7 @@ const fast = { iterations: 600_000 };
 before(async () => {
     dir = await mkdtemp(join(tmpdir(), "cg-api-"));
     const db = await new Db(dir).open();
-    api = new CloudGramApi({ db, pepper: "x".repeat(40) });
+    api = new CloudGramApi({ db, pepper: "x".repeat(40), admins: ["alice"] });
     server = createApiServer(api, {
         origin: "https://cg.test",
         secureCookies: false,

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import PropTypes from "prop-types";
+import { useSelector } from "react-redux";
 
 import {
     Alert,
@@ -504,6 +505,7 @@ RecoveryDialog.propTypes = {
  * files that are in Saved Messages but nowhere in the tree.
  */
 export function BackupDialog({ open, onClose }) {
+    const admin = useSelector((state) => state.auth.admin);
     const [backups, setBackups] = useState(null);
     const [busy, setBusy] = useState(null);
     const [message, setMessage] = useState(null);
@@ -513,12 +515,12 @@ export function BackupDialog({ open, onClose }) {
         listBackups().then(setBackups, (e) => setError(describeError(e)));
 
     useEffect(() => {
-        if (!open) return;
+        if (!admin || !open) return;
         setBackups(null);
         setMessage(null);
         setError(null);
         load();
-    }, [open]);
+    }, [admin, open]);
 
     async function act(what, job) {
         setBusy(what);
@@ -531,6 +533,8 @@ export function BackupDialog({ open, onClose }) {
         }
         setBusy(null);
     }
+
+    if (!admin) return null;
 
     return (
         <Dialog
@@ -676,8 +680,8 @@ export function UploadModeDialog({
                 {total == null
                     ? "Tải lên"
                     : total === 1
-                    ? "Tải lên 1 tệp"
-                    : `Tải lên ${total} tệp`}
+                      ? "Tải lên 1 tệp"
+                      : `Tải lên ${total} tệp`}
             </DialogTitle>
             <DialogContent>
                 {hasMedia && (

@@ -28,6 +28,7 @@ export default function QuickSettings({
     onMigrate,
 }) {
     const quick = useSelector((state) => state.auth.quick);
+    const admin = useSelector((state) => state.auth.admin);
     const [confirm, setConfirm] = useState(false);
     const [password, setPassword] = useState("");
     const [busy, setBusy] = useState(false);
@@ -36,7 +37,7 @@ export default function QuickSettings({
     const [privateTelegram, setPrivateTelegram] = useState(false);
     useEffect(() => {
         let active = true;
-        if (open && SHARED_TELEGRAM) {
+        if (admin && open && SHARED_TELEGRAM) {
             getTelegramMode()
                 .then((mode) => {
                     if (active) setPrivateTelegram(mode === "private");
@@ -48,7 +49,7 @@ export default function QuickSettings({
         return () => {
             active = false;
         };
-    }, [open]);
+    }, [admin, open]);
     useEffect(() => {
         if (open) {
             setConfirm(false);
@@ -133,7 +134,7 @@ export default function QuickSettings({
                     )}
                     {error && <Alert severity="error">{error}</Alert>}
                     {notice && <Alert severity="warning">{notice}</Alert>}
-                    {privateTelegram && SHARED_TELEGRAM && (
+                    {admin && privateTelegram && SHARED_TELEGRAM && (
                         <Button onClick={onMigrate} disabled={busy}>
                             Chuyển sang Telegram chung
                         </Button>
