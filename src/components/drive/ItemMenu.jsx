@@ -26,6 +26,7 @@ import LinkIcon from "@mui/icons-material/Link";
 import LaunchIcon from "@mui/icons-material/Launch";
 
 import { EXTERNAL_PLAYER, FILE_ENCRYPTION } from "../../config/features";
+import { isEncrypted } from "../../services/fileCrypto";
 import { kindOf, previewKind } from "./fileTypes";
 
 function Item({ icon, label, hint, onClick, disabled }) {
@@ -142,7 +143,7 @@ export default function ItemMenu({
                       ),
                       FILE_ENCRYPTION &&
                           single?.type === "file" &&
-                          !single.enc && (
+                          !isEncrypted(single) && (
                               <Item
                                   key="reencrypt"
                                   icon={icon(ReplayIcon)}

@@ -1,4 +1,5 @@
 import { reencryptProgress } from "../redux/actions/progressAction.js";
+import { isEncrypted } from "./fileCrypto.js";
 
 export function createReencryptQueue(deps) {
     const pending = [];
@@ -15,7 +16,7 @@ export function createReencryptQueue(deps) {
             try {
                 const record = await deps.getRecord(item.id);
                 if (item.controller.signal.aborted) continue;
-                if (!record || record.deleted || record.enc) {
+                if (!record || record.deleted || isEncrypted(record)) {
                     deps.dispatch({ type: "REENCRYPT_SKIPPED", id: item.id });
                     continue;
                 }

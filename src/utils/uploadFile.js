@@ -174,6 +174,33 @@ const randomName = () =>
         b.toString(16).padStart(2, "0"),
     ).join("")}.bin`;
 
+async function fingerprint(file) {
+    const samples = [
+        file.slice(0, 1024 * 1024),
+        file.slice(Math.max(0, file.size - 1024 * 1024)),
+    ];
+    for (let i = 1; i < 8; i += 1) {
+        const start = Math.floor((file.size * i) / 8);
+        samples.push(file.slice(start, start + CHUNK));
+    }
+    const buffers = await Promise.all(
+        samples.map((sample) => sample.arrayBuffer()),
+    );
+    const bytes = new Uint8Array(
+        8 + buffers.reduce((sum, buffer) => sum + buffer.byteLength, 0),
+    );
+    new DataView(bytes.buffer).setBigUint64(0, BigInt(file.size));
+    let offset = 8;
+    for (const buffer of buffers) {
+        bytes.set(new Uint8Array(buffer), offset);
+        offset += buffer.byteLength;
+    }
+    const hash = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(hash), (b) =>
+        b.toString(16).padStart(2, "0"),
+    ).join("");
+}
+
 /** Feed it the bytes sent so far; it answers with bytes a second lately. */
 function speedMeter() {
     const samples = [];
@@ -207,6 +234,27 @@ export default async function uploadFile(
     // bigger than one message takes: raw slices, one message each
     const limit = sliceLimit();
     const encrypted = resume?.encrypted ?? FILE_ENCRYPTION;
+    const client = boundClient ?? getClient();
+    const print = encrypted ? await fingerprint(file) : undefined;
+    assertCurrent?.();
+    const keys = [
+        resume.enc,
+        ...(resume.pieces ?? []).map((p) => p.enc),
+    ].filter(Boolean);
+    if (encrypted && keys.some((enc) => enc.fingerprint !== print)) {
+        const ids = (resume.pieces ?? []).map((p) => p.id);
+        if (ids.length)
+            client
+                .deleteMessages("me", ids, { revoke: true })
+                .catch((error) =>
+                    console.log("Could not delete slices", error),
+                );
+        resume.pieces = undefined;
+        resume.enc = undefined;
+        resume.name = undefined;
+        resume.fileId = undefined;
+        resume.done = undefined;
+    }
     if (encrypted && resume.thumbData === undefined) {
         resume.thumbData = (await encryptedThumb(file)) ?? null;
     }
@@ -232,7 +280,6 @@ export default async function uploadFile(
               cut ? false : asMedia,
           );
     assertCurrent?.();
-    const client = boundClient ?? getClient();
 
     const speed = speedMeter();
     let told = 0;
@@ -290,7 +337,11 @@ export default async function uploadFile(
     if (!cut) {
         let source = file;
         if (encrypted) {
-            resume.enc ??= { ...newFileKey(), size: file.size };
+            resume.enc ??= {
+                ...newFileKey(),
+                size: file.size,
+                fingerprint: print,
+            };
             resume.name ??= randomName();
             await onEncryption?.();
             assertCurrent?.();
@@ -339,7 +390,13 @@ export default async function uploadFile(
                 (p.enc ? encryptedSize(p.size) : p.size),
         );
         // shortcut: slices after the first missing one stay in Saved Messages
-        if (bad >= 0) sent.length = bad;
+        if (bad >= 0) {
+            sent.length = bad;
+            resume.enc = undefined;
+            resume.name = undefined;
+            resume.fileId = undefined;
+            resume.done = undefined;
+        }
     }
     let offset = sent.reduce((sum, piece) => sum + piece.size, 0);
     // cut again from what is left, so a limit that changed since the last
@@ -358,7 +415,11 @@ export default async function uploadFile(
         const base = offset;
         let source = piece;
         if (encrypted) {
-            resume.enc ??= { ...newFileKey(), size: piece.size };
+            resume.enc ??= {
+                ...newFileKey(),
+                size: piece.size,
+                fingerprint: print,
+            };
             resume.name ??= randomName();
             await onEncryption?.();
             assertCurrent?.();

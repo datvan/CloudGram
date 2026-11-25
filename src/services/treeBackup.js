@@ -1,18 +1,8 @@
-/**
- * A way back that does not depend on the password: every 30 minutes, when the
- * tree changed, a plain JSON copy of it is sent to Saved Messages as a file
- * named `cloudgram-cay-thu-muc-<time>.json`. The newest KEEP stay; older ones
- * are deleted. Restoring reads one back and puts missing records back.
- *
- * Not encrypted on purpose: the vault's key comes from the password, and this
- * copy must still open when the password is gone. It holds names and folder
- * layout, which Telegram already sees as file names in the same chat.
- *
- * Also here: importing files that are in Saved Messages but in no record
- * (sent from a Telegram app, or left behind by a lost tree).
- */
+/** Encrypted account-scoped tree backups and Saved Messages import. */
 import { Api } from "telegram";
 
+import { treeBackupCrypto } from "./account";
+import { fromBase64, toBase64 } from "./crypto";
 import { getClient, isOnline } from "./telegram";
 import { isQuickDocument } from "./quickKey";
 import {
@@ -57,11 +47,19 @@ function nameOf(message) {
 
 /** Backups in Saved Messages, newest first: [{ id, name, date, size }]. */
 export async function listBackups() {
-    const found = await getClient().getMessages("me", {
-        search: BACKUP_PREFIX,
-        filter: new Api.InputMessagesFilterDocument(),
-        limit: 50,
-    });
+    const { tag } = await treeBackupCrypto();
+    const prefix = `cgb-${tag}-`;
+    const found = (
+        await Promise.all(
+            [prefix, BACKUP_PREFIX].map((search) =>
+                getClient().getMessages("me", {
+                    search,
+                    filter: new Api.InputMessagesFilterDocument(),
+                    limit: 50,
+                }),
+            ),
+        )
+    ).flat();
     return found
         .map((m) => ({
             id: m.id,
@@ -69,7 +67,15 @@ export async function listBackups() {
             date: new Date(m.date * 1000),
             size: Number(m.media?.document?.size ?? 0),
         }))
-        .filter((b) => b.name?.startsWith(BACKUP_PREFIX))
+        .filter((b) => {
+            b.legacy = Boolean(
+                b.name?.startsWith(BACKUP_PREFIX) && b.name.endsWith(".json"),
+            );
+            return (
+                b.legacy ||
+                (b.name?.startsWith(prefix) && b.name.endsWith(".bin"))
+            );
+        })
         .sort((a, b) => b.date - a.date);
 }
 
@@ -81,37 +87,49 @@ export function backupNow({ force = false } = {}) {
         // labels are records too, kept apart in the snapshot
         const records = [...files, ...labels];
         const body = JSON.stringify(records);
+        const vault = await treeBackupCrypto();
         const hash = await hashOf(body);
+        const hashKey = `${LAST_HASH}.${vault.tag}`;
         let last = null;
         try {
-            last = localStorage.getItem(LAST_HASH);
+            last = localStorage.getItem(hashKey);
         } catch {
             // storage blocked: send every time, which is only wasteful
         }
         if (!force && last === hash) return false;
         const now = new Date();
-        const text = JSON.stringify({
+        const encrypted = await vault.encrypt({
             app: "cloudgram",
             kind: "tree-backup",
             version: 1,
             savedAt: now.toISOString(),
             records,
         });
-        const file = new File([text], `${BACKUP_PREFIX}${stamp(now)}.json`, {
-            type: "application/json",
-        });
+        const file = new File(
+            [
+                new TextEncoder().encode("CGB1"),
+                fromBase64(encrypted.iv),
+                fromBase64(encrypted.ct),
+            ],
+            `cgb-${vault.tag}-${stamp(now)}.bin`,
+            {
+                type: "application/octet-stream",
+            },
+        );
         const client = getClient();
         await client.sendFile("me", {
             file: await uploadParts(client, file),
             forceDocument: true,
-            caption: `CloudGram: bản sao cây thư mục (${records.length} mục). Đừng xoá; dùng nó để khôi phục.`,
         });
         try {
-            localStorage.setItem(LAST_HASH, hash);
+            localStorage.setItem(hashKey, hash);
         } catch {
             // see above
         }
-        const old = (await listBackups()).slice(KEEP).map((b) => b.id);
+        const old = (await listBackups())
+            .filter((b) => !b.legacy)
+            .slice(KEEP)
+            .map((b) => b.id);
         if (old.length)
             await client.deleteMessages("me", old, { revoke: true });
         return true;
@@ -139,7 +157,16 @@ export function stopTreeBackup() {
 /** Read backup message `id` and put back what is missing; returns a count. */
 export async function restoreBackup(id) {
     const blob = await fetchFile("tree-backup", id, { quiet: true });
-    const data = JSON.parse(await blob.text());
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const data =
+        new TextDecoder().decode(bytes.slice(0, 4)) === "CGB1"
+            ? await (
+                  await treeBackupCrypto()
+              ).decrypt({
+                  iv: toBase64(bytes.slice(4, 16)),
+                  ct: toBase64(bytes.slice(16)),
+              })
+            : JSON.parse(new TextDecoder().decode(bytes));
     if (data?.app !== "cloudgram" || !Array.isArray(data.records))
         throw new Error("File này không phải bản sao cây thư mục CloudGram.");
     const count = restoreRecords(data.records);
@@ -179,6 +206,7 @@ export async function importFromTelegram(onProgress) {
         if (
             name === "storyboard.jpg" ||
             name?.startsWith(BACKUP_PREFIX) ||
+            /^cgb-[0-9a-f]{16}-.*\.bin$/.test(name ?? "") ||
             isQuickDocument(message)
         )
             continue;

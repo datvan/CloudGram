@@ -587,6 +587,15 @@ function sameBytes(item, file) {
 function queue(item, file, handle, path, unchanged) {
     if (UPLOAD_OWNER && item.scope !== uploadScope()) return;
     const record = getRecord(item.id);
+    if (!unchanged) {
+        const ids = (item.entry?.resume?.pieces ?? []).map((piece) => piece.id);
+        if (ids.length)
+            getClient()
+                .deleteMessages("me", ids, { revoke: true })
+                .catch((error) =>
+                    console.log("Could not delete slices", error),
+                );
+    }
     enqueueUpload({
         file,
         recordId: item.id,

@@ -392,6 +392,42 @@ export async function newRecoveryCode(password) {
     return made.code;
 }
 
+// Derive a domain-separated HMAC key without exporting the vault DEK.
+export async function treeBackupCrypto() {
+    if (!dek) throw new Error("Vault is locked");
+    const key = dek;
+    const material = await crypto.subtle.encrypt(
+        {
+            name: "AES-GCM",
+            iv: new Uint8Array(12),
+            additionalData: new TextEncoder().encode(
+                "cloudgram-tree-backup-key",
+            ),
+        },
+        key,
+        new Uint8Array(32),
+    );
+    const hmac = await crypto.subtle.importKey(
+        "raw",
+        material,
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"],
+    );
+    const signature = await crypto.subtle.sign(
+        "HMAC",
+        hmac,
+        new TextEncoder().encode("cloudgram-tree-backup-tag"),
+    );
+    return {
+        tag: Array.from(new Uint8Array(signature).slice(0, 8), (b) =>
+            b.toString(16).padStart(2, "0"),
+        ).join(""),
+        encrypt: (value) => encryptJson(key, value, "tree-backup"),
+        decrypt: (value) => decryptJson(key, value, "tree-backup"),
+    };
+}
+
 export const hasRecovery = () => Boolean(account?.hasRecovery);
 export const accountName = () => account?.username ?? "";
 

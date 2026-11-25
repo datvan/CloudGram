@@ -12,6 +12,11 @@ test("queue runs sequentially, skips unavailable records and continues after fai
         b: { id: "b" },
         c: { id: "c" },
         encrypted: { enc: {} },
+        splitEncrypted: {
+            id: "splitEncrypted",
+            parts: [{ enc: {} }, { enc: {} }],
+        },
+        splitPartial: { id: "splitPartial", parts: [{ enc: {} }, {}] },
         deleted: { deleted: true },
     };
     const queue = createReencryptQueue({
@@ -30,6 +35,8 @@ test("queue runs sequentially, skips unavailable records and continues after fai
     await queue.enqueueReencrypt([
         "a",
         "encrypted",
+        "splitEncrypted",
+        "splitPartial",
         "missing",
         "deleted",
         "b",
@@ -38,6 +45,8 @@ test("queue runs sequentially, skips unavailable records and continues after fai
     assert.deepEqual(events, [
         "start a",
         "end a",
+        "start splitPartial",
+        "end splitPartial",
         "start b",
         "end b",
         "start c",
@@ -57,7 +66,15 @@ test("queue runs sequentially, skips unavailable records and continues after fai
     );
     assert.equal(
         actions.filter((a) => a.type === "REENCRYPT_SKIPPED").length,
-        3,
+        4,
+    );
+    assert.ok(
+        actions.some(
+            (a) => a.id === "splitEncrypted" && a.type === "REENCRYPT_SKIPPED",
+        ),
+    );
+    assert.ok(
+        actions.some((a) => a.id === "splitPartial" && a.status === "done"),
     );
 });
 

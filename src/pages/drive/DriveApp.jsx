@@ -105,6 +105,7 @@ import { uploadScope } from "../../services/uploadLog";
 import { UPLOAD_OWNER } from "../../config/security";
 import { FILE_ENCRYPTION } from "../../config/features";
 import { enqueueReencrypt } from "../../services/reencryptQueue";
+import { isEncrypted } from "../../services/fileCrypto";
 import { startTreeBackup, stopTreeBackup } from "../../services/treeBackup";
 import {
     accountName,
@@ -601,7 +602,9 @@ export default function DriveApp({ mode, onToggleMode }) {
                 break;
             case "reencrypt": {
                 const legacyIds = targets
-                    .filter((item) => item.type === "file" && !item.enc)
+                    .filter(
+                        (item) => item.type === "file" && !isEncrypted(item),
+                    )
                     .map((item) => item.id);
                 if (FILE_ENCRYPTION && legacyIds.length)
                     setDialog({ type: "reencrypt", ids: legacyIds });
@@ -1700,7 +1703,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                                             selectedItems.some(
                                                 (item) =>
                                                     item.type === "file" &&
-                                                    !item.enc,
+                                                    !isEncrypted(item),
                                             ) && (
                                                 <ToolbarButton
                                                     title="Mã hoá lại"

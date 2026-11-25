@@ -58,3 +58,7 @@ export function plainRangeToCipher(enc, start, endInclusive) {
             Math.min((lastChunk + 1) * ENC_CHUNK, encryptedSize(enc.size)) - 1,
     };
 }
+
+export const isEncrypted = (record) =>
+    Boolean(record.enc) ||
+    (record.parts?.length > 0 && record.parts.every((p) => p.enc));
