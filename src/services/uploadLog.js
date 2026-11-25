@@ -113,9 +113,9 @@ function schedule() {
     }, WRITE_DELAY);
 }
 
-function queueWrite() {
+function queueWrite(strict = false) {
     if (!LOG_OWNER) {
-        const write = () => writeOut();
+        const write = () => writeOut(undefined, strict);
         writing = writing.then(write, write);
         return;
     }
@@ -128,11 +128,11 @@ function queueWrite() {
     };
     pending.clear();
     handleWrites.clear();
-    const write = () => writeOut(context);
+    const write = () => writeOut(context, strict);
     writing = writing.then(write, write);
 }
 
-async function writeOut(context) {
+async function writeOut(context, strict = false) {
     if (!context && (!key || (!pending.size && !handleWrites.size))) return;
     const { owner, encryptionKey, batch, handles } = context ?? {
         owner: username,
@@ -169,6 +169,7 @@ async function writeOut(context) {
             }
         });
     } catch (error) {
+        if (strict) throw error;
         // a private window may have no IndexedDB; uploads go on without it
         console.log(error);
     }
@@ -239,9 +240,9 @@ export async function saveFolders(folders) {
 }
 
 /** Let queued writes reach the disk, e.g. before reading the log back. */
-export async function settleWrites() {
+export async function settleWrites(strict = false) {
     clearTimeout(timer);
-    queueWrite();
+    queueWrite(strict);
     await writing;
 }
 

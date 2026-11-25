@@ -501,6 +501,7 @@ async function loadQueue({
         ...shared,
         ...pickers,
         UPLOAD_OWNER: true,
+        FILE_ENCRYPTION: false,
         uploadScope: () => scope,
         helpers: {},
         isOnline: () => connected,

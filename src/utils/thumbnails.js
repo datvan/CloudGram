@@ -233,6 +233,19 @@ export async function makeThumb(file) {
     }
 }
 
+/** A cover kept inside the encrypted tree instead of a Telegram thumbnail. */
+export async function encryptedThumb(file) {
+    const thumb = typeOf(file).startsWith("video/")
+        ? (await probeVideo(file))?.thumb
+        : await makeThumb(file);
+    if (!thumb) return undefined;
+    const bytes = new Uint8Array(await thumb.arrayBuffer());
+    let text = "";
+    for (let i = 0; i < bytes.length; i += 8192)
+        text += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    return `data:image/jpeg;base64,${btoa(text)}`;
+}
+
 // ----- loading -------------------------------------------------------------------
 
 // record key -> object URL, or null when there is no thumbnail to show.
@@ -445,6 +458,7 @@ function dropThumb(record) {
 }
 
 function loadThumb(record) {
+    if (record.thumbData) return Promise.resolve(record.thumbData);
     const key = keyOf(record);
     record = held.get(key) ?? record;
     if (
@@ -481,7 +495,7 @@ export function useThumbnail(record, wanted, visible) {
     }, []);
     const ready = wanted && record.file_id != null;
     const [url, setUrl] = useState(() =>
-        ready ? cache.get(keyOf(record)) ?? null : null,
+        ready ? record.thumbData ?? cache.get(keyOf(record)) ?? null : null,
     );
 
     useEffect(() => {

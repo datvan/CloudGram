@@ -31,6 +31,7 @@ async function load(path, globals, exports) {
         .replace(/\bexport /g, "");
     const context = vm.createContext({
         console,
+        FILE_ENCRYPTION: false,
         URL,
         Response,
         setTimeout,

@@ -315,7 +315,12 @@ async function run(job) {
                 asMedia: job.asMedia,
                 recordId: existing?.id,
                 // the parts an earlier, closed tab already sent
-                resume: existing && entryOf(existing.id)?.resume,
+                // Dropbox may return different bytes under the same name and size.
+                // Reusing an encryption nonce for those bytes would expose them.
+                resume:
+                    existing && !entryOf(existing.id)?.resume?.encrypted
+                        ? entryOf(existing.id)?.resume
+                        : undefined,
                 source: { dropbox: job.link, parent: job.parentID },
             });
             job.files += 1;

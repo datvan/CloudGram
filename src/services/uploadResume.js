@@ -37,6 +37,7 @@ import {
 } from "./uploadLog";
 import { UPLOAD_OWNER } from "../config/security";
 import { messagesOf } from "../utils/splitPlan";
+import { encryptedSize } from "./fileCrypto";
 import { isHidden, pathTo } from "../utils/tree";
 import { fileOpener } from "../utils/pickers";
 import {
@@ -335,9 +336,17 @@ async function sentFinder(entries, onLooked) {
             if (m.date > startedAt + 600) return false;
             if (entry.sentAs === "photo") return Boolean(m.media?.photo);
             const doc = m.media?.document;
-            if (!doc || Number(doc.size) !== entry.record.size) return false;
+            const enc = entry.resume?.enc;
+            if (
+                !doc ||
+                Number(doc.size) !==
+                    (enc ? encryptedSize(enc.size) : entry.record.size)
+            )
+                return false;
             return doc.attributes?.some(
-                (a) => a.fileName === entry.record.name,
+                (a) =>
+                    a.fileName ===
+                    (enc ? entry.resume.name : entry.record.name),
             );
         };
         const near = (m) => Math.abs(m.date - startedAt);
@@ -469,6 +478,8 @@ export async function resume(found, granted, onProgress) {
                             message,
                             entry.sentAs,
                             entry.replaces,
+                            entry.resume?.enc,
+                            entry.resume?.thumbData,
                         ).then(
                             () => {
                                 result.adopted += 1;

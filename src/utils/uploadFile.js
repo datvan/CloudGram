@@ -3,9 +3,24 @@ import { Api, errors } from "telegram";
 import { getClient } from "../services/telegram";
 import { Store } from "../redux/store";
 import { uploadProgress } from "../redux/actions/progressAction";
-import { SPLIT_RAW } from "../config/features";
+import { FILE_ENCRYPTION, SPLIT_RAW } from "../config/features";
+import {
+    CHUNK,
+    ENC_CHUNK,
+    chunkCount,
+    encryptChunk,
+    encryptedSize,
+    importFileKey,
+    newFileKey,
+} from "../services/fileCrypto";
 import { pieceName, splitSizes } from "./splitPlan";
-import { fitsAsPhoto, makeThumb, probeVideo, typeOf } from "./thumbnails";
+import {
+    encryptedThumb,
+    fitsAsPhoto,
+    makeThumb,
+    probeVideo,
+    typeOf,
+} from "./thumbnails";
 import { turns, uploadParts } from "./transfer";
 import { sliceLimit } from "./uploadLimit";
 
@@ -66,7 +81,7 @@ function largestPhotoSize(photo) {
     return Math.max(
         0,
         ...(photo?.sizes ?? []).map((s) =>
-            "sizes" in s ? Math.max(...s.sizes) : (s.size ?? 0),
+            "sizes" in s ? Math.max(...s.sizes) : s.size ?? 0,
         ),
     );
 }
@@ -114,6 +129,51 @@ const PROGRESS_EVERY = 250;
 // nor lags a change in the connection by long
 const SPEED_WINDOW = 3000;
 
+// Present encrypted bytes as a seekable source for Telegram's upload parts.
+export async function encryptedSource(file, enc, name) {
+    const key = await importFileKey(enc);
+    const size = encryptedSize(file.size);
+    return {
+        name,
+        size,
+        slice(start, end) {
+            return {
+                async arrayBuffer() {
+                    const first = Math.floor(start / ENC_CHUNK);
+                    const last = Math.floor((end - 1) / ENC_CHUNK);
+                    const out = new Uint8Array(end - start);
+                    let written = 0;
+                    for (let i = first; i <= last; i += 1) {
+                        const plain = await file
+                            .slice(
+                                i * CHUNK,
+                                Math.min(file.size, (i + 1) * CHUNK),
+                            )
+                            .arrayBuffer();
+                        const bytes = await encryptChunk(
+                            key,
+                            enc,
+                            i,
+                            plain,
+                            i === chunkCount(file.size) - 1,
+                        );
+                        const from = Math.max(0, start - i * ENC_CHUNK);
+                        const to = Math.min(bytes.length, end - i * ENC_CHUNK);
+                        out.set(bytes.subarray(from, to), written);
+                        written += to - from;
+                    }
+                    return out.buffer;
+                },
+            };
+        },
+    };
+}
+
+const randomName = () =>
+    `cg-${Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) =>
+        b.toString(16).padStart(2, "0"),
+    ).join("")}.bin`;
+
 /** Feed it the bytes sent so far; it answers with bytes a second lately. */
 function speedMeter() {
     const samples = [];
@@ -134,24 +194,42 @@ export default async function uploadFile(
     file,
     {
         asMedia = false,
-        resume,
+        resume = {},
         onSend,
         onPiece,
         client: boundClient,
         assertCurrent,
         onRetry,
+        onEncryption,
     } = {},
 ) {
     // bigger than one message takes: raw slices, one message each
     const limit = sliceLimit();
-    const slices = SPLIT_RAW ? splitSizes(file.size, limit) : [file.size];
+    const encrypted = resume?.encrypted ?? FILE_ENCRYPTION;
+    if (encrypted && resume.thumbData === undefined) {
+        resume.thumbData = (await encryptedThumb(file)) ?? null;
+    }
+    const plainLimit =
+        encrypted && Number.isFinite(limit)
+            ? Math.floor(limit / ENC_CHUNK) * CHUNK
+            : limit;
+    const slices = SPLIT_RAW ? splitSizes(file.size, plainLimit) : [file.size];
     // slices sent by an earlier attempt that saw a smaller limit still count
     const cut = slices.length > 1 || resume?.pieces?.length > 0;
-    const { kind, options } = await sendOptions(
-        file,
-        // the slices are plain files, nothing Telegram would play or recompress
-        cut ? false : asMedia,
-    );
+    if (encrypted && cut && !resume.pieces && resume.enc?.size === file.size) {
+        // A smaller limit requires a fresh key and new Telegram upload parts.
+        resume.enc = undefined;
+        resume.name = undefined;
+        resume.fileId = undefined;
+        resume.done = undefined;
+    }
+    const { kind, options } = encrypted
+        ? { kind: "file", options: { forceDocument: true } }
+        : await sendOptions(
+              file,
+              // the slices are plain files, nothing Telegram would play or recompress
+              cut ? false : asMedia,
+          );
     assertCurrent?.();
     const client = boundClient ?? getClient();
 
@@ -207,13 +285,29 @@ export default async function uploadFile(
     }
 
     if (!cut) {
-        const inputFile = await uploadParts(client, file, {
+        let source = file;
+        if (encrypted) {
+            resume.enc ??= { ...newFileKey(), size: file.size };
+            resume.name ??= randomName();
+            await onEncryption?.();
+            assertCurrent?.();
+            source = await encryptedSource(file, resume.enc, resume.name);
+        }
+        const inputFile = await uploadParts(client, source, {
             resume,
             onRetry,
             onProgress: (fraction) => report(fraction * file.size),
         });
         const message = await send(inputFile, options, true);
-        return { message, changes: sentChanges(message, kind, file.size) };
+        return {
+            message,
+            changes: {
+                ...sentChanges(message, kind, file.size),
+                ...(encrypted
+                    ? { enc: resume.enc, thumbData: resume.thumbData }
+                    : {}),
+            },
+        };
     }
 
     // `resume.pieces` keeps the messages already sent, through retries, so
@@ -236,7 +330,11 @@ export default async function uploadFile(
             const doc = m?.media?.document;
             return Number(doc?.size?.value ?? doc?.size);
         };
-        const bad = sent.findIndex((p) => size(found.get(p.id)) !== p.size);
+        const bad = sent.findIndex(
+            (p) =>
+                size(found.get(p.id)) !==
+                (p.enc ? encryptedSize(p.size) : p.size),
+        );
         // shortcut: slices after the first missing one stay in Saved Messages
         if (bad >= 0) sent.length = bad;
     }
@@ -245,8 +343,9 @@ export default async function uploadFile(
     // attempt (the profile loaded) cannot make the slices miss the end
     while (offset < file.size) {
         const i = sent.length;
-        const [next, ...after] = splitSizes(file.size - offset, limit);
-        const last = after.length === 0;
+        const [planned] = splitSizes(file.size - offset, plainLimit);
+        const next = resume.enc?.size ?? planned;
+        const last = next === file.size - offset;
         // another account since the slice before: nothing more goes out
         assertCurrent?.();
         const piece = new File(
@@ -254,7 +353,15 @@ export default async function uploadFile(
             pieceName(file.name, i),
         );
         const base = offset;
-        const inputFile = await uploadParts(client, piece, {
+        let source = piece;
+        if (encrypted) {
+            resume.enc ??= { ...newFileKey(), size: piece.size };
+            resume.name ??= randomName();
+            await onEncryption?.();
+            assertCurrent?.();
+            source = await encryptedSource(piece, resume.enc, resume.name);
+        }
+        const inputFile = await uploadParts(client, source, {
             resume,
             onRetry,
             onProgress: (fraction) => report(base + fraction * piece.size),
@@ -265,10 +372,16 @@ export default async function uploadFile(
             i === 0 ? options : { forceDocument: true },
             last,
         );
-        sent.push({ id: message.id, size: piece.size });
-        onPiece?.();
+        sent.push({
+            id: message.id,
+            size: piece.size,
+            ...(encrypted ? { enc: resume.enc } : {}),
+        });
         resume.fileId = undefined;
         resume.done = undefined;
+        resume.enc = undefined;
+        resume.name = undefined;
+        await onPiece?.();
         offset += piece.size;
     }
     const [first] = sent;
@@ -278,7 +391,12 @@ export default async function uploadFile(
         messages: sent.map((piece) => piece.id),
         changes: {
             sentAs: "file",
-            parts: sent.map(({ id, size }) => ({ id, size })),
+            ...(encrypted ? { thumbData: resume.thumbData } : {}),
+            parts: sent.map(({ id, size, enc }) => ({
+                id,
+                size,
+                ...(enc ? { enc } : {}),
+            })),
         },
     };
 }

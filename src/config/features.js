@@ -9,6 +9,9 @@ export const LOCAL_HELPER = import.meta.env.VITE_FEATURE_LOCAL_HELPER !== "0";
 
 export const DIAG_LOG = import.meta.env.VITE_FEATURE_DIAG_LOG !== "0";
 
+export const FILE_ENCRYPTION =
+    import.meta.env.VITE_FEATURE_FILE_ENCRYPTION !== "0";
+
 // VITE_FEATURE_SPLIT_RAW=0 and a rebuild: a file over the limit is stopped
 // again (the dialog above), instead of going up as several messages that
 // the drive shows and plays as one file. Files already sent that way keep
