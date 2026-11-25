@@ -16,7 +16,7 @@ import {
     sendCode,
     signIn,
     signInWithPassword,
-    sharedLogin,
+    openSharedClient,
 } from "../../services/telegramAuth";
 import { SHARED_TELEGRAM } from "../../config/features";
 import { describeError } from "../../services/api";
@@ -44,23 +44,52 @@ export default function TelegramLink() {
     const [error, setError] = useState(null);
 
     useEffect(() => {
-        const client = newClient("");
-        clientRef.current = client;
+        const controller = new AbortController();
         let cancelled = false;
         (async () => {
             try {
+                if (SHARED_TELEGRAM) {
+                    const client = await openSharedClient({
+                        signal: controller.signal,
+                    });
+                    if (cancelled) {
+                        await client.destroy();
+                        return;
+                    }
+                    clientRef.current = null;
+                    try {
+                        await adoptTelegram(client, "shared");
+                    } catch (error) {
+                        await client.destroy().catch(() => {});
+                        throw error;
+                    }
+                    return;
+                }
+                const client = newClient("");
+                clientRef.current = client;
                 await client.connect();
-                if (!SHARED_TELEGRAM || cancelled) return;
-                await sharedLogin(client);
-                if (cancelled) return;
-                clientRef.current = null;
-                await adoptTelegram(client, "shared");
             } catch (e) {
                 if (cancelled) return;
-                if (!clientRef.current) clientRef.current = client;
-                if (e.code === "telegram_not_linked" || e.status === 404)
-                    setStep("phone");
-                else {
+                if (
+                    SHARED_TELEGRAM &&
+                    (e.code === "telegram_not_linked" || e.status === 404)
+                ) {
+                    const client = newClient("");
+                    clientRef.current = client;
+                    try {
+                        await client.connect();
+                        if (!cancelled) setStep("phone");
+                    } catch (connectError) {
+                        client.destroy().catch(() => {});
+                        clientRef.current = null;
+                        if (!cancelled) {
+                            setError(describeError(connectError));
+                            setStep("failed");
+                        }
+                    }
+                } else {
+                    clientRef.current?.destroy().catch(() => {});
+                    clientRef.current = null;
                     setError(describeError(e));
                     setStep("failed");
                 }
@@ -68,7 +97,7 @@ export default function TelegramLink() {
         })();
         return () => {
             cancelled = true;
-            // adopted clients are cleared from the ref before this runs
+            controller.abort();
             clientRef.current?.destroy().catch(() => {});
         };
     }, []);

@@ -65,6 +65,7 @@ export const api = {
     recover: (body) => request("POST", "/auth/recover", body),
     setRecovery: (body) => request("POST", "/auth/recovery", body),
     me: () => request("GET", "/me"),
+    issueTelegramSession: () => request("POST", "/tg/session"),
     approveTelegram: (token) => request("POST", "/tg/approve", { token }),
     getSession: () => request("GET", "/vault/session"),
     putSession: (session, browserId) =>
@@ -209,6 +210,12 @@ const MESSAGES = {
         "Danh sách tệp vừa được thay đổi ở nơi khác. Đang đồng bộ lại.",
     bad_response: "Máy chủ trả lời không đúng dạng. Thử lại sau.",
     bad_json: "Máy chủ không đọc được dữ liệu gửi lên.",
+    telegram_password_missing:
+        "Quản trị viên chưa cài mật khẩu Telegram trên máy chủ.",
+    telegram_password_invalid:
+        "Mật khẩu Telegram trên máy chủ không đúng; báo quản trị viên.",
+    telegram_busy: "Telegram đang bận. Đợi một lúc rồi thử lại.",
+    telegram_not_linked: "Telegram dùng chung chưa được liên kết.",
     lease_held: "Telegram đang được dùng ở trình duyệt khác.",
 };
 

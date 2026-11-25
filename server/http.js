@@ -29,6 +29,7 @@ const ROUTES = {
     "POST /api/auth/recovery": "setRecovery",
     "GET /api/me": "me",
     "POST /api/tg/approve": "approveTelegram",
+    "POST /api/tg/session": "issueTelegramSession",
     "GET /api/vault/session": "getSession",
     "PUT /api/vault/session": "putSession",
     "DELETE /api/vault/session": "deleteSession",

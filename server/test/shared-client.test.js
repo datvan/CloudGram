@@ -10,110 +10,89 @@ async function load(path, exports, context = {}) {
     return vm.runInNewContext(`${source}\n;(${exports})`, context);
 }
 
-test("opens a separate shared client without changing the current client", async () => {
-    const current = {};
-    let active = current;
-    const client = { connect: async () => {}, destroy: async () => {} };
-    const { openSharedClient } = await load(
-        "../../src/services/telegramAuth.js",
-        "{ openSharedClient }",
-        { setClient: (value) => (active = value) },
-    );
-    const result = await openSharedClient({
-        deps: {
-            newClient: (session) => {
-                assert.equal(session, "");
-                return client;
-            },
-            sharedLogin: async (value) => assert.equal(value, client),
+function fakeClient(fail) {
+    const state = { destroyed: 0, dc: null };
+    const client = {
+        session: { dcId: 2, setDC: (...args) => (state.dc = args) },
+        getDC: async (...args) => {
+            assert.deepEqual(args, [2, false, true]);
+            return { ipAddress: "venus.web.telegram.org", port: 443 };
         },
-    });
+        connect: async () => { if (fail === "connect") throw new Error(fail); },
+        getMe: async () => { if (fail === "getMe") throw new Error(fail); return {}; },
+        destroy: async () => { state.destroyed++; },
+    };
+    return { client, state };
+}
+
+test("opens and verifies server session with browser DC without adopting", async () => {
+    const { openSharedClient } = await load("../../src/services/telegramAuth.js", "{ openSharedClient }");
+    const { client, state } = fakeClient();
+    const result = await openSharedClient({ deps: {
+        issueTelegramSession: async () => ({ session: "issued", dcId: 2 }),
+        newClient: (session) => { assert.equal(session, "issued"); return client; },
+    } });
     assert.equal(result, client);
-    assert.equal(active, current);
+    assert.deepEqual(state.dc, [2, "venus.web.telegram.org", 443]);
+    assert.equal(state.destroyed, 0);
 });
 
-test("destroys client on connect or login failure and preserves error", async () => {
-    const { openSharedClient } = await load(
-        "../../src/services/telegramAuth.js",
-        "{ openSharedClient }",
-    );
-    for (const stage of ["connect", "login"]) {
-        const failure = new Error(stage);
-        let destroyed = false;
-        const client = {
-            connect: async () => {
-                if (stage === "connect") throw failure;
-            },
-            destroy: async () => {
-                destroyed = true;
-            },
-        };
-        await assert.rejects(
-            openSharedClient({
-                deps: {
-                    newClient: () => client,
-                    sharedLogin: async () => {
-                        if (stage === "login") throw failure;
-                    },
-                },
-            }),
-            (error) => error === failure,
-        );
-        assert.equal(destroyed, true);
+test("connect and getMe failures destroy client and preserve error", async () => {
+    const { openSharedClient } = await load("../../src/services/telegramAuth.js", "{ openSharedClient }");
+    for (const stage of ["connect", "getMe"]) {
+        const { client, state } = fakeClient(stage);
+        await assert.rejects(openSharedClient({ deps: {
+            issueTelegramSession: async () => ({ session: "issued", dcId: 2 }),
+            newClient: () => client,
+        } }), { message: stage });
+        assert.equal(state.destroyed, 1);
     }
 });
 
-test("maps 503 telegram_not_linked after destroying client", async () => {
-    const { openSharedClient } = await load(
-        "../../src/services/telegramAuth.js",
-        "{ openSharedClient }",
-    );
-    let destroyed = false;
-    await assert.rejects(
-        openSharedClient({
-            deps: {
-                newClient: () => ({
-                    connect: async () => {},
-                    destroy: async () => {
-                        destroyed = true;
-                    },
-                }),
-                sharedLogin: async () => {
-                    throw { status: 503, code: "telegram_not_linked" };
-                },
-            },
-        }),
-        (error) =>
-            error.code === "telegram_not_linked" && error.name === "Error",
-    );
-    assert.equal(destroyed, true);
+test("API errors preserve codes and have Vietnamese messages", async () => {
+    const { openSharedClient } = await load("../../src/services/telegramAuth.js", "{ openSharedClient }");
+    const { ApiError, describeError, api } = await load("../../src/services/api.js", "{ ApiError, describeError, api }", {
+        fetch: async (path, options) => {
+            assert.equal(path, "/api/tg/session");
+            assert.equal(options.method, "POST");
+            return { ok: true, json: async () => ({ session: "issued", dcId: 2 }) };
+        },
+    });
+    assert.equal((await api.issueTelegramSession()).session, "issued");
+    for (const code of ["telegram_password_missing", "telegram_password_invalid", "telegram_busy", "telegram_not_linked"]) {
+        const error = new ApiError(503, code);
+        assert.ok(!describeError(error).includes(code));
+        await assert.rejects(openSharedClient({ deps: {
+            issueTelegramSession: async () => { throw error; },
+            newClient: () => assert.fail("client must not be created"),
+        } }), (actual) => actual === error);
+    }
+});
+
+test("cancellation during verification destroys client and prevents return", async () => {
+    const { openSharedClient } = await load("../../src/services/telegramAuth.js", "{ openSharedClient }");
+    const { client, state } = fakeClient();
+    const controller = new AbortController();
+    client.getMe = async () => { controller.abort(); return {}; };
+    await assert.rejects(openSharedClient({ signal: controller.signal, deps: {
+        issueTelegramSession: async () => ({ session: "issued", dcId: 2 }),
+        newClient: () => client,
+    } }), { name: "AbortError" });
+    assert.ok(state.destroyed >= 1);
 });
 
 test("saving shared session seals vault without adopting client", async () => {
     let vault;
     let adopted = false;
-    const { saveSharedSession } = await load(
-        "../../src/services/account.js",
-        "{ saveSharedSession }",
-        {
-            onClientChange() {},
-            encryptJson: async (_key, value) => JSON.stringify(value),
-            sessionString: (client) => client.session,
-            api: {
-                putSession: async (blob) => {
-                    vault = blob;
-                },
-            },
-            browserId: () => "browser",
-            setClient: () => {
-                adopted = true;
-            },
-        },
-    );
-    await saveSharedSession({ session: "shared-session" });
-    assert.deepEqual(JSON.parse(vault), {
-        session: "shared-session",
-        telegramMode: "shared",
+    const { saveSharedSession } = await load("../../src/services/account.js", "{ saveSharedSession }", {
+        onClientChange() {},
+        encryptJson: async (_key, value) => JSON.stringify(value),
+        sessionString: (client) => client.session,
+        api: { putSession: async (blob) => { vault = blob; } },
+        browserId: () => "browser",
+        setClient: () => { adopted = true; },
     });
+    await saveSharedSession({ session: "shared-session" });
+    assert.deepEqual(JSON.parse(vault), { session: "shared-session", telegramMode: "shared" });
     assert.equal(adopted, false);
 });

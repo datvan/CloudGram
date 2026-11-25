@@ -1,52 +1,43 @@
 import { Api } from "telegram";
 import { API_ID, API_HASH } from "../config/config";
-import { Buffer } from "buffer/";
 import { api } from "./api";
 import { newClient } from "./telegram";
 
-export async function openSharedClient({ deps = {} } = {}) {
-    const client = (deps.newClient || newClient)("");
+export async function openSharedClient({ deps = {}, signal } = {}) {
+    let client;
+    const cancel = () => {
+        client?.destroy().catch(() => {});
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
     try {
+        signal?.throwIfAborted();
+        const { session, dcId } = await (
+            deps.issueTelegramSession || api.issueTelegramSession
+        )();
+        signal?.throwIfAborted();
+        client = (deps.newClient || newClient)(session);
+        if (client.session.dcId !== dcId)
+            throw new Error("Invalid Telegram session DC");
+        const dc = await client.getDC(dcId, false, true);
+        signal?.throwIfAborted();
+        client.session.setDC(dcId, dc.ipAddress, dc.port);
         await client.connect();
-        await (deps.sharedLogin || sharedLogin)(client);
+        signal?.throwIfAborted();
+        await client.getMe();
+        signal?.throwIfAborted();
         return client;
     } catch (error) {
-        try {
-            await client.destroy();
-        } catch {
-            // Keep the original login error.
-        }
-        if (error?.status === 503 && error.code === "telegram_not_linked") {
-            const mapped = new Error("telegram_not_linked");
-            mapped.code = "telegram_not_linked";
-            throw mapped;
+        if (client) {
+            try {
+                await client.destroy();
+            } catch {
+                // Keep the original error.
+            }
         }
         throw error;
+    } finally {
+        signal?.removeEventListener("abort", cancel);
     }
-}
-
-export async function sharedLogin(client) {
-    const exportToken = () =>
-        client.invoke(
-            new Api.auth.ExportLoginToken({
-                apiId: API_ID,
-                apiHash: API_HASH,
-                exceptIds: [],
-            }),
-        );
-    const token = await exportToken();
-    if (!(token instanceof Api.auth.LoginToken))
-        throw new Error("Unexpected Telegram login token");
-    await api.approveTelegram(Buffer.from(token.token).toString("base64"));
-    let result = await exportToken();
-    if (result instanceof Api.auth.LoginTokenMigrateTo) {
-        await client._switchDC(result.dcId);
-        result = await client.invoke(
-            new Api.auth.ImportLoginToken({ token: result.token }),
-        );
-    }
-    if (!(result instanceof Api.auth.LoginTokenSuccess))
-        throw new Error("Telegram login was not completed");
 }
 
 export function normalizePhone(input) {

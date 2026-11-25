@@ -16,10 +16,12 @@ security exposure.
 | `CLOUDGRAM_SECURITY_CREDENTIAL_GUARD` | API environment            | Login cannot issue a session using a verifier superseded during password verification                                                                                             |
 | `CLOUDGRAM_SECURITY_SHARE_QUOTA`      | API environment            | Share count and quota checks run immediately before reservation without an intervening await                                                                                      |
 
-| `CLOUDGRAM_SHARED_TELEGRAM` | API environment | `0` disables approval (404); restart API |
+| `CLOUDGRAM_SHARED_TELEGRAM` | API environment | `0` disables shared sessions and approval (404); restart API |
 | `VITE_FEATURE_SHARED_TELEGRAM` | Frontend build environment | `0` uses manual linking; rebuild and reload |
 
 Shared Telegram grants each CloudGram account a full session for the same Telegram account, including all its messages. The API host can decrypt the root session. Unlinking does not revoke issued sessions; revoke them in Telegram settings.
+
+The API host also stores the 2FA password encrypted with `CLOUDGRAM_TG_ROOT_KEY`. A VPS compromise could take over the Telegram account. Roll back with `CLOUDGRAM_SHARED_TELEGRAM=0` or `cloudgram-admin telegram-password-clear`.
 
 ## Frontend rollback
 

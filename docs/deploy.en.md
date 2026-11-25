@@ -120,6 +120,9 @@ ssh root@<vps-ip> cloudgram-admin add <name>      # prints a setup link, valid 7
 ssh root@<vps-ip> cloudgram-admin reset <name>    # forgotten password: new link, old vault wiped
 ssh root@<vps-ip> cloudgram-admin delete <name>
 ssh root@<vps-ip> cloudgram-admin list
+ssh -t root@<vps-ip> cloudgram-admin telegram-password       # store 2FA password via hidden prompt
+ssh root@<vps-ip> cloudgram-admin telegram-password-clear   # remove stored 2FA password
+ssh root@<vps-ip> cloudgram-admin telegram-status           # show link and password status
 ```
 
 `cloudgram-admin` stops the service while it runs and starts it again, because

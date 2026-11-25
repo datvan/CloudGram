@@ -25,6 +25,25 @@ const db = await new Db(
 const api = new CloudGramApi({ db, pepper: process.env.CLOUDGRAM_PEPPER });
 const telegram = new SharedTelegram(db.dir);
 
+async function askPassword() {
+    process.stdout.write("Telegram 2FA password: ");
+    const secret = createInterface({
+        input: process.stdin,
+        output: new Writable({
+            write(_chunk, _encoding, callback) {
+                callback();
+            },
+        }),
+        terminal: true,
+    });
+    try {
+        return await secret.question("");
+    } finally {
+        secret.close();
+        process.stdout.write("\n");
+    }
+}
+
 switch (command) {
     case "telegram-link": {
         telegram.key();
@@ -33,11 +52,7 @@ switch (command) {
             input: process.stdin,
             output: process.stdout,
         });
-        const hidden = new Writable({
-            write(_chunk, _encoding, callback) {
-                callback();
-            },
-        });
+        let password;
         try {
             await client.start({
                 phoneNumber: () =>
@@ -45,24 +60,15 @@ switch (command) {
                 phoneCode: () => input.question("Telegram code: "),
                 password: async () => {
                     input.close();
-                    process.stdout.write("Telegram 2FA password: ");
-                    const secret = createInterface({
-                        input: process.stdin,
-                        output: hidden,
-                        terminal: true,
-                    });
-                    try {
-                        return await secret.question("");
-                    } finally {
-                        secret.close();
-                        process.stdout.write("\n");
-                    }
+                    password = await askPassword();
+                    return password;
                 },
                 onError: (error) => {
                     throw error;
                 },
             });
             await telegram.save(client.session.save());
+            if (password !== undefined) await telegram.savePassword(password);
             console.log("Telegram linked.");
         } finally {
             input.close();
@@ -70,13 +76,28 @@ switch (command) {
         }
         break;
     }
-    case "telegram-status":
+    case "telegram-password":
+        await telegram.savePassword(await askPassword());
+        console.log("Telegram 2FA password stored.");
+        break;
+    case "telegram-password-clear":
+        await telegram.clearPassword();
+        console.log("Telegram 2FA password cleared.");
+        break;
+    case "telegram-status": {
         console.log(
             (await telegram.load())
                 ? "Telegram linked."
                 : "Telegram not linked.",
         );
+        const password = await telegram.loadPassword();
+        console.log(
+            `Telegram 2FA password stored: ${Boolean(
+                password,
+            )}; invalid: ${Boolean(password?.invalid)}.`,
+        );
         break;
+    }
     case "telegram-unlink":
         await telegram.unlink();
         console.log(
@@ -102,7 +123,7 @@ switch (command) {
         break;
     default:
         console.log(
-            "usage: cloudgram-admin add|reset|delete <username> | list",
+            "usage: cloudgram-admin add|reset|delete <username> | list | telegram-link|telegram-status|telegram-unlink|telegram-password|telegram-password-clear",
         );
         process.exit(1);
 }

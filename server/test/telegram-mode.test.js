@@ -94,7 +94,7 @@ test("link UI passes shared only for automatic login", async () => {
     );
     assert.match(
         source,
-        /await sharedLogin\(client\);[\s\S]*?await adoptTelegram\(client, "shared"\);/,
+        /const client = await openSharedClient\([\s\S]*?\);[\s\S]*?await adoptTelegram\(client, "shared"\);/,
     );
     assert.match(
         source,

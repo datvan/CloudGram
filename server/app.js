@@ -652,6 +652,26 @@ export class CloudGramApi {
         return { ok: true };
     }
 
+    async issueTelegramSession(req, res) {
+        if (this.sharedTelegram.enabled === false)
+            throw new HttpError(404, "not_found");
+        const { user } = await this.authenticate(req, res);
+        this.telegramApprovals.take(user.username, this.now());
+        try {
+            return await this.sharedTelegram.issue();
+        } catch (error) {
+            const codes = [
+                "telegram_not_linked",
+                "telegram_password_missing",
+                "telegram_password_invalid",
+                "telegram_busy",
+            ];
+            if (codes.includes(error?.code))
+                throw new HttpError(503, error.code);
+            throw new HttpError(500, "internal");
+        }
+    }
+
     async approveTelegram(req, res) {
         if (this.sharedTelegram.enabled === false)
             throw new HttpError(404, "not_found");
