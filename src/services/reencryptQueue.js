@@ -94,7 +94,7 @@ const queue = createReencryptQueue({
     getClient: async () => (await import("./telegram.js")).getClient(),
     dispatch: (action) => {
         dispatches = dispatches.then(async () =>
-            (await import("../redux/Store.js")).Store.dispatch(action),
+            (await import("../redux/store.js")).Store.dispatch(action),
         );
     },
 });

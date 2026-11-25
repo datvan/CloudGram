@@ -609,17 +609,25 @@ export async function getTelegramMode() {
     const { session } = await api.getSession();
     if (!session) return null;
     const saved = await decryptJson(dek, session, SESSION_LABEL);
-    return saved.session ? (saved.telegramMode ?? "private") : null;
+    return saved.session ? saved.telegramMode ?? "private" : null;
 }
 
-/** Seal a logged-in client's session into the vault and make it the app's client. */
-export async function adoptTelegram(client, telegramMode = "private") {
+async function saveTelegramSession(client, telegramMode) {
     const blob = await encryptJson(
         dek,
         { session: sessionString(client), telegramMode },
         SESSION_LABEL,
     );
     await api.putSession(blob, browserId());
+}
+
+export async function saveSharedSession(client) {
+    await saveTelegramSession(client, "shared");
+}
+
+/** Seal a logged-in client's session into the vault and make it the app's client. */
+export async function adoptTelegram(client, telegramMode = "private") {
+    await saveTelegramSession(client, telegramMode);
     clearLegacySession();
     setClient(client);
     set({ phase: "ready", notice: null, me: await describeMe(client) });

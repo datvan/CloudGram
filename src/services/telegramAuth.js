@@ -2,6 +2,28 @@ import { Api } from "telegram";
 import { API_ID, API_HASH } from "../config/config";
 import { Buffer } from "buffer/";
 import { api } from "./api";
+import { newClient } from "./telegram";
+
+export async function openSharedClient({ deps = {} } = {}) {
+    const client = (deps.newClient || newClient)("");
+    try {
+        await client.connect();
+        await (deps.sharedLogin || sharedLogin)(client);
+        return client;
+    } catch (error) {
+        try {
+            await client.destroy();
+        } catch {
+            // Keep the original login error.
+        }
+        if (error?.status === 503 && error.code === "telegram_not_linked") {
+            const mapped = new Error("telegram_not_linked");
+            mapped.code = "telegram_not_linked";
+            throw mapped;
+        }
+        throw error;
+    }
+}
 
 export async function sharedLogin(client) {
     const exportToken = () =>

@@ -22,6 +22,7 @@ import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 
 import { FileIcon } from "./FileIcon";
 import { getRecord } from "../../services/drive";
+import { cancelReencrypt } from "../../services/reencryptQueue";
 import { formatSpeed } from "../../utils/format";
 import { clearFinished } from "../../redux/actions/progressAction";
 import {
@@ -80,12 +81,26 @@ export default function TransferPanel() {
 
     if (hidden || (!active.length && !finished.length)) return null;
 
-    const running = active.filter((p) => p.type !== "ERROR");
+    const reencryptFinished = active.filter(
+        (p) =>
+            p.direction === "reencrypt" &&
+            ["done", "failed", "cancelled"].includes(p.status),
+    );
+    const running = active.filter(
+        (p) => p.type !== "ERROR" && !reencryptFinished.includes(p),
+    );
     const failed = active.filter((p) => p.type === "ERROR");
-    const uploading = running.filter((p) => p.direction !== "down").length;
-    const downloading = running.length - uploading;
+    const failureCount =
+        failed.length +
+        reencryptFinished.filter((p) => p.status === "failed").length;
+    const uploading = running.filter((p) => p.direction === "up").length;
+    const downloading = running.filter((p) => p.direction === "down").length;
+    const reencrypting = running.filter(
+        (p) => p.direction === "reencrypt",
+    ).length;
     const title = running.length
         ? [
+              reencrypting && `Đang mã hoá lại ${reencrypting} mục`,
               uploading &&
                   `Đang tải lên ${uploading} mục${
                       speed.up ? ` · ${formatSpeed(speed.up)}` : ""
@@ -97,9 +112,9 @@ export default function TransferPanel() {
           ]
               .filter(Boolean)
               .join(", ")
-        : failed.length
-        ? `${failed.length} mục không thành công`
-        : `Đã xong ${finished.length} mục`;
+        : failureCount
+        ? `${failureCount} mục không thành công`
+        : `Đã xong ${finished.length + reencryptFinished.length} mục`;
 
     const keptCount = finished.filter((f) => f.kept).length;
     // kept originals a new click on "Xoá lại" can still delete
@@ -114,6 +129,9 @@ export default function TransferPanel() {
             setCollapsed(true);
             return;
         }
+        reencryptFinished.forEach((entry) =>
+            dispatch({ type: "REENCRYPT_SKIPPED", id: entry.id }),
+        );
         dispatch(clearFinished());
         setHidden(true);
     }
@@ -127,6 +145,7 @@ export default function TransferPanel() {
     const queued = active.filter((p) => p.type === "QUEUED");
     const rows = [
         ...inMotion,
+        ...active.filter((p) => p.direction === "reencrypt"),
         ...failed,
         ...queued.slice(0, SHOWN),
         // kept originals first: they are what still needs a look
@@ -243,6 +262,44 @@ export default function TransferPanel() {
                             >
                                 {nameOf(entry)}
                             </Typography>
+                            {entry.direction === "reencrypt" && (
+                                <>
+                                    <Typography
+                                        variant="caption"
+                                        color="text.secondary"
+                                    >
+                                        {entry.status === "queued"
+                                            ? "Đang chờ"
+                                            : entry.status === "done"
+                                            ? "Đã mã hoá lại"
+                                            : entry.status === "failed"
+                                            ? `Thất bại: ${
+                                                  entry.message ?? "Lỗi"
+                                              }`
+                                            : entry.status === "cancelled"
+                                            ? "Đã huỷ"
+                                            : `Đang mã hoá lại · ${
+                                                  entry.phase === "upload"
+                                                      ? "Tải lên"
+                                                      : "Đọc"
+                                              } ${Math.round(
+                                                  entry.percentage ?? 0,
+                                              )}%`}
+                                    </Typography>
+                                    {(entry.status === "queued" ||
+                                        entry.status === "running") && (
+                                        <IconButton
+                                            size="small"
+                                            aria-label="Huỷ mã hoá lại"
+                                            onClick={() =>
+                                                cancelReencrypt(entry.id)
+                                            }
+                                        >
+                                            <CloseIcon fontSize="small" />
+                                        </IconButton>
+                                    )}
+                                </>
+                            )}
                             {entry.type === "DONE" && entry.kept && (
                                 <Tooltip
                                     title={`Bản gốc vẫn còn trên máy: ${entry.kept}`}

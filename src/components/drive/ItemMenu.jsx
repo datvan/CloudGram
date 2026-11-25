@@ -25,7 +25,7 @@ import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
 import LinkIcon from "@mui/icons-material/Link";
 import LaunchIcon from "@mui/icons-material/Launch";
 
-import { EXTERNAL_PLAYER } from "../../config/features";
+import { EXTERNAL_PLAYER, FILE_ENCRYPTION } from "../../config/features";
 import { kindOf, previewKind } from "./fileTypes";
 
 function Item({ icon, label, hint, onClick, disabled }) {
@@ -140,6 +140,16 @@ export default function ItemMenu({
                               onClick={act("download")}
                           />
                       ),
+                      FILE_ENCRYPTION &&
+                          single?.type === "file" &&
+                          !single.enc && (
+                              <Item
+                                  key="reencrypt"
+                                  icon={icon(ReplayIcon)}
+                                  label="Mã hoá lại"
+                                  onClick={act("reencrypt")}
+                              />
+                          ),
                       EXTERNAL_PLAYER &&
                           single?.type === "file" &&
                           kindOf(single) === "video" && (

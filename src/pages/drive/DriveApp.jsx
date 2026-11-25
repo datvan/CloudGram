@@ -57,6 +57,7 @@ import StarBorderIcon from "@mui/icons-material/StarBorder";
 import RestoreFromTrashOutlinedIcon from "@mui/icons-material/RestoreFromTrashOutlined";
 import DeleteForeverOutlinedIcon from "@mui/icons-material/DeleteForeverOutlined";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
+import ReplayIcon from "@mui/icons-material/Replay";
 import AddIcon from "@mui/icons-material/Add";
 import CloudUploadOutlinedIcon from "@mui/icons-material/CloudUploadOutlined";
 import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
@@ -100,6 +101,8 @@ import * as drive from "../../services/drive";
 import { regenerateThumbnail } from "../../services/thumbnailOverride";
 import { uploadScope } from "../../services/uploadLog";
 import { UPLOAD_OWNER } from "../../config/security";
+import { FILE_ENCRYPTION } from "../../config/features";
+import { enqueueReencrypt } from "../../services/reencryptQueue";
 import { startTreeBackup, stopTreeBackup } from "../../services/treeBackup";
 import {
     accountName,
@@ -356,9 +359,7 @@ export default function DriveApp({ mode, onToggleMode }) {
 
         const dir = sort.dir === "asc" ? 1 : -1;
         const dateOf = (record) =>
-            inTrash
-                ? record.trashedAt
-                : (record.modifiedAt ?? record.updatedAt);
+            inTrash ? record.trashedAt : record.modifiedAt ?? record.updatedAt;
         return [...list].sort((a, b) => {
             // folders first, whatever the sort
             if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
@@ -583,6 +584,14 @@ export default function DriveApp({ mode, onToggleMode }) {
             case "download":
                 downloadMany(targets);
                 break;
+            case "reencrypt": {
+                const legacyIds = targets
+                    .filter((item) => item.type === "file" && !item.enc)
+                    .map((item) => item.id);
+                if (FILE_ENCRYPTION && legacyIds.length)
+                    setDialog({ type: "reencrypt", ids: legacyIds });
+                break;
+            }
             case "thumbnail":
                 rebuildThumbnail(single);
                 break;
@@ -945,9 +954,9 @@ export default function DriveApp({ mode, onToggleMode }) {
                     "Không thể đưa một số tệp vào hàng tải lên."
                         ? "enqueueFailed"
                         : counts.reason ===
-                            "Tài khoản đã thay đổi; không thể bắt đầu tải lên."
-                          ? "scope"
-                          : "cancel";
+                          "Tài khoản đã thay đổi; không thể bắt đầu tải lên."
+                        ? "scope"
+                        : "cancel";
             });
             run.reason ??= counts.reason;
         }
@@ -988,16 +997,16 @@ export default function DriveApp({ mode, onToggleMode }) {
                     ? "warning"
                     : "none"
                 : target &&
-                    !resumed &&
-                    !skipped &&
-                    !replaced &&
-                    !renamed &&
-                    !linked &&
-                    !run.permissionDenied &&
-                    !run.outsideFolder &&
-                    !run.reason
-                  ? "none"
-                  : "info";
+                  !resumed &&
+                  !skipped &&
+                  !replaced &&
+                  !renamed &&
+                  !linked &&
+                  !run.permissionDenied &&
+                  !run.outsideFolder &&
+                  !run.reason
+                ? "none"
+                : "info";
         recordFinish(run, notice, "none");
         endRun(run);
         // what the banner offered to resume may have just been picked up
@@ -1398,7 +1407,7 @@ export default function DriveApp({ mode, onToggleMode }) {
             ? undefined
             : (item) =>
                   item.parent
-                      ? (byId.get(item.parent)?.name ?? "—")
+                      ? byId.get(item.parent)?.name ?? "—"
                       : "Drive của tôi";
 
     const openDropbox = () =>
@@ -1672,6 +1681,22 @@ export default function DriveApp({ mode, onToggleMode }) {
                                             }
                                             onClick={() => act("download")}
                                         />
+                                        {FILE_ENCRYPTION &&
+                                            selectedItems.some(
+                                                (item) =>
+                                                    item.type === "file" &&
+                                                    !item.enc,
+                                            ) && (
+                                                <ToolbarButton
+                                                    title="Mã hoá lại"
+                                                    icon={
+                                                        <ReplayIcon fontSize="small" />
+                                                    }
+                                                    onClick={() =>
+                                                        act("reencrypt")
+                                                    }
+                                                />
+                                            )}
                                         <ToolbarButton
                                             title="Di chuyển"
                                             icon={
@@ -2007,6 +2032,17 @@ export default function DriveApp({ mode, onToggleMode }) {
                 ))}
             </Menu>
 
+            <ConfirmDialog
+                open={dialog?.type === "reencrypt"}
+                title="Mã hoá lại"
+                body="Tải file gốc về, mã hoá và tải lại lên. Bản gốc chưa mã hoá sẽ bị xoá sau khi bản mới được lưu."
+                confirmLabel="Mã hoá lại"
+                onClose={() => setDialog(null)}
+                onConfirm={() => {
+                    enqueueReencrypt(dialog.ids);
+                    setDialog(null);
+                }}
+            />
             <ItemMenu
                 position={
                     menu
