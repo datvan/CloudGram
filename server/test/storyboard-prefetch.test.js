@@ -2,6 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import {
+    encryptPreview,
+    decryptPreview,
+} from "../../src/services/previewCrypto.js";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const video = (id, extra = {}) => ({
@@ -45,7 +49,7 @@ async function storyboards(options) {
     const url = new URL("./storyboard.test.js", import.meta.url);
     const source = (await readFile(url, "utf8"))
         .split('test("partial frames')[0]
-        .replace(/^import .*;\r?\n/gm, "")
+        .replace(/^import [\s\S]*?;\r?\n/gm, "")
         .replaceAll("import.meta.url", JSON.stringify(url.href))
         .replace(
             "useStoryboard,storyboardsOf})",
@@ -59,6 +63,9 @@ async function storyboards(options) {
         AbortController,
         DOMException,
         Blob,
+        File,
+        encryptPreview,
+        decryptPreview,
         URL,
         Uint8ClampedArray,
         setTimeout,
@@ -228,16 +235,35 @@ test("service skips good and failed; bad storyboard may be generated without for
     const h = await storyboards();
     h.records[0].storyboard = { message: 50, duration: 81 };
     await h.prefetch(h.records[0], () => "neighbour");
-    h.sessionState().failed.add(1);
+    h.sessionState().failed.add(JSON.stringify(["private", 1]));
     delete h.records[0].storyboard;
     await h.prefetch(h.records[0], () => "neighbour");
     await h.prefetch({}, () => "neighbour");
     assert.equal(h.stats().draws, 0);
-    h.sessionState().failed.delete(1);
+    h.sessionState().failed.delete(JSON.stringify(["private", 1]));
     h.records[0].storyboard = { message: 50, duration: 81 };
-    h.sessionState().bad.add(50);
+    h.sessionState().bad.add(
+        JSON.stringify([
+            "private",
+            JSON.stringify([
+                ["duration", 81],
+                ["message", 50],
+            ]),
+        ]),
+    );
     await h.prefetch(h.records[0], () => "neighbour");
     assert.equal(h.stats().sent, 1);
+    assert.equal(h.uploads[0].type, "application/octet-stream");
+    assert.equal(
+        await (
+            await decryptPreview(
+                h.uploads[0],
+                h.records[0].storyboard,
+                "storyboard",
+            )
+        ).text(),
+        "jpeg",
+    );
 });
 
 test("current storyboard overtakes an earlier queued neighbour", async () => {

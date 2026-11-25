@@ -1,10 +1,13 @@
-/** Regenerated covers are separate Saved Messages documents, shared by file_id. */
+/** Regenerated covers are encrypted and shared by file_id. */
 import { getClient, isOnline, onClientChange } from "./telegram";
 import { getRecord, getSnapshot, update, flush } from "./drive";
 import { uploadScope } from "./uploadLog";
+import { getTelegramMode } from "./account";
+import { isMigrating } from "./migrateShared";
 import { streamUrl, canStream } from "./stream";
-import { uploadParts } from "../utils/transfer";
 import { fetchFile } from "../utils/downloadFile";
+import { uploadParts } from "../utils/transfer";
+import { encryptPreview } from "./previewCrypto";
 import {
     shrink,
     encodeScaled,
@@ -88,7 +91,11 @@ async function retry(work, signal, delays = RETRY_DELAYS) {
         } catch (error) {
             check(signal);
             const counts = isOnline() && !error?.seconds;
-            if (error.permanent || (counts && attempt >= delays.length))
+            if (
+                error.permanent ||
+                error.status === 401 ||
+                (counts && attempt >= delays.length)
+            )
                 throw error;
             await wait(
                 error?.seconds ? error.seconds * 1000 : delays[attempt] ?? 5000,
@@ -115,9 +122,9 @@ function sessionState() {
     }
     return state;
 }
-onClientChange((client) => {
+onClientChange(() => {
     const s = sessionState();
-    if (!client) for (const controller of s.controllers) controller.abort();
+    for (const controller of s.controllers) controller.abort();
 });
 
 /** Scope checks also run during media waits, not only after Telegram resolves. */
@@ -214,9 +221,13 @@ async function draw(record, client, op) {
     );
     if (size > 100 * 1024 * 1024)
         throw permanent("Ảnh lớn hơn 100 MiB; không thể tạo lại hình thu nhỏ");
-    const bytes = record.enc || record.parts?.some((part) => part.enc)
-        ? await fetchFile(record.id, record.file_id, { quiet: true })
-        : await client.downloadMedia(message.media, {});
+    const bytes =
+        record.enc || record.parts?.length
+            ? await fetchFile(record.id, record.file_id, {
+                  quiet: true,
+                  client,
+              })
+            : await client.downloadMedia(message.media, {});
     op.assert();
     try {
         return await shrink(
@@ -227,6 +238,9 @@ async function draw(record, client, op) {
         throw permanent("Không giải mã được ảnh gốc");
     }
 }
+
+const namespace = (record) => (record.tg === "shared" ? "shared" : "private");
+const fileKey = (record) => JSON.stringify([namespace(record), record.file_id]);
 
 export function regenerateThumbnail(record, options = {}) {
     const s = sessionState();
@@ -239,98 +253,154 @@ export function regenerateThumbnail(record, options = {}) {
         return Promise.reject(
             permanent("Tệp không có hình thu nhỏ để tạo lại"),
         );
-    if (s.making.has(record.file_id)) return s.making.get(record.file_id);
+    const source = structuredClone(record);
+    const key = fileKey(source);
+    const old = getSnapshot()
+        .records.filter((r) => fileKey(r) === key)
+        .map((r) => structuredClone(r));
+    const unchanged = () => {
+        const records = getSnapshot().records.filter((r) => fileKey(r) === key);
+        return (
+            records.length === old.length &&
+            old.some(
+                (r) =>
+                    r.id === source.id &&
+                    JSON.stringify(r) === JSON.stringify(source),
+            ) &&
+            old.every(
+                (r) =>
+                    JSON.stringify(records.find((v) => v.id === r.id)) ===
+                    JSON.stringify(r),
+            )
+        );
+    };
+    if (!unchanged())
+        return Promise.reject(new Error("Tệp đã thay đổi; hãy thử lại"));
+    if (s.making.has(key)) return s.making.get(key);
     const op = operation(s, options.signal);
     const client = getClient();
     const job = s.line
         .catch(() => {})
         .then(async () => {
             op.assert();
-            const message = await retry(
+            if (!unchanged()) throw new Error("Tệp đã thay đổi; hãy thử lại");
+            const guard = () => {
+                op.assert();
+                if (isMigrating() || getClient() !== client || !unchanged())
+                    throw permanent(
+                        "Tệp hoặc phiên Telegram đã thay đổi; hãy thử lại",
+                    );
+            };
+            const validate = async () => {
+                guard();
+                const mode = await getTelegramMode(client);
+                guard();
+                if (mode !== namespace(source))
+                    throw permanent("Telegram session does not match the file");
+            };
+            guard();
+            const blob = await retry(
                 async () => {
-                    op.assert();
-                    const blob = await draw(record, client, op);
-                    op.assert();
-                    const file = new File([blob], "thumbnail.jpg", {
-                        type: "image/jpeg",
-                    });
-                    const input = await uploadParts(client, file);
-                    op.assert();
-                    return (
-                        await client.sendFile("me", {
-                            file: input,
-                            forceDocument: true,
-                        })
-                    ).id;
+                    await validate();
+                    return draw(source, client, op);
                 },
                 op.signal,
                 options.retryDelays,
             );
-            const discard = () =>
-                client
-                    .deleteMessages("me", [message], { revoke: true })
-                    .catch(console.log);
-            try {
-                op.assert();
-            } catch (error) {
-                await discard();
-                throw error;
-            }
-            const records = getSnapshot().records.filter(
-                (r) => r.file_id === record.file_id,
-            );
-            if (!records.length) {
-                await discard();
-                throw new Error("Tệp không còn tồn tại");
-            }
-            const old = records.map((r) => ({
-                id: r.id,
-                thumbnail: r.thumbnail,
-            }));
-            const release = holdThumbnails(records);
-            for (const r of records)
-                update(
-                    r.id,
-                    { thumbnail: message },
-                    { preserveModifiedAt: true },
+            guard();
+            if (
+                !blob ||
+                !blob.size ||
+                blob.size > 200 * 1024 ||
+                (blob.type && blob.type !== "image/jpeg")
+            )
+                throw permanent(
+                    "Hình thu nhỏ không hợp lệ hoặc lớn hơn 200 KiB",
                 );
+            const { metadata, message } = await retry(
+                async () => {
+                    await validate();
+                    const { ciphertext, metadata } = await encryptPreview(
+                        blob,
+                        "thumbnail",
+                    );
+                    guard();
+                    const file = new File(
+                        [ciphertext],
+                        "cloudgram-thumbnail-v1.bin",
+                        { type: "application/octet-stream" },
+                    );
+                    const inputFile = await uploadParts(client, file);
+                    guard();
+                    const message = await client.sendFile("me", {
+                        file: inputFile,
+                        forceDocument: true,
+                    });
+                    guard();
+                    return { metadata, message };
+                },
+                op.signal,
+                options.retryDelays,
+            );
+            guard();
+            const thumbnailBlob = { ...metadata, message: message.id };
+            const writtenThumbnailBlob = JSON.stringify(thumbnailBlob);
+            const records = getSnapshot().records.filter(
+                (r) => fileKey(r) === key,
+            );
+            if (!unchanged())
+                throw new Error("Hình thu nhỏ đã thay đổi; hãy thử lại");
+            const release = holdThumbnails(old);
+            let changed = [];
+            for (const r of records)
+                update(r.id, { thumbnailBlob }, { preserveModifiedAt: true });
             try {
                 await flush();
                 op.assert();
             } catch (error) {
                 if (uploadScope() === s.scope)
-                    for (const r of old)
-                        if (getRecord(r.id)?.thumbnail === message)
+                    for (const r of old) {
+                        const current = getRecord(r.id);
+                        if (
+                            current?.id === r.id &&
+                            fileKey(current) === fileKey(r) &&
+                            JSON.stringify(current.thumbnailBlob) ===
+                                writtenThumbnailBlob
+                        )
                             update(
                                 r.id,
-                                { thumbnail: r.thumbnail },
+                                {
+                                    thumbnailBlob: r.thumbnailBlob,
+                                },
                                 { preserveModifiedAt: true },
                             );
-                // A save may already have reached the server: retain both messages.
+                    }
+                if (uploadScope() === s.scope)
+                    changed = old.filter((r) => {
+                        const current = getRecord(r.id);
+                        return (
+                            current &&
+                            (fileKey(current) !== fileKey(r) ||
+                                current.thumbnail !== r.thumbnail ||
+                                current.thumbData !== r.thumbData ||
+                                JSON.stringify(current.thumbnailBlob) !==
+                                    JSON.stringify(r.thumbnailBlob))
+                        );
+                    });
+                // A save may already have reached the server.
                 throw error;
             } finally {
                 release();
+                if (changed.length) evictThumbnails(changed);
             }
             evictThumbnails(records);
-            for (const previous of new Set(
-                old.map((r) => r.thumbnail).filter(Boolean),
-            )) {
-                op.assert();
-                if (
-                    !getSnapshot().records.some((r) => r.thumbnail === previous)
-                )
-                    await client
-                        .deleteMessages("me", [previous], { revoke: true })
-                        .catch(console.log);
-            }
-            return message;
+            return thumbnailBlob;
         })
         .finally(() => {
             op.close();
-            if (s.making.get(record.file_id) === job)
-                s.making.delete(record.file_id);
+            if (s.making.get(key) === job) s.making.delete(key);
         });
     s.line = job;
-    s.making.set(record.file_id, job);
+    s.making.set(key, job);
     return job;
 }

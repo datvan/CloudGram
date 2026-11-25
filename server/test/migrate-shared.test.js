@@ -90,6 +90,34 @@ test("lock spans migration and releases after failure", async () => {
     assert.equal(isMigrating(), false);
 });
 
+for (const deleteOriginal of [false, true])
+    test(`migration clears source preview references with deleteOriginal=${deleteOriginal}`, async () => {
+        const record = {
+            id: "a",
+            type: "file",
+            file_id: 1,
+            thumbnail: 2,
+            thumbnailBlob: { message: 3, nonce: "source" },
+            storyboard: { message: 4 },
+            thumbData: "inline",
+        };
+        const f = fixture([record]);
+        const move = f.deps.reencryptRecord;
+        f.deps.reencryptRecord = async (item, options) => {
+            assert.equal(options.deleteOriginal, deleteOriginal);
+            assert.equal(options.deleteOriginalMedia, true);
+            assert.ok(Object.hasOwn(options.extraChanges, "thumbnailBlob"));
+            await move(item, options);
+            item.file_id = 99;
+        };
+        await migrateToShared({ deps: f.deps, deleteOriginal });
+        assert.equal(record.file_id, 99);
+        assert.equal(record.thumbnail, undefined);
+        assert.equal(record.thumbnailBlob, undefined);
+        assert.equal(record.storyboard, undefined);
+        assert.equal(record.thumbData, "inline");
+    });
+
 test("failure retains private client and reports error", async () => {
     const f = fixture([
         { id: "a", type: "file" },

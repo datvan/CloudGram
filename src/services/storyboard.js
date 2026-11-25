@@ -12,6 +12,9 @@ import { getClient, isOnline, onClientChange } from "./telegram";
 import { getRecord, getSnapshot, update, flush } from "./drive";
 import { ApiError, describeError } from "./api";
 import { uploadScope } from "./uploadLog";
+import { getTelegramMode } from "./account";
+import { isMigrating } from "./migrateShared";
+import { encryptPreview, decryptPreview } from "./previewCrypto";
 import { fetchFile } from "../utils/downloadFile";
 import { uploadParts } from "../utils/transfer";
 import { previewKind } from "../components/drive/fileTypes";
@@ -108,7 +111,11 @@ async function retry(work, signal, delays = RETRY_DELAYS, onRetry) {
         } catch (error) {
             check(signal);
             const counts = isOnline() && !error?.seconds;
-            if (error.permanent || (counts && attempt >= delays.length))
+            if (
+                error.permanent ||
+                error.status === 401 ||
+                (counts && attempt >= delays.length)
+            )
                 throw error;
             onRetry?.(attempt + (counts ? 2 : 1));
             await wait(
@@ -241,9 +248,14 @@ function sessionState() {
     }
     return state;
 }
-onClientChange((client) => {
+onClientChange(() => {
     const s = sessionState();
-    if (!client) for (const controller of s.controllers) controller.abort();
+    for (const controller of s.controllers) controller.abort();
+    for (const url of s.urls) URL.revokeObjectURL(url);
+    s.urls.clear();
+    s.loaded.clear();
+    s.bad.clear();
+    s.failed.clear();
 });
 
 /** Scope checks also run during media waits, not only after Telegram resolves. */
@@ -272,26 +284,42 @@ function operation(s, signal) {
     };
 }
 
-/** Send the JPEG to Saved Messages as a file, kept byte for byte. */
+/** Encrypt the JPEG before sending an opaque file to Saved Messages. */
 async function send(blob, client, op) {
     op.assert();
-    const file = new File([blob], "storyboard.jpg", { type: "image/jpeg" });
+    const { ciphertext, metadata } = await encryptPreview(blob, "storyboard");
+    op.assert();
+    const file = new File([ciphertext], "cloudgram-storyboard-v1.bin", {
+        type: "application/octet-stream",
+    });
     const inputFile = await uploadParts(client, file);
     op.assert();
     const message = await client.sendFile("me", {
         file: inputFile,
         forceDocument: true,
     });
-    return message.id;
+    return { message: message.id, ...metadata };
 }
 
-function make(fileId, src, options = {}) {
+const namespace = (record) => (record.tg === "shared" ? "shared" : "private");
+const fileKey = (record) => JSON.stringify([namespace(record), record.file_id]);
+const boardKey = (record, board = record.storyboard) =>
+    JSON.stringify([namespace(record), storyboardIdentity(board)]);
+
+function make(record, src, options = {}) {
     const s = sessionState();
+    const source = JSON.parse(JSON.stringify(record));
+    const fileId = fileKey(source);
+    const sameSource = () => {
+        const current = getRecord(source.id);
+        return current && JSON.stringify(current) === JSON.stringify(source);
+    };
     if (
         options.signal?.aborted ||
         (options.scope !== undefined && options.scope !== s.scope)
     )
         return Promise.reject(aborted());
+    if (!sameSource()) return Promise.reject(new Error("The video changed"));
     if (!options.background) {
         // Playback takes priority even over a neighbour queued before navigation.
         const background = s.prefetches.has(fileId);
@@ -300,7 +328,7 @@ function make(fileId, src, options = {}) {
             return s.making
                 .get(fileId)
                 .catch(() => {})
-                .then(() => make(fileId, src, options));
+                .then(() => make(source, src, options));
     }
     if (s.making.has(fileId)) {
         const job = s.making.get(fileId);
@@ -317,7 +345,7 @@ function make(fileId, src, options = {}) {
                     !options.signal?.aborted &&
                     uploadScope() === s.scope
                 )
-                    return make(fileId, src, { ...options, scope: s.scope });
+                    return make(source, src, { ...options, scope: s.scope });
                 throw error;
             });
         return job;
@@ -336,31 +364,68 @@ function make(fileId, src, options = {}) {
         .catch(() => {})
         .then(async () => {
             op.assert();
+            if (!sameSource()) throw new Error("The video changed");
+            const client = getClient();
+            const guard = () => {
+                op.assert();
+                if (isMigrating() || getClient() !== client || !sameSource())
+                    throw permanent("Telegram session or video changed");
+            };
+            const validate = async () => {
+                guard();
+                const mode = await getTelegramMode(client);
+                guard();
+                if (mode !== namespace(source))
+                    throw permanent(
+                        "Telegram session does not match the video",
+                    );
+            };
+            await retry(validate, op.signal, options.retryDelays);
             // A foreground storyboard may have kept this neighbour waiting.
             if (options.background && options.canStart && !options.canStart())
                 return null;
             // made meanwhile, by another tab or the upload
             const existing = getSnapshot().records.find(
                 (r) =>
-                    r.file_id === fileId &&
+                    fileKey(r) === fileId &&
                     r.storyboard &&
-                    !s.bad.has(r.storyboard.message),
+                    !s.bad.has(boardKey(r)),
             );
             if (existing && !options.force) return existing.storyboard;
-            const client = getClient();
+            const old = getSnapshot()
+                .records.filter((r) => fileKey(r) === fileId)
+                .map((r) => ({
+                    id: r.id,
+                    file_id: r.file_id,
+                    tg: r.tg,
+                    storyboard: r.storyboard && { ...r.storyboard },
+                    identity: storyboardIdentity(r.storyboard),
+                }));
+            if (!old.length) throw new Error("The video is gone");
             let storyboard;
             try {
                 storyboard = await retry(
                     async () => {
-                        op.assert();
+                        await validate();
                         const drawn = await draw(src(), {
                             signal: op.signal,
                             onProgress: report,
                             attempt,
                         });
                         phase("uploading", FRAMES);
+                        op.assert();
+                        if (
+                            isMigrating() ||
+                            getClient() !== client ||
+                            !sameSource()
+                        )
+                            throw permanent(
+                                "Telegram session or video changed",
+                            );
                         return {
-                            message: await send(drawn.blob, client, op),
+                            ...(await send(drawn.blob, client, {
+                                assert: guard,
+                            })),
                             duration: drawn.duration,
                         };
                     },
@@ -378,37 +443,23 @@ function make(fileId, src, options = {}) {
                 s.failed.add(fileId);
                 throw error;
             }
-            const discard = () =>
-                client
-                    .deleteMessages("me", [storyboard.message], {
-                        revoke: true,
-                    })
-                    .catch(console.log);
-            try {
-                op.assert();
-            } catch (error) {
-                await discard();
-                throw error;
-            }
-            // Looked at again: while it was drawn, another tab may have made
-            // one, or the video may have been deleted. Unless explicitly
-            // replacing it, discard this one rather than leave it unreferenced
-            // in Saved Messages.
+            guard();
             const records = getSnapshot().records.filter(
-                (r) => r.file_id === fileId,
+                (r) => fileKey(r) === fileId,
             );
-            const other = records.find(
-                (r) => r.storyboard && !s.bad.has(r.storyboard.message),
-            );
-            if (!records.length || (other && !options.force)) {
-                await discard();
-                if (other) return other.storyboard;
-                throw new Error("The video is gone");
-            }
-            const old = records.map((r) => ({
-                id: r.id,
-                storyboard: r.storyboard,
-            }));
+            if (
+                records.length !== old.length ||
+                old.some((previous) => {
+                    const current = records.find((r) => r.id === previous.id);
+                    return (
+                        !current ||
+                        fileKey(current) !== fileKey(previous) ||
+                        storyboardIdentity(current.storyboard) !==
+                            previous.identity
+                    );
+                })
+            )
+                throw new Error("Storyboard changed during generation");
             // every record of this video shares it
             phase("saving", FRAMES);
             for (const r of records)
@@ -420,40 +471,20 @@ function make(fileId, src, options = {}) {
                 if (uploadScope() === s.scope) {
                     for (const r of old)
                         if (
-                            getRecord(r.id)?.storyboard?.message ===
-                            storyboard.message
+                            getRecord(r.id) &&
+                            fileKey(getRecord(r.id)) === fileKey(r) &&
+                            storyboardIdentity(getRecord(r.id)?.storyboard) ===
+                                storyboardIdentity(storyboard)
                         )
                             update(
                                 r.id,
                                 { storyboard: r.storyboard },
                                 { preserveModifiedAt: true },
                             );
-                    // A save may already have reached the server: retain both
-                    // messages, unless the server said for sure it took none
-                    if (
-                        error instanceof ApiError &&
-                        error.status >= 400 &&
-                        error.status < 500 &&
-                        error.status !== 409
-                    )
-                        await discard();
                 }
                 throw error;
             }
             s.failed.delete(fileId);
-            for (const message of new Set(
-                old.map((r) => r.storyboard?.message).filter(Boolean),
-            )) {
-                op.assert();
-                if (
-                    !getSnapshot().records.some(
-                        (r) => r.storyboard?.message === message,
-                    )
-                )
-                    await client
-                        .deleteMessages("me", [message], { revoke: true })
-                        .catch(console.log);
-            }
             return storyboard;
         })
         .finally(() => {
@@ -472,7 +503,7 @@ function make(fileId, src, options = {}) {
 }
 
 export function regenerate(record, streamSrc, options = {}) {
-    return make(record.file_id, streamSrc, { ...options, force: true });
+    return make(record, streamSrc, { ...options, force: true });
 }
 
 /** No force and no retry of a known failure; share the normal serial queue. */
@@ -482,14 +513,14 @@ export function canPrefetch(record) {
         record?.file_id &&
             // while the vault cannot be saved a new one could not be kept
             !getSnapshot().error &&
-            !s.failed.has(record.file_id) &&
-            (!record.storyboard || s.bad.has(record.storyboard.message)),
+            !s.failed.has(fileKey(record)) &&
+            (!record.storyboard || s.bad.has(boardKey(record))),
     );
 }
 
 export function prefetch(record, streamSrc, options = {}) {
     if (!canPrefetch(record)) return Promise.resolve(null);
-    return make(record.file_id, streamSrc, {
+    return make(record, streamSrc, {
         ...options,
         force: false,
         background: true,
@@ -506,36 +537,94 @@ export function fromUpload(id, file) {
     )
         return;
     const url = URL.createObjectURL(file);
-    make(record.file_id, () => url)
+    make(record, () => url)
         .catch(() => {})
         .finally(() => URL.revokeObjectURL(url));
 }
 
+const storyboardIdentity = (board) =>
+    JSON.stringify(
+        board == null
+            ? null
+            : Object.keys(board)
+                  .sort()
+                  .map((key) => [key, board[key]]),
+    );
+
 function load(record, { signal, scope, retryDelays } = {}) {
     const s = sessionState();
+    if (isMigrating()) return Promise.reject(aborted());
     if (scope !== undefined && scope !== s.scope)
         return Promise.reject(aborted());
-    const { message, duration } = record.storyboard;
-    if (s.bad.has(message)) return Promise.reject(new Error("Bad storyboard"));
+    const metadata = { ...record.storyboard };
+    const { message, duration } = metadata;
+    const cacheKey = boardKey(record, metadata);
+    if (s.bad.has(cacheKey)) return Promise.reject(permanent("Bad storyboard"));
     if (!saneDuration(duration)) {
-        s.bad.add(message);
-        return Promise.reject(new Error("Bad storyboard duration"));
+        s.bad.add(cacheKey);
+        return Promise.reject(permanent("Bad storyboard duration"));
     }
-    if (!s.loaded.has(message)) {
+    if (!s.loaded.has(cacheKey)) {
         const op = operation(s, signal);
         const job = (async () => {
             try {
                 op.assert();
+                const client = getClient();
                 const blob = await retry(
-                    () => {
-                        op.assert();
-                        return fetchFile(record.id, message, { quiet: true });
+                    async () => {
+                        const guard = () => {
+                            op.assert();
+                            if (
+                                isMigrating() ||
+                                getClient() !== client ||
+                                !getRecord(record.id) ||
+                                fileKey(getRecord(record.id)) !==
+                                    fileKey(record)
+                            )
+                                throw permanent(
+                                    "Telegram session or video changed",
+                                );
+                        };
+                        guard();
+                        const mode = await getTelegramMode(client);
+                        guard();
+                        if (mode !== namespace(record))
+                            throw permanent(
+                                "Telegram session does not match the video",
+                            );
+                        return fetchFile(record.id, message, {
+                            quiet: true,
+                            client,
+                        });
                     },
                     op.signal,
                     retryDelays,
                 );
                 op.assert();
-                const url = URL.createObjectURL(blob);
+                let imageBlob = blob;
+                if (
+                    ["v", "key", "nonce"].some((key) =>
+                        Object.hasOwn(metadata, key),
+                    )
+                ) {
+                    try {
+                        imageBlob = await decryptPreview(
+                            blob,
+                            metadata,
+                            "storyboard",
+                        );
+                    } catch (error) {
+                        op.assert();
+                        if (error.name === "AbortError") throw error;
+                        s.bad.add(cacheKey);
+                        throw permanent("Invalid encrypted storyboard");
+                    }
+                } else if (blob.type !== "image/jpeg") {
+                    s.bad.add(cacheKey);
+                    throw permanent("Invalid legacy storyboard type");
+                }
+                op.assert();
+                const url = URL.createObjectURL(imageBlob);
                 try {
                     const image = new Image();
                     await once(image, "load", 30000, op.signal, () => {
@@ -551,25 +640,26 @@ function load(record, { signal, scope, retryDelays } = {}) {
                     s.urls.add(url);
                     return {
                         url,
+                        identity: storyboardIdentity(metadata),
                         w: image.naturalWidth / COLS,
                         h: image.naturalHeight / COLS,
                         duration,
                     };
                 } catch (error) {
                     URL.revokeObjectURL(url);
-                    if (error.name !== "AbortError") s.bad.add(message);
+                    if (error.name !== "AbortError") s.bad.add(cacheKey);
                     throw error;
                 }
             } finally {
                 op.close();
             }
         })();
-        s.loaded.set(message, job);
+        s.loaded.set(cacheKey, job);
         job.catch(() => {
-            if (s.loaded.get(message) === job) s.loaded.delete(message);
+            if (s.loaded.get(cacheKey) === job) s.loaded.delete(cacheKey);
         });
     }
-    return s.loaded.get(message);
+    return s.loaded.get(cacheKey);
 }
 
 async function getStoryboard(record, streamSrc, allowMake, options = {}) {
@@ -579,20 +669,21 @@ async function getStoryboard(record, streamSrc, allowMake, options = {}) {
         try {
             return await load(record, options);
         } catch (error) {
-            if (!s.bad.has(record.storyboard.message)) throw error;
+            if (!s.bad.has(boardKey(record))) throw error;
         }
     }
     check(options.signal);
     if (!allowMake || !streamSrc) return null;
-    if (s.failed.has(record.file_id))
+    if (s.failed.has(fileKey(record)))
         throw new Error("Video này đã lỗi khi tạo; hãy tạo lại ảnh xem trước");
     const storyboard = record.storyboard
         ? await regenerate(record, streamSrc, options)
-        : await make(record.file_id, streamSrc, options);
+        : await make(record, streamSrc, options);
     try {
         return await load({ ...record, storyboard }, options);
     } catch (error) {
-        if (s.bad.has(storyboard.message)) s.failed.add(record.file_id);
+        if (s.bad.has(boardKey(record, storyboard)))
+            s.failed.add(fileKey(record));
         throw error;
     }
 }
@@ -637,8 +728,10 @@ export function useStoryboard(record, streamSrc, allowMake) {
     const source = useRef(streamSrc);
     source.current = streamSrc;
     const message = record.storyboard?.message;
+    const cryptoIdentity = storyboardIdentity(record.storyboard);
     const fileId = record.file_id;
     const recordId = record.id;
+    const telegramNamespace = namespace(record);
     const scope = uploadScope();
     // Pointer updates must not cancel the generation that just published them.
     useEffect(() => {
@@ -652,12 +745,13 @@ export function useStoryboard(record, streamSrc, allowMake) {
         lastProgress.current = null;
         setProgress(null);
         return () => controller.abort();
-    }, [recordId, fileId, scope]);
+    }, [recordId, fileId, telegramNamespace, scope]);
     useEffect(() => {
         const controller = active.current;
         let cancelled = false;
         let generated = false;
         if (!fileId || rebuilding.current) return undefined;
+        setBoard(null);
         setMaking(Boolean(allowMake && !message));
         getStoryboard(record, () => source.current(), allowMake, {
             scope,
@@ -672,7 +766,15 @@ export function useStoryboard(record, streamSrc, allowMake) {
             },
         })
             .then((b) => {
-                if ((!cancelled || generated) && !controller.signal.aborted)
+                if (
+                    (!cancelled ||
+                        (generated &&
+                            b?.identity ===
+                                storyboardIdentity(
+                                    getRecord(recordId)?.storyboard,
+                                ))) &&
+                    !controller.signal.aborted
+                )
                     setBoard(b);
             })
             .catch((error) => {
@@ -698,7 +800,15 @@ export function useStoryboard(record, streamSrc, allowMake) {
         };
         // The record object changes on every star or rename.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [message, recordId, fileId, allowMake, scope]);
+    }, [
+        message,
+        cryptoIdentity,
+        recordId,
+        fileId,
+        telegramNamespace,
+        allowMake,
+        scope,
+    ]);
     const rebuild = async () => {
         const controller = active.current;
         if (
@@ -728,7 +838,11 @@ export function useStoryboard(record, streamSrc, allowMake) {
                 { ...record, storyboard },
                 { signal: controller.signal, scope },
             );
-            if (!controller.signal.aborted) {
+            if (
+                !controller.signal.aborted &&
+                b.identity ===
+                    storyboardIdentity(getRecord(recordId)?.storyboard)
+            ) {
                 setBoard(b);
                 setResult("Đã tạo lại ảnh xem trước");
             }

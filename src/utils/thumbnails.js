@@ -7,6 +7,7 @@ import {
     onClientChange,
 } from "../services/telegram";
 import { fetchFile } from "./downloadFile";
+import { decryptPreview } from "../services/previewCrypto";
 
 // Telegram's own limit for a document thumbnail: JPEG, at most 320px a side
 const SIZE = 320;
@@ -254,6 +255,9 @@ export async function encryptedThumb(file) {
 // tab; a few hundred 320px JPEGs is a few MB.
 const cache = new Map();
 const pointers = new Map();
+const identityOf = (record) =>
+    JSON.stringify([record.thumbnailBlob, record.thumbData, record.thumbnail]);
+const hasBlob = (record) => record.thumbnailBlob !== undefined;
 // record key -> { key, record, attempts, promise, resolve }
 const pending = new Map();
 const listeners = new Set();
@@ -339,7 +343,7 @@ function settle(entry, blob) {
     if (pending.get(entry.key) !== entry) return;
     const url = blob ? URL.createObjectURL(blob) : null;
     cache.set(entry.key, url);
-    pointers.set(entry.key, entry.record.thumbnail);
+    pointers.set(entry.key, identityOf(entry.record));
     pending.delete(entry.key);
     entry.resolve(url);
 }
@@ -376,7 +380,11 @@ async function fetchBatch(entries) {
     let messages;
     try {
         messages = await client.getMessages("me", {
-            ids: entries.map((e) => e.record.thumbnail ?? e.record.file_id),
+            ids: entries.map((e) =>
+                hasBlob(e.record)
+                    ? e.record.thumbnailBlob?.message
+                    : e.record.thumbnail ?? e.record.file_id,
+            ),
         });
     } catch (error) {
         entries.forEach((entry) => retry(entry, error));
@@ -399,14 +407,38 @@ async function fetchBatch(entries) {
                 }
                 try {
                     const message = byId.get(
-                        entry.record.thumbnail ?? entry.record.file_id,
+                        hasBlob(entry.record)
+                            ? entry.record.thumbnailBlob?.message
+                            : entry.record.thumbnail ?? entry.record.file_id,
                     );
-                    const blob = entry.record.thumbnail
-                        ? new Blob(
-                              [await client.downloadMedia(message.media, {})],
-                              { type: "image/jpeg" },
-                          )
-                        : await thumbFrom(message, entry.record, client);
+                    let blob;
+                    if (hasBlob(entry.record)) {
+                        const bytes = await client.downloadMedia(
+                            message.media,
+                            {},
+                        );
+                        try {
+                            blob = await decryptPreview(
+                                new Blob([bytes]),
+                                entry.record.thumbnailBlob,
+                                "thumbnail",
+                            );
+                        } catch {
+                            settle(entry, null);
+                            continue;
+                        }
+                    } else
+                        blob = entry.record.thumbnail
+                            ? new Blob(
+                                  [
+                                      await client.downloadMedia(
+                                          message.media,
+                                          {},
+                                      ),
+                                  ],
+                                  { type: "image/jpeg" },
+                              )
+                            : await thumbFrom(message, entry.record, client);
                     settle(entry, blob);
                 } catch (error) {
                     retry(entry, error);
@@ -465,19 +497,33 @@ function dropThumb(record) {
 }
 
 function loadThumb(record) {
-    if (record.thumbData) return Promise.resolve(record.thumbData);
     const key = keyOf(record);
     record = held.get(key) ?? record;
     if (
-        (pointers.has(key) && pointers.get(key) !== record.thumbnail) ||
-        (pending.has(key) &&
-            pending.get(key).record.thumbnail !== record.thumbnail)
+        (pointers.has(key) && pointers.get(key) !== identityOf(record)) ||
+        (pending.has(key) && pending.get(key).identity !== identityOf(record))
     )
         evictThumbnails([record]);
+    if (!hasBlob(record) && record.thumbData) {
+        if (cache.has(key) || pending.has(key)) evictThumbnails([record]);
+        return Promise.resolve(record.thumbData);
+    }
+    if (
+        hasBlob(record) &&
+        (!record.thumbnailBlob ||
+            !Number.isSafeInteger(record.thumbnailBlob.message) ||
+            record.thumbnailBlob.message <= 0)
+    )
+        return Promise.resolve(null);
     if (cache.has(key)) return Promise.resolve(cache.get(key));
     if (pending.has(key)) pending.get(key).cancelled = false;
     if (!pending.has(key)) {
-        const entry = { key, record, attempts: 0 };
+        const entry = {
+            key,
+            record: structuredClone(record),
+            identity: identityOf(record),
+            attempts: 0,
+        };
         entry.promise = new Promise((resolve) => {
             entry.resolve = resolve;
         });
@@ -501,14 +547,24 @@ export function useThumbnail(record, wanted, visible) {
         return () => listeners.delete(changed);
     }, []);
     const ready = wanted && record.file_id != null;
-    const [url, setUrl] = useState(() =>
-        ready ? record.thumbData ?? cache.get(keyOf(record)) ?? null : null,
-    );
+    const active = held.get(keyOf(record)) ?? record;
+    const identity = identityOf(active);
+    const [result, setResult] = useState(() => ({
+        identity,
+        url:
+            ready && pointers.get(keyOf(record)) === identity
+                ? cache.get(keyOf(record))
+                : !hasBlob(active)
+                ? active.thumbData ?? null
+                : null,
+    }));
 
     useEffect(() => {
         if (!ready || !visible) return undefined;
         let cancelled = false;
-        loadThumb(record).then((next) => !cancelled && setUrl(next));
+        loadThumb(record).then(
+            (next) => !cancelled && setResult({ identity, url: next }),
+        );
         return () => {
             cancelled = true;
             dropThumb(record);
@@ -516,7 +572,16 @@ export function useThumbnail(record, wanted, visible) {
         // a new file_id means a fresh upload; the record object itself changes
         // on every rename or star and must not refetch
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [record.id, record.file_id, record.thumbnail, ready, visible, revision]);
+    }, [
+        record.id,
+        record.file_id,
+        record.thumbnail,
+        record.thumbData,
+        identity,
+        ready,
+        visible,
+        revision,
+    ]);
 
-    return ready ? url : null;
+    return ready && result.identity === identity ? result.url : null;
 }

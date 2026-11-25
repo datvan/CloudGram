@@ -205,6 +205,8 @@ export async function importFromTelegram(onProgress) {
         const name = nameOf(message);
         if (
             name === "storyboard.jpg" ||
+            name === "cloudgram-storyboard-v1.bin" ||
+            name === "cloudgram-thumbnail-v1.bin" ||
             name?.startsWith(BACKUP_PREFIX) ||
             /^cgb-[0-9a-f]{16}-.*\.bin$/.test(name ?? "") ||
             isQuickDocument(message)

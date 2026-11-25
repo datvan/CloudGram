@@ -2,6 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import {
+    encryptPreview,
+    decryptPreview,
+} from "../../src/services/previewCrypto.js";
 
 async function harness({
     missed = [],
@@ -20,6 +24,7 @@ async function harness({
     upload = async () => ({}),
     fetchError = null,
     online = () => true,
+    validate = async () => {},
     react = {},
 } = {}) {
     const records = [
@@ -30,14 +35,28 @@ async function harness({
     let sent = 0;
     let fetched = 0;
     let scope = {};
+    let mode = "private";
+    let activeClient;
+    let savedClient;
     let clientChanged;
     const deleted = [];
+    const uploads = [];
+    const messages = new Map();
+    const sentOptions = [];
+    class ApiError extends Error {}
     const updateOptions = [];
     const delays = [];
     const client = {
-        sendFile: async () => ({ id: ++sent + 100 }),
+        sendFile: async (_, options) => {
+            sentOptions.push(options);
+            const id = ++sent + 100;
+            messages.set(id, options.file);
+            return { id };
+        },
         deleteMessages: async (_, ids) => deleted.push(...ids),
     };
+    activeClient = client;
+    savedClient = client;
     class Video extends EventTarget {
         duration = duration;
         videoWidth = width;
@@ -103,7 +122,9 @@ async function harness({
             AbortController,
             DOMException,
             Blob,
-            File: class {},
+            File,
+            encryptPreview,
+            decryptPreview,
             setTimeout(fn, ms) {
                 delays.push(ms);
                 return setTimeout(fn, ms === 30000 ? 1 : ms === 60000 ? 5 : 0);
@@ -134,9 +155,14 @@ async function harness({
                     );
                 }
             },
-            ApiError: class ApiError extends Error {},
+            ApiError,
             describeError: (error) => error?.message ?? String(error),
-            getClient: () => client,
+            getClient: () => activeClient,
+            getTelegramMode: async (candidate) => {
+                await validate();
+                return candidate === savedClient ? mode : null;
+            },
+            isMigrating: () => false,
             isOnline: online,
             onClientChange(fn) {
                 clientChanged = fn;
@@ -152,25 +178,55 @@ async function harness({
                 );
             },
             flush,
-            uploadParts: upload,
-            fetchFile: async () => {
+            uploadParts: async (client, file) => {
+                uploads.push(file);
+                await upload(client, file);
+                return file;
+            },
+            fetchFile: async (_, message) => {
                 fetched++;
                 if (fetchError) throw fetchError;
-                return new Blob();
+                return (
+                    messages.get(message) ??
+                    new Blob(["jpeg"], { type: "image/jpeg" })
+                );
             },
             previewKind: () => "video",
         },
     );
     return {
         ...mod,
+        make: (id, ...args) =>
+            mod.make(
+                records.find((r) => r.file_id === id),
+                ...args,
+            ),
+        load: (record, ...args) =>
+            mod.load(
+                { ...records.find((r) => r.id === record.id), ...record },
+                ...args,
+            ),
         records,
         deleted,
+        uploads,
+        messages,
+        sentOptions,
+        ApiError,
         updateOptions,
         delays,
         client,
         clientChanged: (...args) => clientChanged(...args),
         switchAccount() {
             scope = {};
+        },
+        setMode(value) {
+            mode = value;
+        },
+        setClient(value) {
+            activeClient = value;
+        },
+        replaceSavedClient() {
+            savedClient = {};
         },
         stats: () => ({ draws, sent, fetched }),
     };
@@ -183,6 +239,139 @@ test("partial frames rejected before upload", async () => {
         /Too few/,
     );
     assert.equal(h.stats().sent, 0);
+});
+
+test("session validation retries API outage and fails closed on 401 or changed session", async () => {
+    let calls = 0;
+    const h = await harness({
+        validate: async () => {
+            if (++calls === 1) throw new Error("offline");
+        },
+    });
+    await h.make(1, () => "stream", { retryDelays: [0] });
+    assert.ok(calls >= 3);
+    let loads = 0;
+    const l = await harness({
+        validate: async () => {
+            if (++loads === 1) throw new Error("offline");
+        },
+    });
+    await l.load(
+        { id: "a", storyboard: { message: 50, duration: 81 } },
+        { retryDelays: [0] },
+    );
+    assert.equal(loads, 2);
+    let denied = 0;
+    const d = await harness({
+        validate: async () => {
+            denied++;
+            throw Object.assign(new Error("unauthorized"), { status: 401 });
+        },
+    });
+    await assert.rejects(
+        d.make(1, () => "stream", { retryDelays: [0] }),
+        /unauthorized/,
+    );
+    await assert.rejects(
+        d.load(
+            { id: "a", storyboard: { message: 50, duration: 81 } },
+            { retryDelays: [0] },
+        ),
+        /unauthorized/,
+    );
+    assert.equal(denied, 2);
+    assert.equal(d.stats().fetched, 0);
+    let attempts = 0;
+    const changed = await harness({
+        validate: async () => {
+            if (++attempts === 2) changed.replaceSavedClient();
+        },
+    });
+    await assert.rejects(
+        changed.make(1, () => "stream", { retryDelays: [0] }),
+        /session/,
+    );
+    assert.equal(changed.stats().draws, 0);
+});
+
+test("collision across interrupted migration stays isolated and resumes on shared client", async () => {
+    const h = await harness();
+    h.records.push({ id: "shared", file_id: 1, tg: "shared" });
+    await assert.rejects(
+        h.regenerate(h.records[2], () => "shared"),
+        /session/,
+    );
+    assert.equal(h.stats().draws, 0);
+    await h.regenerate(h.records[0], () => "private");
+    assert.ok(h.records[0].storyboard);
+    assert.deepEqual(h.records[1].storyboard, h.records[0].storyboard);
+    assert.equal(h.records[2].storyboard, undefined);
+    h.setMode("shared");
+    await assert.rejects(
+        h.regenerate(h.records[0], () => "private"),
+        /session/,
+    );
+    await h.regenerate(h.records[2], () => "shared");
+    assert.notEqual(
+        h.records[2].storyboard.message,
+        h.records[0].storyboard.message,
+    );
+    assert.deepEqual(h.deleted, []);
+});
+
+test("session change during storyboard upload fails closed", async () => {
+    let h;
+    h = await harness({ upload: async () => h.setClient({}) });
+    await assert.rejects(
+        h.regenerate(h.records[0], () => "private"),
+        /session/,
+    );
+    assert.equal(h.stats().sent, 0);
+    assert.equal(h.records[0].storyboard, undefined);
+});
+
+test("saved session mismatch rejects before drawing storyboard", async () => {
+    const h = await harness();
+    h.replaceSavedClient();
+    await assert.rejects(
+        h.regenerate(h.records[0], () => "private"),
+        /session/,
+    );
+    assert.equal(h.stats().draws, 0);
+    assert.equal(h.stats().sent, 0);
+});
+
+test("account mode validates exact saved client session", async () => {
+    const source = await readFile(
+        new URL("../../src/services/account.js", import.meta.url),
+        "utf8",
+    );
+    const fn = source
+        .match(
+            /export async function getTelegramMode\(client\) \{[\s\S]*?\n\}/,
+        )[0]
+        .replace("export ", "");
+    const getMode = vm.runInNewContext(`${fn}; getTelegramMode`, {
+        api: { getSession: async () => ({ session: "sealed" }) },
+        decryptJson: async () => ({ session: "saved", telegramMode: "shared" }),
+        dek: {},
+        SESSION_LABEL: "session",
+        sessionString: (client) => client.session,
+    });
+    assert.equal(await getMode({ session: "saved" }), "shared");
+    assert.equal(await getMode({ session: "other" }), null);
+    assert.equal(await getMode(), "shared");
+});
+
+test("stale storyboard source cannot join existing work", async () => {
+    const h = await harness();
+    const stale = { ...h.records[0], tg: "shared" };
+    const job = h.regenerate(h.records[0], () => "private");
+    await assert.rejects(
+        h.regenerate(stale, () => "shared"),
+        /changed/,
+    );
+    await job;
 });
 
 test("progress reaches 81 frames, then uploads and saves", async () => {
@@ -276,8 +465,8 @@ test("omitting progress callback preserves result and side effects", async () =>
     assert.deepEqual(plain.stats(), observed.stats());
     // VM objects have separate prototypes; compare the persisted record data.
     assert.equal(
-        JSON.stringify(plain.records),
-        JSON.stringify(observed.records),
+        plain.records[0].storyboard.v,
+        observed.records[0].storyboard.v,
     );
 });
 
@@ -319,7 +508,10 @@ test("exhausted retries mark file failed", async () => {
         /timed out/,
     );
     assert.equal(h.stats().draws, 3);
-    assert.equal(h.sessionState().failed.has(1), true);
+    assert.equal(
+        h.sessionState().failed.has(JSON.stringify(["private", 1])),
+        true,
+    );
     await assert.rejects(
         h.getStoryboard(h.records[0], () => "stream", true),
         /đã lỗi/,
@@ -381,7 +573,7 @@ for (const referenced of [false, true])
                 .filter((r) => r.file_id === 1)
                 .every((r) => r.storyboard.message === 101),
         );
-        assert.deepEqual(h.deleted, referenced ? [] : [50]);
+        assert.deepEqual(h.deleted, []);
     });
 
 test("concurrent regeneration deduplicates", async () => {
@@ -558,7 +750,7 @@ test("tree save failure restores old pointers and retains old message", async ()
     assert.deepEqual(h.deleted, []);
 });
 
-test("account changes while sending: no tree write, discard using captured client", async () => {
+test("account changes while sending: no tree write, retain sent message", async () => {
     const h = await harness();
     h.client.sendFile = async () => {
         h.switchAccount();
@@ -569,7 +761,7 @@ test("account changes while sending: no tree write, discard using captured clien
         { name: "AbortError" },
     );
     assert.ok(h.records.every((r) => !r.storyboard));
-    assert.deepEqual(h.deleted, [77]);
+    assert.deepEqual(h.deleted, []);
 });
 
 test("lease loss stops active generation", async () => {
@@ -698,7 +890,7 @@ for (const rebuild of [false, true])
         });
         oldStoryboard(h);
         runner.render(h, h.records[0]);
-        const loading = h.sessionState().loaded.get(50);
+        const loading = [...h.sessionState().loaded.values()][0];
         if (rebuild) await loading;
         else await assert.rejects(loading, { name: "AbortError" });
         await tick();
@@ -790,7 +982,7 @@ for (const fail of [false, true])
         } else {
             assert.ok(after[4]);
             assert.equal(h.records[0].storyboard.message, 101);
-            assert.deepEqual(h.deleted, [50]);
+            assert.deepEqual(h.deleted, []);
         }
         runner.close();
     });
@@ -932,4 +1124,164 @@ test("stale player action cannot regenerate into another account", async () => {
     assert.equal(h.stats().sent, 0);
     assert.equal(h.records[0].storyboard.message, 50);
     runner.close();
+});
+
+test("ciphertext roundtrip, legacy read and tamper rejection", async () => {
+    const h = await harness();
+    const meta = await h.make(1, () => "stream");
+    assert.equal(h.uploads[0].type, "application/octet-stream");
+    assert.equal(h.uploads[0].name, "cloudgram-storyboard-v1.bin");
+    assert.deepEqual(Object.keys(h.sentOptions[0]).sort(), [
+        "file",
+        "forceDocument",
+    ]);
+    assert.equal(h.sentOptions[0].forceDocument, true);
+    assert.notEqual(await h.uploads[0].text(), "jpeg");
+    assert.equal(
+        await (await decryptPreview(h.uploads[0], meta, "storyboard")).text(),
+        "jpeg",
+    );
+    await h.load(h.records[0]);
+    await h.load({ id: "a", storyboard: { message: 50, duration: 81 } });
+    await assert.rejects(h.load({ id: "a", storyboard: { ...meta, v: 2 } }));
+    await assert.rejects(
+        h.load({ id: "a", storyboard: { ...meta, key: "bad" } }),
+    );
+    h.messages.set(meta.message, new Blob([new Uint8Array(40)]));
+    await assert.rejects(
+        h.load({
+            id: "a",
+            storyboard: { ...meta, nonce: btoa("123456789012") },
+        }),
+    );
+});
+test("each upload attempt has fresh encryption", async () => {
+    let n = 0;
+    const h = await harness({
+        upload: async () => {
+            if (++n === 1) throw new Error("retry");
+        },
+    });
+    const meta = await h.make(1, () => "stream", { retryDelays: [0] });
+    assert.equal(h.uploads.length, 2);
+    assert.notDeepEqual(
+        await h.uploads[0].arrayBuffer(),
+        await h.uploads[1].arrayBuffer(),
+    );
+    assert.equal(meta.v, 1);
+    await assert.rejects(decryptPreview(h.uploads[0], meta, "storyboard"));
+});
+test("partial rejected flush keeps both messages", async () => {
+    let h;
+    h = await harness({
+        flush: async () => {
+            const e = new h.ApiError("partial");
+            e.status = 400;
+            throw e;
+        },
+    });
+    oldStoryboard(h);
+    await assert.rejects(
+        h.regenerate(h.records[0], () => "stream"),
+        /partial/,
+    );
+    assert.deepEqual(h.deleted, []);
+    assert.ok(h.messages.has(101));
+});
+
+for (const change of ["identity", "delete", "replace", "add linked"]) {
+    test(`generation detects concurrent ${change}`, async () => {
+        let h;
+        h = await harness({
+            upload: async () => {
+                if (change === "identity")
+                    h.records[0].storyboard.duration = 42;
+                if (change === "delete") h.records.splice(0, 1);
+                if (change === "replace") h.records[0].file_id = 2;
+                if (change === "add linked")
+                    h.records.push({ id: "c", file_id: 1 });
+            },
+        });
+        oldStoryboard(h);
+        await assert.rejects(
+            h.regenerate(h.records[0], () => "stream"),
+            /changed/,
+        );
+        assert.equal(h.updateOptions.length, 0);
+        assert.equal(h.messages.has(101), change === "add linked");
+        assert.deepEqual(h.deleted, []);
+    });
+}
+
+test("partial flush rollback preserves concurrently replaced records and metadata", async () => {
+    let h;
+    h = await harness({
+        flush: async () => {
+            h.records[0].file_id = 2;
+            h.records[1].storyboard = {
+                ...h.records[1].storyboard,
+                nonce: "changed",
+            };
+            throw new Error("partial");
+        },
+    });
+    oldStoryboard(h);
+    await assert.rejects(
+        h.regenerate(h.records[0], () => "stream"),
+        /partial/,
+    );
+    assert.equal(h.records[0].storyboard.message, 101);
+    assert.equal(h.records[1].storyboard.nonce, "changed");
+    assert.deepEqual(h.deleted, []);
+});
+
+test("bad encrypted identity permits corrected metadata and regeneration", async () => {
+    const h = await harness();
+    const meta = await h.make(1, () => "stream");
+    const wrong = { ...meta, key: btoa("x".repeat(32)) };
+    await assert.rejects(
+        h.load({ id: "a", storyboard: wrong }),
+        /Invalid encrypted/,
+    );
+    const fetched = h.stats().fetched;
+    await assert.rejects(
+        h.load({ id: "a", storyboard: wrong }),
+        /Bad storyboard/,
+    );
+    assert.equal(h.stats().fetched, fetched);
+    await h.load({ id: "a", storyboard: meta });
+    h.records.forEach((r) => (r.storyboard = wrong));
+    await h.getStoryboard(h.records[0], () => "stream", true);
+    assert.equal(h.records[0].storyboard.message, 102);
+    assert.deepEqual(h.deleted, []);
+});
+
+test("tampered ciphertext and incomplete metadata are permanent, network is retryable", async () => {
+    const h = await harness();
+    const meta = await h.make(1, () => "stream");
+    h.messages.set(meta.message, new Blob([new Uint8Array(40)]));
+    await assert.rejects(
+        h.load({ id: "a", storyboard: meta }),
+        /Invalid encrypted/,
+    );
+    await assert.rejects(
+        h.load({
+            id: "a",
+            storyboard: { message: 4, duration: 81, key: meta.key },
+        }),
+        /Invalid encrypted/,
+    );
+    await assert.rejects(
+        h.load({
+            id: "a",
+            storyboard: { message: meta.message, duration: 81 },
+        }),
+        /Invalid legacy storyboard type/,
+    );
+    const network = await harness({ fetchError: new Error("network") });
+    const record = { id: "a", storyboard: meta };
+    await assert.rejects(network.load(record, { retryDelays: [0] }), /network/);
+    await assert.rejects(network.load(record, { retryDelays: [] }), /network/);
+    assert.equal(network.stats().fetched, 3);
+    assert.equal(network.sessionState().bad.size, 0);
 });

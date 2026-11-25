@@ -641,11 +641,13 @@ async function describeMe(client) {
 
 // ----- Telegram link -------------------------------------------------------------------
 
-export async function getTelegramMode() {
+export async function getTelegramMode(client) {
     const { session } = await api.getSession();
     if (!session) return null;
     const saved = await decryptJson(dek, session, SESSION_LABEL);
-    return saved.session ? saved.telegramMode ?? "private" : null;
+    return saved.session && (!client || sessionString(client) === saved.session)
+        ? saved.telegramMode ?? "private"
+        : null;
 }
 
 async function saveTelegramSession(client, telegramMode) {

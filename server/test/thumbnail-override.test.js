@@ -2,6 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { File } from "node:buffer";
+import {
+    encryptPreview,
+    decryptPreview,
+} from "../../src/services/previewCrypto.js";
 
 async function harness({
     missed = [],
@@ -13,8 +18,9 @@ async function harness({
     height = 180,
     metadataTimeouts = 0,
     flush = async () => {},
-    upload = async () => ({}),
+    upload = async (_, file) => file,
     online = () => true,
+    validate = async () => {},
     image = false,
     onSeek = () => {},
     fetchFile = async () => new Blob(),
@@ -27,18 +33,28 @@ async function harness({
     let draws = 0;
     let sent = 0;
     let scope = {};
+    let mode = "private";
+    let activeClient;
+    let savedClient;
     let clientChanged;
     const deleted = [];
     const updateOptions = [];
     const evicted = [];
     const captured = [];
     const delays = [];
+    const uploads = [];
+    const encrypted = [];
     const client = {
         getMessages: async () => [{ media: { document: { size: 100 } } }],
         downloadMedia: async () => new Uint8Array([1]),
-        sendFile: async () => ({ id: ++sent + 100 }),
+        sendFile: async (_, options) => {
+            uploads.push(options);
+            return { id: ++sent + 100 };
+        },
         deleteMessages: async (_, ids) => deleted.push(...ids),
     };
+    activeClient = client;
+    savedClient = client;
     class Video extends EventTarget {
         duration = duration;
         videoWidth = width;
@@ -118,7 +134,14 @@ async function harness({
             AbortController,
             DOMException,
             Blob,
-            File: class {},
+            structuredClone,
+            encryptPreview: async (...args) => {
+                const result = await encryptPreview(...args);
+                encrypted.push(result);
+                return result;
+            },
+            btoa,
+            File,
             setTimeout(fn, ms) {
                 delays.push(ms);
                 return setTimeout(fn, ms === 30000 ? 1 : ms === 60000 ? 5 : 0);
@@ -136,7 +159,12 @@ async function harness({
                           },
             },
             URL: { createObjectURL: () => "blob:sprite", revokeObjectURL() {} },
-            getClient: () => client,
+            getClient: () => activeClient,
+            getTelegramMode: async (candidate) => {
+                await validate();
+                return candidate === savedClient ? mode : null;
+            },
+            isMigrating: () => false,
             isOnline: online,
             onClientChange(fn) {
                 clientChanged = fn;
@@ -149,6 +177,11 @@ async function harness({
                 Object.assign(
                     records.find((r) => r.id === id),
                     patch,
+                    {
+                        updatedAt:
+                            (records.find((r) => r.id === id).updatedAt ?? 0) +
+                            1,
+                    },
                 );
             },
             flush,
@@ -164,10 +197,21 @@ async function harness({
         evicted,
         captured,
         delays,
+        uploads,
+        encrypted,
         client,
         clientChanged: (...args) => clientChanged(...args),
         switchAccount() {
             scope = {};
+        },
+        setMode(value) {
+            mode = value;
+        },
+        setClient(value) {
+            activeClient = value;
+        },
+        replaceSavedClient() {
+            savedClient = {};
         },
         stats: () => ({ draws, sent }),
     };
@@ -175,6 +219,82 @@ async function harness({
 
 const make = (h, options = {}) =>
     h.regenerateThumbnail(h.records[0], { retryDelays: [0, 0], ...options });
+
+test("session validation retries outage and rejects 401 or changed session on retry", async () => {
+    let calls = 0;
+    const h = await harness({
+        validate: async () => {
+            if (++calls === 1) throw new Error("offline");
+        },
+    });
+    await make(h);
+    assert.ok(calls >= 3);
+    let denied = 0;
+    const d = await harness({
+        validate: async () => {
+            denied++;
+            throw Object.assign(new Error("unauthorized"), { status: 401 });
+        },
+    });
+    await assert.rejects(make(d), /unauthorized/);
+    assert.equal(denied, 1);
+    assert.equal(d.stats().sent, 0);
+    let attempts = 0;
+    const changed = await harness({
+        validate: async () => {
+            if (++attempts === 2) changed.replaceSavedClient();
+        },
+    });
+    await assert.rejects(make(changed), /session/);
+    assert.equal(changed.stats().sent, 0);
+});
+
+test("collision across interrupted migration stays isolated and resumes on shared client", async () => {
+    const h = await harness();
+    h.records.push({ id: "shared", file_id: 1, tg: "shared" });
+    await assert.rejects(h.regenerateThumbnail(h.records[2]), /session/);
+    assert.equal(h.stats().draws, 0);
+    await make(h);
+    assert.deepEqual(h.records[0].thumbnailBlob, h.records[1].thumbnailBlob);
+    assert.equal(h.records[2].thumbnailBlob, undefined);
+    h.setMode("shared");
+    await assert.rejects(make(h), /session/);
+    await h.regenerateThumbnail(h.records[2]);
+    assert.notEqual(
+        h.records[2].thumbnailBlob.message,
+        h.records[0].thumbnailBlob.message,
+    );
+    assert.deepEqual(h.deleted, []);
+});
+
+test("session change during thumbnail upload fails closed", async () => {
+    let h;
+    h = await harness({
+        upload: async () => {
+            h.setClient({});
+            return {};
+        },
+    });
+    await assert.rejects(make(h), /thay đổi/);
+    assert.equal(h.stats().sent, 0);
+    assert.equal(h.records[0].thumbnailBlob, undefined);
+});
+
+test("saved session mismatch rejects before drawing thumbnail", async () => {
+    const h = await harness();
+    h.replaceSavedClient();
+    await assert.rejects(make(h), /session/);
+    assert.equal(h.stats().draws, 0);
+    assert.equal(h.stats().sent, 0);
+});
+
+test("stale thumbnail source cannot join existing work", async () => {
+    const h = await harness();
+    const stale = { ...h.records[0], tg: "shared" };
+    const job = make(h);
+    await assert.rejects(h.regenerateThumbnail(stale), /thay đổi/);
+    await job;
+});
 test("blank first candidate skipped; seek listener attached before currentTime", async () => {
     const h = await harness({ dark: true, duration: 100 });
     await make(h);
@@ -205,9 +325,12 @@ for (const referenced of [true, false])
         assert.ok(
             h.records
                 .filter((r) => r.file_id === 1)
-                .every((r) => r.thumbnail === 101),
+                .every(
+                    (r) =>
+                        r.thumbnail === 50 && r.thumbnailBlob.message === 101,
+                ),
         );
-        assert.deepEqual(h.deleted, referenced ? [] : [50]);
+        assert.deepEqual(h.deleted, []);
         assert.deepEqual(h.evicted, ["a", "b"]);
     });
 test("dedup same-file concurrent clicks", async () => {
@@ -227,16 +350,6 @@ test("abort during seek writes nothing", async () => {
     await assert.rejects(job, { name: "AbortError" });
     assert.equal(h.stats().sent, 0);
     assert.ok(h.records.every((r) => r.thumbnail === 50));
-});
-test("account switch during send discards with original client", async () => {
-    const h = await harness();
-    h.client.sendFile = async () => {
-        h.switchAccount();
-        return { id: 77 };
-    };
-    await assert.rejects(make(h), { name: "AbortError" });
-    assert.ok(h.records.every((r) => r.thumbnail === 50));
-    assert.deepEqual(h.deleted, [77]);
 });
 test("save failure restores old pointers, keeps both messages and cache", async () => {
     const h = await harness({
@@ -264,7 +377,7 @@ test("transient decode/stream failure retries; permanent failure stops", async (
 test("image original regenerated; over 100 MiB rejected immediately", async () => {
     const h = await harness({ image: true });
     await make(h);
-    assert.equal(h.records[0].thumbnail, 101);
+    assert.equal(h.records[0].thumbnailBlob.message, 101);
     const big = await harness({ image: true });
     big.records[0].size = 100 * 1024 * 1024 + 1;
     await assert.rejects(make(big), /100 MiB/);
@@ -294,7 +407,7 @@ test("encrypted image regeneration uses decrypted original", async () => {
     };
     await make(h);
     assert.equal(reads, 1);
-    assert.equal(h.records[0].thumbnail, 101);
+    assert.equal(h.records[0].thumbnailBlob.message, 101);
 });
 
 async function load(path, globals, exports) {
@@ -316,6 +429,8 @@ async function load(path, globals, exports) {
         console,
         setTimeout,
         clearTimeout,
+        structuredClone,
+        decryptPreview,
         ...globals,
     });
 }
@@ -401,11 +516,11 @@ test("thumbnail survives encrypted drive save/load round trip", async () => {
     );
     await h.openDrive({});
     h.createFile({ name: "image.jpg" });
-    h.update("a", { file_id: 1, thumbnail: 50 });
+    h.update("a", { file_id: 1, thumbData: "data:image/jpeg;base64,anBlZw==" });
     await h.flush();
     h.closeDrive();
     await h.openDrive({});
-    assert.equal(h.getRecord("a").thumbnail, 50);
+    assert.equal(h.getRecord("a").thumbData, "data:image/jpeg;base64,anBlZw==");
 });
 
 test("stale account scope rejected before draw or upload", async () => {
@@ -455,6 +570,121 @@ test("FLOOD_WAIT/offline preserve retry budget", async () => {
     assert.equal(h.stats().draws, 4);
     assert.ok(h.delays.includes(1000));
 });
+test("transient upload and send errors retry with fresh encryption", async () => {
+    let attempts = 0;
+    const files = [];
+    const h = await harness({
+        upload: async (_, file) => {
+            files.push(file);
+            if (++attempts === 1) throw new Error("network");
+            return file;
+        },
+    });
+    let sends = 0;
+    h.client.sendFile = async () => {
+        if (++sends === 1)
+            throw Object.assign(new Error("FLOOD_WAIT"), { seconds: 1 });
+        return { id: 101 };
+    };
+    await make(h);
+    assert.equal(attempts, 3);
+    assert.equal(sends, 2);
+    assert.ok(h.delays.includes(1000));
+    assert.equal(new Set(h.encrypted.map((x) => x.metadata.key)).size, 3);
+    assert.equal(new Set(h.encrypted.map((x) => x.metadata.nonce)).size, 3);
+    for (const [i, file] of files.entries()) {
+        assert.equal(file.type, "application/octet-stream");
+        assert.notEqual(await file.text(), "jpeg");
+        assert.equal(
+            await (
+                await decryptPreview(file, h.encrypted[i].metadata, "thumbnail")
+            ).text(),
+            "jpeg",
+        );
+    }
+    assert.deepEqual(h.deleted, []);
+});
+
+test("upload retry stops on cancellation, account switch, stale record and permanent errors", async () => {
+    for (const scenario of [
+        "cancel",
+        "account",
+        "session",
+        "stale",
+        "permanent",
+    ]) {
+        let h;
+        let attempts = 0;
+        const controller = new AbortController();
+        h = await harness({
+            upload: async () => {
+                attempts++;
+                if (scenario === "cancel") controller.abort();
+                if (scenario === "account") h.switchAccount();
+                if (scenario === "session") h.setClient({});
+                if (scenario === "stale") h.records[0].thumbnail = 99;
+                throw Object.assign(new Error("upload failure"), {
+                    permanent: scenario === "permanent",
+                });
+            },
+        });
+        await assert.rejects(make(h, { signal: controller.signal }));
+        assert.equal(attempts, 1, scenario);
+        assert.equal(h.stats().sent, 0);
+        assert.deepEqual(h.deleted, []);
+    }
+});
+
+test("upload retries are bounded and offline does not consume budget", async () => {
+    let attempts = 0;
+    let offline = false;
+    const h = await harness({
+        online: () => {
+            if (offline) {
+                offline = false;
+                return false;
+            }
+            return true;
+        },
+        upload: async () => {
+            attempts++;
+            if (attempts === 1) offline = true;
+            throw new Error("network");
+        },
+    });
+    await assert.rejects(make(h), /network/);
+    assert.equal(attempts, 4);
+    assert.deepEqual(h.deleted, []);
+});
+
+test("send failure stops retry after cancellation or session and record changes", async () => {
+    for (const scenario of [
+        "cancel",
+        "account",
+        "session",
+        "stale",
+        "permanent",
+    ]) {
+        const controller = new AbortController();
+        const h = await harness();
+        let sends = 0;
+        h.client.sendFile = async () => {
+            sends++;
+            if (scenario === "cancel") controller.abort();
+            if (scenario === "account") h.switchAccount();
+            if (scenario === "session") h.setClient({});
+            if (scenario === "stale") h.records[0].thumbnail = 99;
+            throw Object.assign(new Error("send failure"), {
+                permanent: scenario === "permanent",
+            });
+        };
+        await assert.rejects(make(h, { signal: controller.signal }));
+        assert.equal(sends, 1, scenario);
+        assert.equal(h.encrypted.length, 1);
+        assert.deepEqual(h.deleted, []);
+    }
+});
+
 test("loader prefers full override JPEG; hold prevents early display; null cache reloads", async () => {
     const requested = [],
         revoked = [],
@@ -572,4 +802,226 @@ test("scaled image uses existing JPEG 320px / quality 0.82 and closes bitmap", a
     assert.equal(canvas.height, 160);
     assert.deepEqual(encoded, ["image/jpeg", 0.82]);
     assert.equal(closed, true);
+});
+
+test("regeneration uploads ciphertext and preserves legacy metadata", async () => {
+    const h = await harness();
+    await make(h);
+    assert.equal(h.stats().sent, 1);
+    assert.deepEqual(h.deleted, []);
+    assert.ok(
+        h.records.every(
+            (r) => r.thumbnail === 50 && r.thumbnailBlob.message === 101,
+        ),
+    );
+    const { file, forceDocument, ...extra } = h.uploads[0];
+    assert.equal(file.name, "cloudgram-thumbnail-v1.bin");
+    assert.equal(file.type, "application/octet-stream");
+    assert.equal(forceDocument, true);
+    assert.deepEqual(Object.keys(extra), []);
+    assert.notEqual(await file.text(), "jpeg");
+    assert.equal(
+        await (
+            await decryptPreview(file, h.records[0].thumbnailBlob, "thumbnail")
+        ).text(),
+        "jpeg",
+    );
+});
+
+test("failed partial save restores only matching thumbnail metadata", async () => {
+    let h;
+    h = await harness({
+        flush: async () => {
+            h.records[1].thumbData = "concurrent";
+            h.records[2].thumbnailBlob = {
+                ...h.records[2].thumbnailBlob,
+                nonce: "replacement",
+            };
+            h.records[3].file_id = 2;
+            throw new Error("partial save");
+        },
+    });
+    h.records[0].thumbData = "old-a";
+    h.records[1].thumbData = "old-b";
+    h.records[0].thumbnailBlob = { message: 90, nonce: "old" };
+    h.records.push({ id: "c", file_id: 1 }, { id: "d", file_id: 1 });
+    await assert.rejects(make(h), /partial save/);
+    assert.equal(h.records[0].thumbnail, 50);
+    assert.equal(h.records[0].thumbData, "old-a");
+    assert.equal(h.records[1].thumbData, "concurrent");
+    assert.deepEqual(h.records[0].thumbnailBlob, { message: 90, nonce: "old" });
+    assert.equal(h.records[1].thumbnailBlob, undefined);
+    assert.equal(h.records[0].updatedAt, 2);
+    assert.equal(h.records[1].updatedAt, 2);
+    assert.equal(h.records[2].thumbnailBlob.nonce, "replacement");
+    assert.equal(h.records[3].thumbnailBlob.message, 101);
+    assert.deepEqual(h.deleted, []);
+    assert.deepEqual(h.evicted, ["b", "c", "d"]);
+});
+
+test("in-place metadata change during failed save is preserved", async () => {
+    let h;
+    h = await harness({
+        flush: async () => {
+            h.records[0].thumbnailBlob.extra = "concurrent";
+            throw new Error("partial save");
+        },
+    });
+    h.records.splice(1);
+    await assert.rejects(make(h), /partial save/);
+    assert.equal(h.records[0].thumbnailBlob.extra, "concurrent");
+    assert.deepEqual(h.deleted, []);
+});
+
+test("account change during save never rolls back another account", async () => {
+    let h;
+    h = await harness({
+        flush: async () => {
+            h.switchAccount();
+            h.records[0].thumbData = "other-account";
+            throw new Error("save failed");
+        },
+    });
+    await assert.rejects(make(h), /save failed/);
+    assert.equal(h.records[0].thumbData, "other-account");
+    assert.equal(h.records[0].thumbnailBlob.message, 101);
+    assert.deepEqual(h.deleted, []);
+});
+
+test("concurrent cover change during draw is not overwritten", async () => {
+    let h;
+    h = await harness({
+        onSeek: () => {
+            h.records[1].thumbData = "concurrent";
+        },
+    });
+    await assert.rejects(make(h), /đã thay đổi/);
+    assert.equal(h.records[1].thumbData, "concurrent");
+    assert.equal(h.records[0].thumbnail, 50);
+});
+
+test("deleted or replaced source during draw cannot publish", async () => {
+    for (const deleted of [true, false]) {
+        let h;
+        h = await harness({
+            onSeek: () => {
+                if (deleted) h.records.splice(0, 1);
+                else h.records[0].file_id = 2;
+            },
+        });
+        await assert.rejects(make(h), /đã thay đổi/);
+        assert.equal(h.stats().sent, 0);
+        assert.deepEqual(h.deleted, []);
+    }
+});
+
+test("encrypted loader authenticates and changes identity for all metadata", async () => {
+    const encrypted = await encryptPreview(new Blob(["jpeg"]), "thumbnail");
+    let bytes = new Uint8Array(await encrypted.ciphertext.arrayBuffer());
+    let downloads = 0;
+    let networkFailure = false;
+    const urls = [],
+        revoked = [];
+    const h = await load(
+        "../../src/utils/thumbnails.js",
+        {
+            onClientChange() {},
+            hasClient: () => true,
+            isOnline: () => true,
+            Blob,
+            getClient: () => ({
+                getMessages: async (_, { ids }) =>
+                    ids.map((id) => ({ id, media: {} })),
+                downloadMedia: async () => {
+                    downloads++;
+                    if (networkFailure) {
+                        networkFailure = false;
+                        throw new Error("network");
+                    }
+                    return bytes;
+                },
+            }),
+            setTimeout: (fn) => {
+                queueMicrotask(fn);
+                return 1;
+            },
+            URL: {
+                createObjectURL: (blob) => {
+                    urls.push(blob);
+                    return `blob:${urls.length}`;
+                },
+                revokeObjectURL: (url) => revoked.push(url),
+            },
+        },
+        "loadThumb,drain",
+    );
+    const record = {
+        id: "a",
+        file_id: 1,
+        thumbnail: 50,
+        thumbData: "plaintext",
+        thumbnailBlob: { ...encrypted.metadata, message: 101 },
+    };
+    assert.equal(await h.loadThumb(record), "blob:1");
+    assert.equal(await urls[0].text(), "jpeg");
+    networkFailure = true;
+    assert.equal(await h.loadThumb({ ...record, id: "network" }), "blob:2");
+    assert.equal(downloads, 3);
+    bytes = bytes.slice();
+    bytes[0] ^= 1;
+    assert.equal(
+        await h.loadThumb({
+            ...record,
+            thumbnailBlob: {
+                ...record.thumbnailBlob,
+                nonce: btoa("123456789012"),
+            },
+        }),
+        null,
+    );
+    assert.deepEqual(revoked, ["blob:1"]);
+    assert.equal(downloads, 4);
+    assert.equal(await h.loadThumb({ ...record, thumbnailBlob: null }), null);
+});
+
+test("empty and oversized generated JPEG fail without writes", async () => {
+    for (const size of [0, 200 * 1024 + 1]) {
+        const h = await harness({
+            image: true,
+            shrink: async () =>
+                new Blob([new Uint8Array(size)], { type: "image/jpeg" }),
+        });
+        await assert.rejects(make(h), /không hợp lệ/);
+        assert.equal(h.records[0].thumbnail, 50);
+        assert.equal(h.stats().sent, 0);
+    }
+});
+
+test("tree data respects hold and replaces cached legacy thumbnail", async () => {
+    const revoked = [];
+    const h = await load(
+        "../../src/utils/thumbnails.js",
+        {
+            onClientChange() {},
+            URL: { revokeObjectURL: (url) => revoked.push(url) },
+        },
+        "cache,pointers,holdThumbnails,loadThumb",
+    );
+    const old = { id: "a", file_id: 1, thumbnail: 50 };
+    h.cache.set("a:1", "blob:old");
+    h.pointers.set("a:1", JSON.stringify([null, null, 50]));
+    const release = h.holdThumbnails([old]);
+    const next = {
+        ...old,
+        thumbnail: undefined,
+        thumbData: "data:image/jpeg;base64,anBlZw==",
+    };
+    assert.equal(await h.loadThumb(next), "blob:old");
+    release();
+    assert.equal(await h.loadThumb(next), next.thumbData);
+    assert.deepEqual(revoked, ["blob:old"]);
+    assert.equal(
+        await h.loadThumb({ ...next, thumbData: "new-data" }),
+        "new-data",
+    );
 });
