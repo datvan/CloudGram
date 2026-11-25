@@ -95,7 +95,15 @@ async function realDeps() {
 
 export async function reencryptRecord(
     record,
-    { source, destination, deleteOriginal = true, onProgress, signal, deps },
+    {
+        source,
+        destination,
+        deleteOriginal = true,
+        onProgress,
+        signal,
+        deps,
+        extraChanges,
+    },
 ) {
     const api = deps ?? (await realDeps());
     const resume = { encrypted: true };
@@ -129,7 +137,11 @@ export async function reencryptRecord(
                 JSON.stringify(messagesOf(record))
         )
             throw new Error("File changed during encryption");
-        const changes = { ...uploaded.changes, file_id: uploaded.message.id };
+        const changes = {
+            ...uploaded.changes,
+            ...extraChanges,
+            file_id: uploaded.message.id,
+        };
         if (!changes.parts) changes.parts = undefined;
         if (!changes.enc) changes.enc = undefined;
         changed = true;
@@ -143,6 +155,7 @@ export async function reencryptRecord(
             const changes = {};
             for (const key of Object.keys({
                 ...uploaded.changes,
+                ...extraChanges,
                 file_id: null,
                 parts: null,
                 enc: null,

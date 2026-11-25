@@ -69,10 +69,27 @@ test("flush failure restores record and deletes new message", async () => {
     f.deps.flush = async () => {
         if (!calls++) throw new Error("flush failed");
     };
-    await assert.rejects(f.run(), /flush failed/);
+    await assert.rejects(
+        f.run({ extraChanges: { tg: "shared" } }),
+        /flush failed/,
+    );
     assert.equal(f.current().file_id, 1);
     assert.equal(f.current().enc, undefined);
+    assert.equal(f.current().tg, undefined);
     assert.deepEqual(f.events.at(-1), ["destination", [10]]);
+});
+
+test("encrypted source moves and marker saves with new message", async () => {
+    const f = fixture({
+        id: "a",
+        type: "file",
+        file_id: 1,
+        enc: { key: "old" },
+    });
+    await f.run({ extraChanges: { tg: "shared" }, deleteOriginal: false });
+    assert.equal(f.current().tg, "shared");
+    assert.equal(f.current().file_id, 10);
+    assert.deepEqual(f.current().enc, { key: "new" });
 });
 
 test("shared old message in trash is retained", async () => {
