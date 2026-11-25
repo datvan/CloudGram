@@ -10,7 +10,7 @@
  */
 import { getClient, isOnline, onClientChange } from "./telegram";
 import { locate } from "../utils/downloadFile";
-import { filePart } from "../utils/transfer";
+import { encryptedRange, filePart } from "../utils/transfer";
 import { messagesOf } from "../utils/splitPlan";
 import { typeOf } from "../utils/thumbnails";
 import { STREAM_GUARD } from "../config/security";
@@ -35,6 +35,7 @@ const files = new Map();
 const names = new Map();
 /** fileId -> the messages of a file sent in slices (uploadFile.js) */
 const slices = new Map();
+const records = new Map();
 /** fileId -> bytes a second, once the player knows the duration */
 const bitrates = new Map();
 /** `${fileId}:${index}` -> { promise, size, task }, oldest use first */
@@ -66,6 +67,7 @@ export const streamOffReason = () => offReason;
 
 /** The URL a <video> plays `record` from. */
 export function streamUrl(record, { quiet = false } = {}) {
+    records.set(record.file_id, record);
     names.set(record.file_id, record.name);
     if (record.parts?.length > 1)
         slices.set(record.file_id, messagesOf(record));
@@ -123,13 +125,23 @@ function info(fileId, fresh = false) {
                     ? file.mimeType
                     : typeOf({ name: names.get(fileId) ?? "" }) ||
                       "application/octet-stream";
-            if (ids.length === 1) return { ...file, type };
+            const record = records.get(fileId);
+            if (ids.length === 1)
+                return {
+                    ...file,
+                    cipherSize: file.size,
+                    size: record?.enc?.size ?? file.size,
+                    enc: record?.enc,
+                    type,
+                };
             // every slice but the last is whole MiB, so a part never
             // straddles two of them
             let start = 0;
-            const pieces = found.map((f) => {
-                const piece = { ...f, start };
-                start += f.size;
+            const pieces = found.map((f, i) => {
+                const enc = record?.parts?.[i]?.enc;
+                const size = enc?.size ?? f.size;
+                const piece = { ...f, cipherSize: f.size, start, size, enc };
+                start += size;
                 return piece;
             });
             return { ...file, size: start, type, pieces };
@@ -159,12 +171,62 @@ function slicePart(file, index) {
 
 async function fetchPart(fileId, index) {
     const file = await info(fileId);
+    const read = async (current) => {
+        if (!current.enc && !current.pieces?.some((p) => p.enc))
+            return filePart(getClient(), ...slicePart(current, index), PART);
+        const start = index * PART;
+        const end = Math.min(current.size, start + PART);
+        const out = new Uint8Array(end - start);
+        for (const piece of current.pieces ?? [{ ...current, start: 0 }]) {
+            const from = Math.max(start, piece.start);
+            const to = Math.min(end, piece.start + piece.size);
+            if (to <= from) continue;
+            if (piece.enc) {
+                out.set(
+                    await encryptedRange(
+                        getClient(),
+                        piece,
+                        piece.enc,
+                        from - piece.start,
+                        to - piece.start - 1,
+                    ),
+                    from - start,
+                );
+            } else {
+                const a = from - piece.start;
+                const b = to - piece.start;
+                for (
+                    let block = Math.floor(a / PART);
+                    block <= Math.floor((b - 1) / PART);
+                    block += 1
+                ) {
+                    const bytes = await filePart(
+                        getClient(),
+                        piece,
+                        block,
+                        PART,
+                    );
+                    const begin = Math.max(a, block * PART);
+                    const finish = Math.min(b, block * PART + bytes.length);
+                    if (finish <= begin) throw new Error("File truncated");
+                    out.set(
+                        bytes.subarray(
+                            begin - block * PART,
+                            finish - block * PART,
+                        ),
+                        piece.start + begin - start,
+                    );
+                }
+            }
+        }
+        return out;
+    };
     try {
-        return await filePart(getClient(), ...slicePart(file, index), PART);
+        return await read(file);
     } catch (error) {
         if (!referenceExpired(error)) throw error;
         const fresh = await info(fileId, true);
-        return filePart(getClient(), ...slicePart(fresh, index), PART);
+        return read(fresh);
     }
 }
 
@@ -367,6 +429,7 @@ onClientChange((client) => {
     files.clear();
     names.clear();
     slices.clear();
+    records.clear();
     bitrates.clear();
     failed.clear();
     parts.clear();

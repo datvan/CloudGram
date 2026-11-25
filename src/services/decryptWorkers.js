@@ -20,6 +20,100 @@ import { IGE } from "telegram/crypto/IGE";
 import { BinaryReader } from "telegram/extensions";
 import { MTProtoState } from "telegram/network/MTProtoState";
 import { TLMessage } from "telegram/tl/core";
+import { decryptChunk } from "./fileCrypto";
+
+function fileWorkerMain() {
+    self.addEventListener("message", async ({ data }) => {
+        try {
+            const iv = new Uint8Array(12);
+            iv.set(
+                Uint8Array.from(atob(data.enc.nonce), (c) => c.charCodeAt(0)),
+            );
+            new DataView(iv.buffer).setBigUint64(4, BigInt(data.index));
+            const additionalData = new TextEncoder().encode(
+                `cg-file-v1:${data.index}:${data.isLast ? "1" : "0"}`,
+            );
+            const out = new Uint8Array(
+                await crypto.subtle.decrypt(
+                    { name: "AES-GCM", iv, additionalData },
+                    data.key,
+                    data.bytes,
+                ),
+            );
+            self.postMessage({ id: data.id, out }, [out.buffer]);
+        } catch (error) {
+            self.postMessage({ id: data.id, error: String(error) });
+        }
+    });
+}
+
+let fileWorker;
+let fileBroken = false;
+let fileNextId = 0;
+const filePending = new Map();
+
+function stopFileWorker(error) {
+    fileBroken = true;
+    fileWorker?.terminate();
+    fileWorker = null;
+    for (const job of filePending.values()) {
+        clearTimeout(job.timer);
+        job.reject(error);
+    }
+    filePending.clear();
+}
+
+export async function decryptFileChunk(key, enc, index, bytes, isLast) {
+    if (!fileBroken && typeof Worker !== "undefined") {
+        try {
+            if (!fileWorker) {
+                const url = URL.createObjectURL(
+                    new Blob([`(${fileWorkerMain})()`], {
+                        type: "text/javascript",
+                    }),
+                );
+                try {
+                    fileWorker = new Worker(url);
+                } finally {
+                    URL.revokeObjectURL(url);
+                }
+                fileWorker.onmessage = ({ data }) => {
+                    const job = filePending.get(data.id);
+                    if (!job) return;
+                    filePending.delete(data.id);
+                    clearTimeout(job.timer);
+                    if (data.error) job.reject(new Error(data.error));
+                    else job.resolve(data.out);
+                };
+                fileWorker.onerror = () =>
+                    stopFileWorker(new Error("File decrypt worker failed"));
+            }
+            const id = fileNextId++;
+            const copy = Uint8Array.from(bytes);
+            return await new Promise((resolve, reject) => {
+                const timer = setTimeout(
+                    () =>
+                        stopFileWorker(
+                            new Error("File decrypt worker timed out"),
+                        ),
+                    WORKER_TIMEOUT,
+                );
+                filePending.set(id, { resolve, reject, timer });
+                try {
+                    fileWorker.postMessage(
+                        { id, key, enc, index, bytes: copy, isLast },
+                        [copy.buffer],
+                    );
+                } catch (error) {
+                    stopFileWorker(error);
+                }
+            });
+        } catch {
+            // Authentication is checked again on the page if the worker fails.
+        }
+    }
+    return decryptChunk(key, enc, index, bytes, isLast);
+}
 
 // the GramJS whose decryptMessageData the copy below was taken from: 2.17.9,
 // which still reports itself as 2.17.8 (package.json pins it exactly)

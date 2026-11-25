@@ -9,7 +9,8 @@ import {
 } from "../redux/actions/progressAction";
 import { Store } from "../redux/store";
 import { messagesOf } from "./splitPlan";
-import { downloadParts } from "./transfer";
+import { downloadParts, encryptedRange } from "./transfer";
+import { CHUNK } from "../services/fileCrypto";
 
 /** The full-size copy of a photo: its location type and byte size. */
 function largestPhotoSize(photo) {
@@ -145,7 +146,13 @@ export async function fetchFile(id, file_id, { quiet = false } = {}) {
         const ids =
             record?.file_id === file_id ? messagesOf(record) : [file_id];
         if (ids.length > 1) {
-            const blob = await fetchSlices(id, ids, record.mime, dispatch);
+            const blob = await fetchSlices(
+                id,
+                ids,
+                record.mime,
+                dispatch,
+                record.parts,
+            );
             dispatch(completedProgress(id));
             return blob;
         }
@@ -158,6 +165,42 @@ export async function fetchFile(id, file_id, { quiet = false } = {}) {
         }
 
         const file = locate(media);
+        if (record?.file_id === file_id && record.enc) {
+            if (!file) throw new Error("Unknown media");
+            const size = record.enc.size;
+            const disk = size > TO_DISK ? await diskTarget(id, size) : null;
+            const chunks = [];
+            try {
+                if (!size)
+                    await encryptedRange(getClient(), file, record.enc, 0, -1);
+                for (let start = 0; start < size; start += CHUNK) {
+                    const bytes = await encryptedRange(
+                        getClient(),
+                        file,
+                        record.enc,
+                        start,
+                        Math.min(size - 1, start + CHUNK - 1),
+                    );
+                    if (disk) await disk.write(bytes, start);
+                    else chunks.push(bytes);
+                    dispatch(
+                        downloadProgress(
+                            id,
+                            ((start + bytes.length) / size) * 100,
+                        ),
+                    );
+                }
+                const blob = new Blob(
+                    [disk ? await disk.finish() : new Blob(chunks)],
+                    { type: record.mime || "application/octet-stream" },
+                );
+                dispatch(completedProgress(id));
+                return blob;
+            } catch (error) {
+                await disk?.abort();
+                throw error;
+            }
+        }
         const fileSize = Math.max(1, file?.size ?? 1);
         const report = (downloaded) =>
             dispatch(downloadProgress(id, (downloaded / fileSize) * 100));
@@ -209,20 +252,45 @@ export async function fetchFile(id, file_id, { quiet = false } = {}) {
  * other into one file on disk. Needs the disk area: a file this big does not
  * fit in memory.
  */
-async function fetchSlices(id, ids, mime, dispatch) {
+async function fetchSlices(id, ids, mime, dispatch, records) {
     const client = getClient();
     const messages = await client.getMessages("me", { ids });
     const files = messages.map((m) => m?.media && locate(m.media));
     if (files.length !== ids.length || files.some((f) => !f))
         throw new Error("File missing on Telegram");
-    const total = files.reduce((sum, f) => sum + f.size, 0);
+    const total = files.reduce(
+        (sum, f, i) => sum + (records[i].enc?.size ?? f.size),
+        0,
+    );
     const disk = await diskTarget(id, total);
     if (!disk)
         throw new Error("Trình duyệt này không tải được tệp lớn như vậy");
     try {
         let base = 0;
-        for (const file of files) {
+        for (const [i, file] of files.entries()) {
             const start = base;
+            if (records[i].enc) {
+                const enc = records[i].enc;
+                if (!enc.size) await encryptedRange(client, file, enc, 0, -1);
+                for (let at = 0; at < enc.size; at += CHUNK) {
+                    const bytes = await encryptedRange(
+                        client,
+                        file,
+                        enc,
+                        at,
+                        Math.min(enc.size - 1, at + CHUNK - 1),
+                    );
+                    await disk.write(bytes, start + at);
+                    dispatch(
+                        downloadProgress(
+                            id,
+                            ((start + at + bytes.length) / total) * 100,
+                        ),
+                    );
+                }
+                base += enc.size;
+                continue;
+            }
             await downloadParts(client, file, {
                 onProgress: (done) =>
                     dispatch(

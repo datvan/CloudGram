@@ -24,6 +24,15 @@
  */
 import { Api, errors, helpers } from "telegram";
 import { Buffer } from "buffer/";
+import {
+    CHUNK,
+    ENC_CHUNK,
+    chunkCount,
+    encryptedSize,
+    importFileKey,
+    plainRangeToCipher,
+} from "../services/fileCrypto";
+import { decryptFileChunk } from "../services/decryptWorkers";
 
 const KB = 1024;
 const MB = 1024 * KB;
@@ -275,6 +284,49 @@ const receivedMeter = rateMeter();
 
 /** Bytes a second arriving lately, all downloads together. */
 export const downloadRate = () => receivedMeter.rate();
+
+/** Read and authenticate whole encrypted chunks before returning a plaintext range. */
+export async function encryptedRange(client, file, enc, start, end) {
+    if ((file.cipherSize ?? file.size) !== encryptedSize(enc.size))
+        throw new Error("Encrypted file size mismatch");
+    const range = enc.size
+        ? plainRangeToCipher(enc, start, end)
+        : { firstChunk: 0, lastChunk: 0, cipherStart: 0, cipherEnd: 15 };
+    const firstBlock = Math.floor(range.cipherStart / MB);
+    const lastBlock = Math.floor(range.cipherEnd / MB);
+    const blocks = await Promise.all(
+        Array.from({ length: lastBlock - firstBlock + 1 }, (_, i) =>
+            filePart(client, file, firstBlock + i, MB),
+        ),
+    );
+    const cipher = new Uint8Array(blocks.reduce((n, b) => n + b.length, 0));
+    let offset = 0;
+    for (const block of blocks) {
+        cipher.set(block, offset);
+        offset += block.length;
+    }
+    const key = await importFileKey(enc);
+    const out = new Uint8Array(end - start + 1);
+    let written = 0;
+    for (let i = range.firstChunk; i <= range.lastChunk; i += 1) {
+        const from = i * ENC_CHUNK - firstBlock * MB;
+        const length = Math.min(CHUNK, enc.size - i * CHUNK) + 16;
+        if (from < 0 || from + length > cipher.length)
+            throw new Error("Encrypted file truncated");
+        const plain = await decryptFileChunk(
+            key,
+            enc,
+            i,
+            cipher.subarray(from, from + length),
+            i === chunkCount(enc.size) - 1,
+        );
+        const a = Math.max(start, i * CHUNK) - i * CHUNK;
+        const b = Math.min(end + 1, (i + 1) * CHUNK) - i * CHUNK;
+        out.set(plain.subarray(a, b), written);
+        written += b - a;
+    }
+    return out;
+}
 
 /**
  * One part of a file, `partSize` bytes from part `index`, for reading a file
