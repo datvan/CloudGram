@@ -27,7 +27,7 @@ The Telegram proxy binds ownership to the immutable account ID; startup refuses
 any ledger file that is not ID-keyed (no username migration). Deleting an
 account drops its ledger; setup reset preserves it. Mutations require the live
 browser lease. Proxy calls are rate limited and Telegram calls share a bounded
-concurrency queue. Deploy compatible browser and API changes together.
+concurrency queue. Upload batches contain up to eight 512 KiB parts; at most four part requests per account are in flight. Deploy compatible browser and API changes together.
 
 The API host also stores the 2FA password encrypted with `CLOUDGRAM_TG_ROOT_KEY`. A VPS compromise could take over the Telegram account. Roll back with `CLOUDGRAM_SHARED_TELEGRAM=0` or `cloudgram-admin telegram-password-clear`.
 

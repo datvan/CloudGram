@@ -353,7 +353,7 @@ export function createApiServer(
                                   req.on("data", (chunk) => {
                                       inputBytes += chunk.length;
                                   });
-                              return readBytes(req, 524288);
+                              return readBytes(req, 8 * 524288);
                           }
                         : undefined,
             };

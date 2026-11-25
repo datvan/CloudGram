@@ -132,6 +132,7 @@ export class TelegramProxy {
         this.finished = new Map();
         this.onTimeout = onTimeout;
         this.active = new Map();
+        this.activeParts = new Map();
         this.rates = new Map();
         this.telegramActive = 0;
         this.telegramQueue = [];
@@ -200,9 +201,14 @@ export class TelegramProxy {
             });
         rate[kind]++;
         const active = this.active.get(user) ?? 0;
-        if (active >= this.limits.requests)
+        if (
+            active >= this.limits.requests ||
+            (part && (this.activeParts.get(user) ?? 0) >= 4)
+        )
             throw new HttpError(429, "busy", { seconds: 1 });
         this.active.set(user, active + 1);
+        if (part)
+            this.activeParts.set(user, (this.activeParts.get(user) ?? 0) + 1);
         try {
             return await fn();
         } catch (error) {
@@ -216,6 +222,11 @@ export class TelegramProxy {
                 });
             throw new HttpError(502, "telegram_failed");
         } finally {
+            if (part) {
+                const remaining = this.activeParts.get(user) - 1;
+                if (remaining) this.activeParts.set(user, remaining);
+                else this.activeParts.delete(user);
+            }
             const left = this.active.get(user) - 1;
             if (left) this.active.set(user, left);
             else this.active.delete(user);
@@ -297,14 +308,43 @@ export class TelegramProxy {
                 try {
                     const bytes =
                         typeof body === "function" ? await body() : body;
+                    const count = Math.ceil(bytes?.length / PART);
                     if (
                         !Buffer.isBuffer(bytes) ||
-                        bytes.length !== Math.min(PART, u.size - index * PART)
+                        count < 1 ||
+                        count > 8 ||
+                        index + count > u.parts ||
+                        bytes.length !==
+                            Math.min(count * PART, u.size - index * PART)
                     )
                         throw new HttpError(400, "bad_chunk");
-                    if (!(await this.telegram.savePart(u, index, bytes)))
-                        throw new Error("part rejected");
-                    u.done.add(index);
+                    for (let offset = 0; offset < count; offset += 4) {
+                        const results = await Promise.allSettled(
+                            Array.from(
+                                { length: Math.min(4, count - offset) },
+                                async (_, i) => {
+                                    const part = offset + i;
+                                    if (
+                                        !(await this.telegram.savePart(
+                                            u,
+                                            index + part,
+                                            bytes.subarray(
+                                                part * PART,
+                                                (part + 1) * PART,
+                                            ),
+                                        ))
+                                    )
+                                        throw new Error("part rejected");
+                                },
+                            ),
+                        );
+                        const failure = results.find(
+                            (result) => result.status === "rejected",
+                        );
+                        if (failure) throw failure.reason;
+                    }
+                    for (let part = 0; part < count; part++)
+                        u.done.add(index + part);
                 } finally {
                     u.pending--;
                 }

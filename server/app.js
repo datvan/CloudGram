@@ -684,7 +684,7 @@ export class CloudGramApi {
     async tgxPart(req, res) {
         const { user } = await this.authenticate(req, res);
         this.#requireLease(user.username, req.headers["x-cloudgram-browser"]);
-        if (Number(req.headers["content-length"]) > 524288)
+        if (Number(req.headers["content-length"]) > 8 * 524288)
             throw new HttpError(413, "too_large");
         return this.tgx.putPart(
             user.id,

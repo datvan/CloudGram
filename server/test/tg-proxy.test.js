@@ -392,3 +392,51 @@ test("rate windows, retries and global Telegram queue", async () =>
         },
         { global: 1 },
     ));
+
+test("batch validates lengths and retries all parts after partial failure", async () =>
+    fixture(async ({ proxy, telegram }) => {
+        const part = 524288;
+        const { uploadId } = await proxy.startUpload("a", {
+            size: part * 2 + 3,
+            parts: 3,
+        });
+        await assert.rejects(
+            proxy.putPart("a", uploadId, 0, Buffer.alloc(part + 1)),
+            code("bad_chunk"),
+        );
+        const calls = [];
+        let fail = true;
+        telegram.savePart = async (_upload, index, bytes) => {
+            calls.push([index, bytes.length]);
+            if (index === 1 && fail) throw new Error("failed");
+            return true;
+        };
+        const batch = Buffer.alloc(part * 2 + 3);
+        await assert.rejects(
+            proxy.putPart("a", uploadId, 0, batch),
+            code("telegram_failed"),
+        );
+        await assert.rejects(
+            proxy.finishUpload("a", uploadId, {}),
+            code("chunk_missing"),
+        );
+        fail = false;
+        await proxy.putPart("a", uploadId, 0, batch);
+        assert.deepEqual(calls, [
+            [0, part],
+            [1, part],
+            [2, 3],
+            [0, part],
+            [1, part],
+            [2, 3],
+        ]);
+        assert.equal(
+            (
+                await proxy.finishUpload("a", uploadId, {
+                    name: "x",
+                    mime: "text/plain",
+                })
+            ).message.id,
+            7,
+        );
+    }));

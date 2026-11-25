@@ -59,17 +59,21 @@ export function createProxyClient() {
                 const worker = async () => {
                     while (next < parts && !failed) {
                         signal?.throwIfAborted();
-                        const index = next++;
+                        const index = next;
+                        next += 8;
                         const bytes = new Uint8Array(
                             await file
                                 .slice(
                                     index * PART,
-                                    Math.min(file.size, (index + 1) * PART),
+                                    Math.min(file.size, (index + 8) * PART),
                                 )
                                 .arrayBuffer(),
                         );
                         signal?.throwIfAborted();
-                        for (let attempt = 0; ; attempt += 1) {
+                        let attempt = 0;
+                        let rateWait = 0;
+                        let rateRetries = 0;
+                        for (;;) {
                             try {
                                 await proxy.putPart(
                                     uploadId,
@@ -81,12 +85,28 @@ export function createProxyClient() {
                             } catch (error) {
                                 signal?.throwIfAborted();
                                 if (
-                                    attempt >= 5 ||
+                                    (error.status !== 429 && attempt >= 5) ||
                                     (error.status >= 400 &&
                                         error.status < 500 &&
                                         error.status !== 429)
                                 )
                                     throw error;
+                                const delay = Math.max(
+                                    500 *
+                                        2 **
+                                            Math.min(
+                                                error.status === 429
+                                                    ? rateRetries++
+                                                    : attempt++,
+                                                10,
+                                            ),
+                                    (Number(error.retryAfter) || 0) * 1000,
+                                    (Number(error.body?.seconds) || 0) * 1000,
+                                );
+                                if (error.status === 429) {
+                                    rateWait += delay;
+                                    if (rateWait > 300000) throw error;
+                                }
                                 options.onRetry?.(error);
                                 if (stats)
                                     stats.retries = (stats.retries ?? 0) + 1;
@@ -98,18 +118,7 @@ export function createProxyClient() {
                                         );
                                         resolve();
                                     };
-                                    const timer = setTimeout(
-                                        done,
-                                        Math.max(
-                                            500 * 2 ** attempt,
-                                            error.status === 429 &&
-                                                error.code === "busy"
-                                                ? (Number(
-                                                      error.body?.seconds,
-                                                  ) || 0) * 1000
-                                                : 0,
-                                        ),
-                                    );
+                                    const timer = setTimeout(done, delay);
                                     const abort = () => {
                                         clearTimeout(timer);
                                         signal.removeEventListener(
@@ -130,17 +139,21 @@ export function createProxyClient() {
                         sent += bytes.length;
                         if (stats) {
                             stats.bytes = (stats.bytes ?? 0) + bytes.length;
-                            stats.parts = (stats.parts ?? 0) + 1;
+                            stats.parts =
+                                (stats.parts ?? 0) +
+                                Math.ceil(bytes.length / PART);
                         }
                         options.onProgress?.(sent / file.size);
                     }
                 };
                 const results = await Promise.allSettled(
-                    Array.from({ length: Math.min(4, parts) }, () =>
-                        worker().catch((error) => {
-                            failed = true;
-                            throw error;
-                        }),
+                    Array.from(
+                        { length: Math.min(2, Math.ceil(parts / 8)) },
+                        () =>
+                            worker().catch((error) => {
+                                failed = true;
+                                throw error;
+                            }),
                     ),
                 );
                 const failure = results.find(

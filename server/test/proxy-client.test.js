@@ -13,6 +13,7 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         retried = false;
     let hold = false;
     let partError;
+    let rateFailures = 0;
     let partCalls = 0;
     let finishFailures = [];
     let finishCalls = 0;
@@ -28,6 +29,15 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         if (url.endsWith("/upload/start")) result = { uploadId: "u" };
         else if (/\/upload\/u\/\d+$/.test(url)) {
             partCalls += 1;
+            if (rateFailures-- > 0)
+                return {
+                    ok: false,
+                    status: 429,
+                    headers: { get: () => "10" },
+                    json: async () => {
+                        throw new Error("text/plain");
+                    },
+                };
             if (partError) {
                 const error = partError;
                 partError = null;
@@ -77,7 +87,7 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
                     status: failure.status,
                     json: async () => ({ error: failure.code }),
                 };
-            stored = Buffer.concat(parts);
+            stored = Buffer.concat(parts.filter(Boolean));
             const metadata = JSON.parse(options.body);
             result = {
                 message: {
@@ -166,11 +176,11 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         clearTimeout,
     });
     vm.runInContext(
-        `${proxySource}\nconst proxy = { startUpload, putPart, finishUpload, cancelUpload, getMessages, readFile, thumb, deleteMessages };\n${clientSource}\nglobalThis.create = createProxyClient;`,
+        `${proxySource}\r\nconst proxy = { startUpload, putPart, finishUpload, cancelUpload, getMessages, readFile, thumb, deleteMessages };\r\n${clientSource}\r\nglobalThis.create = createProxyClient;`,
         context,
     );
     const client = context.create();
-    const bytes = Buffer.alloc(2200000, 123);
+    const bytes = Buffer.alloc(9 * 524288 + 1, 123);
     const file = new Blob([bytes]);
     file.name = "cipher";
     const progress = [];
@@ -183,10 +193,11 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         file: token,
         forceDocument: true,
     });
-    assert.equal(parts.length, 5);
-    assert.equal(maxActive, 4);
+    assert.equal(parts[0].length, 8 * 524288);
+    assert.equal(parts[8].length, 524289);
+    assert.equal(maxActive, 2);
     assert.equal(stats.bytes, bytes.length);
-    assert.equal(stats.parts, 5);
+    assert.equal(stats.parts, 10);
     assert.equal(stats.retries, 1);
     assert.ok(
         progress.every((value, i) => i === 0 || value >= progress[i - 1]),
@@ -239,6 +250,12 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
     partError = { status: 429, body: { error: "busy", seconds: 3 } };
     await client.proxyUpload(small);
     assert.ok(waits.includes(3000));
+
+    rateFailures = 6;
+    partCalls = 0;
+    await client.proxyUpload(small);
+    assert.equal(partCalls, 7);
+    assert.ok(waits.includes(10000));
 
     finishFailures = ["network", { status: 502, code: "server_down" }];
     finishCalls = 0;
@@ -365,7 +382,7 @@ test("non-admin installs proxy only after lease and stops it on lease loss", asy
         },
         clearInterval() {},
     });
-    vm.runInContext(`${flow}\n${connect}\nglobalThis.enter = enter;`, context);
+    vm.runInContext(`${flow}\r\n${connect}\r\nglobalThis.enter = enter;`, context);
     await context.enter("key");
     assert.deepEqual(calls, ["connecting", "drive", "lease", "lease"]);
     status = "granted";

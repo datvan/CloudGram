@@ -32,18 +32,28 @@ async function request(method, path, body, binary = false, signal) {
     }
     if (binary && method == "GET" && response.ok)
         return new Uint8Array(await response.arrayBuffer());
+    const retryAfter = Number(response.headers?.get("Retry-After")) || 0;
     let data;
     try {
         data = await response.json();
     } catch {
         signal?.throwIfAborted();
-        throw new ApiError(
+        const error = new ApiError(
             response.status,
             response.status === 502 ? "server_down" : "bad_response",
         );
+        error.retryAfter = retryAfter;
+        throw error;
     }
-    if (!response.ok)
-        throw new ApiError(response.status, data.error ?? "error", data);
+    if (!response.ok) {
+        const error = new ApiError(
+            response.status,
+            data.error ?? "error",
+            data,
+        );
+        error.retryAfter = retryAfter;
+        throw error;
+    }
     return data;
 }
 

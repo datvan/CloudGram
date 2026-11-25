@@ -119,6 +119,56 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
             req.flushHeaders();
         });
         assert.equal(early, 401);
+        const tooLarge = await new Promise((resolve, reject) => {
+            const req = httpRequest(
+                base + "/upload/x/0",
+                {
+                    method: "PUT",
+                    headers: {
+                        Origin: "https://cg.test",
+                        "Content-Type": "application/octet-stream",
+                        "Content-Length": String(8 * 524288 + 1),
+                        Cookie: "cg_session=alice",
+                        "X-CloudGram-Browser": "browser",
+                    },
+                },
+                (res) => {
+                    res.resume();
+                    resolve(res.statusCode);
+                    req.destroy();
+                },
+            );
+            req.on("error", reject);
+            req.flushHeaders();
+        });
+        assert.equal(tooLarge, 413);
+        const batchUpload = await (
+            await call("POST", "/upload/start", { size: 524288 + 3, parts: 2 })
+        ).json();
+        assert.equal(
+            (
+                await call(
+                    "PUT",
+                    `/upload/${batchUpload.uploadId}/0`,
+                    Buffer.alloc(524289),
+                    "alice",
+                    true,
+                )
+            ).status,
+            400,
+        );
+        assert.equal(
+            (
+                await call(
+                    "PUT",
+                    `/upload/${batchUpload.uploadId}/0`,
+                    Buffer.alloc(524291),
+                    "alice",
+                    true,
+                )
+            ).status,
+            200,
+        );
         api.leases.delete("alice");
         for (const [method, path, body, raw] of [
             ["POST", "/upload/start", { size: 1, parts: 1 }],
@@ -177,7 +227,7 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
                 await call(
                     "PUT",
                     `/upload/${start.uploadId}/0`,
-                    Buffer.alloc(524289),
+                    Buffer.alloc(8 * 524288 + 1),
                     "alice",
                     true,
                 )
