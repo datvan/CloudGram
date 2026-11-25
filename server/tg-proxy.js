@@ -121,6 +121,7 @@ export class TelegramProxy {
         this.limits = {
             uploads: 24,
             requests: 16,
+            partRequests: 6,
             ttl: 6 * 60 * 60 * 1000,
             global: 24,
             queueWait: 30000,
@@ -203,7 +204,8 @@ export class TelegramProxy {
         const active = this.active.get(user) ?? 0;
         if (
             active >= this.limits.requests ||
-            (part && (this.activeParts.get(user) ?? 0) >= 4)
+            (part &&
+                (this.activeParts.get(user) ?? 0) >= this.limits.partRequests)
         )
             throw new HttpError(429, "busy", { seconds: 1 });
         this.active.set(user, active + 1);

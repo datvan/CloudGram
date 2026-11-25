@@ -340,6 +340,27 @@ test("flood, concurrency and expiry limits", async () =>
         { uploads: 1, requests: 1, ttl: 10 },
     ));
 
+test("part request limit leaves room for reads", async () =>
+    fixture(async ({ proxy, telegram }) => {
+        const { uploadId } = await proxy.startUpload("a", {
+            size: 7 * 524288,
+            parts: 7,
+        });
+        const releases = [];
+        telegram.savePart = () =>
+            new Promise((resolve) => releases.push(resolve));
+        const pending = Array.from({ length: 6 }, (_, i) =>
+            proxy.putPart("a", uploadId, i, Buffer.alloc(524288)),
+        );
+        await assert.rejects(
+            proxy.putPart("a", uploadId, 6, Buffer.alloc(524288)),
+            (e) => e.status === 429 && e.code === "busy",
+        );
+        await proxy.messages("a", []);
+        for (const release of releases) release(true);
+        await Promise.all(pending);
+    }));
+
 test("rate windows, retries and global Telegram queue", async () =>
     fixture(
         async ({ proxy, telegram, tick }) => {

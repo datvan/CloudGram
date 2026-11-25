@@ -148,7 +148,7 @@ export function createProxyClient() {
                 };
                 const results = await Promise.allSettled(
                     Array.from(
-                        { length: Math.min(2, Math.ceil(parts / 8)) },
+                        { length: Math.min(4, Math.ceil(parts / 8)) },
                         () =>
                             worker().catch((error) => {
                                 failed = true;

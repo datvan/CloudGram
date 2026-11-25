@@ -180,7 +180,7 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         context,
     );
     const client = context.create();
-    const bytes = Buffer.alloc(9 * 524288 + 1, 123);
+    const bytes = Buffer.alloc(25 * 524288 + 1, 123);
     const file = new Blob([bytes]);
     file.name = "cipher";
     const progress = [];
@@ -194,10 +194,10 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         forceDocument: true,
     });
     assert.equal(parts[0].length, 8 * 524288);
-    assert.equal(parts[8].length, 524289);
-    assert.equal(maxActive, 2);
+    assert.equal(parts[24].length, 524289);
+    assert.equal(maxActive, 4);
     assert.equal(stats.bytes, bytes.length);
-    assert.equal(stats.parts, 10);
+    assert.equal(stats.parts, 26);
     assert.equal(stats.retries, 1);
     assert.ok(
         progress.every((value, i) => i === 0 || value >= progress[i - 1]),
@@ -382,7 +382,10 @@ test("non-admin installs proxy only after lease and stops it on lease loss", asy
         },
         clearInterval() {},
     });
-    vm.runInContext(`${flow}\r\n${connect}\r\nglobalThis.enter = enter;`, context);
+    vm.runInContext(
+        `${flow}\r\n${connect}\r\nglobalThis.enter = enter;`,
+        context,
+    );
     await context.enter("key");
     assert.deepEqual(calls, ["connecting", "drive", "lease", "lease"]);
     status = "granted";
