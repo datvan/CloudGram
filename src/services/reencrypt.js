@@ -1,13 +1,31 @@
 import { messagesOf } from "../utils/splitPlan.js";
 
 /** Old messages still referenced by another file must remain on Telegram. */
-export function unsharedMessages(record, records) {
+export function unsharedMessages(
+    record,
+    records,
+    sameTelegram = () => true,
+    includeMedia = false,
+) {
+    const idsOf = (item) => [
+        ...messagesOf(item),
+        ...(includeMedia
+            ? [item.thumbnail, item.storyboard?.message].filter(
+                  (id) => id != null,
+              )
+            : []),
+    ];
     const referenced = new Set(
         records
-            .filter((other) => other.id !== record.id && !other.deleted)
-            .flatMap(messagesOf),
+            .filter(
+                (other) =>
+                    other.id !== record.id &&
+                    !other.deleted &&
+                    sameTelegram(other),
+            )
+            .flatMap(idsOf),
     );
-    return messagesOf(record).filter((id) => !referenced.has(id));
+    return [...new Set(idsOf(record))].filter((id) => !referenced.has(id));
 }
 
 async function realDeps() {
@@ -103,6 +121,8 @@ export async function reencryptRecord(
         signal,
         deps,
         extraChanges,
+        sameTelegram = () => true,
+        deleteOriginalMedia = false,
     },
 ) {
     const api = deps ?? (await realDeps());
@@ -183,10 +203,22 @@ export async function reencryptRecord(
     if (deleteOriginal) {
         const records = api.getSnapshot().records;
         const current = records.find((item) => item.id === record.id);
-        const currentIds = new Set(messagesOf(current));
-        const ids = unsharedMessages(record, records).filter(
-            (id) => !currentIds.has(id),
+        const currentIds = new Set(
+            current && sameTelegram(current)
+                ? [
+                      ...messagesOf(current),
+                      ...(deleteOriginalMedia
+                          ? [current.thumbnail, current.storyboard?.message]
+                          : []),
+                  ]
+                : [],
         );
+        const ids = unsharedMessages(
+            record,
+            records,
+            sameTelegram,
+            deleteOriginalMedia,
+        ).filter((id) => !currentIds.has(id));
         if (ids.length) await api.deleteMessages(source, ids);
     }
     return uploaded;

@@ -99,6 +99,70 @@ test("shared old message in trash is retained", async () => {
     assert.equal(f.events.some(Array.isArray), false);
 });
 
+test("migration deletes private ids despite matching shared ids", async () => {
+    const f = fixture({
+        id: "a",
+        type: "file",
+        file_id: 1,
+        thumbnail: 2,
+        storyboard: { message: 3 },
+        thumbData: "inline",
+    });
+    f.other.push({
+        id: "b",
+        tg: "shared",
+        file_id: 1,
+        thumbnail: 2,
+        storyboard: { message: 3 },
+    });
+    await f.run({
+        sameTelegram: (r) => r.tg !== "shared",
+        deleteOriginalMedia: true,
+        extraChanges: {
+            tg: "shared",
+            thumbnail: undefined,
+            storyboard: undefined,
+        },
+    });
+    assert.deepEqual(f.events.at(-1), ["source", [1, 2, 3]]);
+    assert.equal(f.current().thumbData, "inline");
+    assert.equal(f.current().thumbnail, undefined);
+    assert.equal(f.current().storyboard, undefined);
+});
+
+test("migration retains referenced media and skips deletion when requested", async () => {
+    const record = {
+        id: "a",
+        type: "file",
+        file_id: 1,
+        thumbnail: 2,
+        storyboard: { message: 3 },
+    };
+    const f = fixture(record);
+    f.other.push({ id: "b", thumbnail: 2, storyboard: { message: 3 } });
+    await f.run({
+        sameTelegram: (r) => r.tg !== "shared",
+        deleteOriginalMedia: true,
+        extraChanges: {
+            tg: "shared",
+            thumbnail: undefined,
+            storyboard: undefined,
+        },
+    });
+    assert.deepEqual(f.events.at(-1), ["source", [1]]);
+    const g = fixture(record);
+    await g.run({
+        deleteOriginal: false,
+        deleteOriginalMedia: true,
+        extraChanges: {
+            tg: "shared",
+            thumbnail: undefined,
+            storyboard: undefined,
+        },
+    });
+    assert.equal(g.events.some(Array.isArray), false);
+});
+
 test("split file saves all encrypted parts in one update", async () => {
     const f = fixture({
         id: "a",

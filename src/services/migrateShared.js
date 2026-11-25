@@ -1,4 +1,6 @@
 const liveFile = (record) => record.type === "file" && !record.deleted;
+let migrating = false;
+export const isMigrating = () => migrating;
 
 async function realDeps() {
     const [account, drive, telegram, auth, reencrypt] = await Promise.all([
@@ -29,14 +31,28 @@ export async function migrateToShared({
     signal,
     deps,
 } = {}) {
-    const api = deps ?? (await realDeps());
-    const source = api.getClient();
-    signal?.throwIfAborted();
-    const destination = await api.openSharedClient();
+    if (migrating)
+        throw Object.assign(new Error("Migration already in progress"), {
+            code: "uploads_busy",
+        });
+    migrating = true;
+    let destination;
     let adopted = false;
-    const failed = [];
-    let done = 0;
     try {
+        const hasActiveUploads =
+            deps?.hasActiveUploads ??
+            (await import("../utils/uploadQueue.js")).hasActiveUploads;
+        if (hasActiveUploads())
+            throw Object.assign(
+                new Error("Đang có file tải lên, hãy đợi tải xong rồi chuyển."),
+                { code: "uploads_busy" },
+            );
+        const api = deps ?? (await realDeps());
+        const source = api.getClient();
+        signal?.throwIfAborted();
+        destination = await api.openSharedClient();
+        const failed = [];
+        let done = 0;
         for (const record of api.getSnapshot().records.filter(liveFile)) {
             signal?.throwIfAborted();
             if (record.tg === "shared") continue;
@@ -46,7 +62,13 @@ export async function migrateToShared({
                     destination,
                     deleteOriginal,
                     signal,
-                    extraChanges: { tg: "shared" },
+                    extraChanges: {
+                        tg: "shared",
+                        thumbnail: undefined,
+                        storyboard: undefined,
+                    },
+                    sameTelegram: (r) => r.tg !== "shared",
+                    deleteOriginalMedia: true,
                     onProgress: (progress) =>
                         onProgress?.({ id: record.id, ...progress }),
                 });
@@ -77,6 +99,11 @@ export async function migrateToShared({
         }
         return { done, failed };
     } finally {
-        if (!adopted) await destination.destroy().catch(() => {});
+        try {
+            if (destination && !adopted)
+                await destination.destroy().catch(() => {});
+        } finally {
+            migrating = false;
+        }
     }
 }

@@ -17,11 +17,13 @@ import { migrateToShared } from "../../services/migrateShared";
 import { describeError } from "../../services/api";
 
 const message = (error) =>
-    (error?.code ?? error?.message) === "telegram_not_linked"
+    error?.code === "uploads_busy"
+        ? error.message
+        : (error?.code ?? error?.message) === "telegram_not_linked"
         ? "Máy chủ chưa liên kết Telegram chung, hãy báo quản trị viên."
         : describeError(error);
 
-export default function MigrateSharedDialog({ onClose }) {
+export default function MigrateSharedDialog({ onClose, required = false }) {
     const { records } = useDrive();
     const [deleteOriginal, setDeleteOriginal] = useState(false);
     const [state, setState] = useState("confirm");
@@ -51,7 +53,8 @@ export default function MigrateSharedDialog({ onClose }) {
                     name: names.get(f.id) ?? f.id,
                 })),
             );
-            setState(result.failed.length ? "failed" : "success");
+            if (result.failed.length) setState("failed");
+            else window.location.reload();
         } catch (e) {
             if (abort.signal.aborted) setState("paused");
             else {
@@ -65,6 +68,7 @@ export default function MigrateSharedDialog({ onClose }) {
 
     const files = records.filter((r) => r.type === "file" && !r.deleted);
     const done = files.filter((r) => r.tg === "shared").length;
+    const blocking = required || done > 0;
     const current = files.find((r) => r.id === progress?.id);
     const percentage = Math.max(
         0,
@@ -73,7 +77,7 @@ export default function MigrateSharedDialog({ onClose }) {
     return (
         <Dialog
             open
-            onClose={state === "running" ? undefined : onClose}
+            onClose={state === "running" || blocking ? undefined : onClose}
             fullWidth
             maxWidth="sm"
         >
@@ -82,9 +86,9 @@ export default function MigrateSharedDialog({ onClose }) {
                 {state === "confirm" && (
                     <>
                         <Typography>
-                            Mọi file sẽ được tải về, mã hoá và chuyển sang
-                            Telegram chung. Trong lúc chuyển hãy giữ tab mở. Tài
-                            khoản chỉ chuyển hẳn khi mọi file đã xong.
+                            {required
+                                ? "Việc chuyển sang Telegram chung chưa xong. Cần chuyển nốt trước khi dùng tiếp."
+                                : "Mọi file sẽ được tải về, mã hoá và chuyển sang Telegram chung. Trong lúc chuyển hãy giữ tab mở. Tài khoản chỉ chuyển hẳn khi mọi file đã xong."}
                         </Typography>
                         <FormControlLabel
                             control={
@@ -141,20 +145,27 @@ export default function MigrateSharedDialog({ onClose }) {
                     <Button onClick={() => controller.current?.abort()}>
                         Tạm dừng
                     </Button>
-                ) : (
+                ) : !blocking ? (
                     <Button onClick={onClose}>
                         {state === "confirm" ? "Huỷ" : "Đóng"}
                     </Button>
-                )}
+                ) : null}
                 {state === "confirm" && (
-                    <Button onClick={start}>Bắt đầu chuyển</Button>
+                    <Button onClick={start}>
+                        {required ? "Tiếp tục chuyển" : "Bắt đầu chuyển"}
+                    </Button>
                 )}
                 {(state === "failed" || state === "paused") && (
-                    <Button onClick={start}>Thử lại</Button>
+                    <Button onClick={start}>
+                        {state === "paused" ? "Tiếp tục chuyển" : "Thử lại"}
+                    </Button>
                 )}
             </DialogActions>
         </Dialog>
     );
 }
 
-MigrateSharedDialog.propTypes = { onClose: PropTypes.func.isRequired };
+MigrateSharedDialog.propTypes = {
+    onClose: PropTypes.func.isRequired,
+    required: PropTypes.bool,
+};

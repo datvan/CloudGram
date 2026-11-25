@@ -39,6 +39,7 @@ import { missingPieces } from "./partGroup";
 import { KEPT, removePicked } from "./pickers";
 import uploadFile, { sentChanges } from "./uploadFile";
 import { fromUpload } from "../services/storyboard";
+import { isMigrating } from "../services/migrateShared.js";
 
 /**
  * One bounded worker pool behind every upload in the app.
@@ -113,6 +114,16 @@ function forget(job) {
     Store.dispatch(completedProgress(job.id));
 }
 let running = 0;
+export const hasActiveUploads = () => running > 0 || waiting.length > 0;
+const checkMigration = () => {
+    if (isMigrating())
+        throw Object.assign(
+            new Error(
+                "Đang chuyển sang Telegram chung, hãy đợi xong rồi tải lên.",
+            ),
+            { code: "uploads_busy" },
+        );
+};
 let lastPumpState;
 const offlineRuns = new Set();
 function pumpState(state) {
@@ -205,6 +216,7 @@ export function enqueueUpload({
     run,
     diagKind,
 }) {
+    checkMigration();
     let diagFile;
     trace(() => {
         diagFile = diagRun().slice(0, 4);
@@ -334,6 +346,7 @@ export function cancelUploads(ids) {
  * resume banner (uploadResume.js) takes over.
  */
 export function retryUpload(id) {
+    checkMigration();
     const job = failed.get(id);
     if (!job) return;
     if (!owns(job)) return forget(job);

@@ -535,6 +535,7 @@ async function loadQueue({
             return { message: { id: 44 }, changes: {} };
         },
         isFinal: () => true,
+        isMigrating: () => false,
         fromUpload() {},
         queueMicrotask,
     });

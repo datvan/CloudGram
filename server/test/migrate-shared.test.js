@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
     migrateToShared,
     needsMigrationResume,
+    isMigrating,
 } from "../../src/services/migrateShared.js";
 
 function fixture(records) {
@@ -10,6 +11,7 @@ function fixture(records) {
     const source = { destroy: async () => events.push("destroy private") };
     const destination = { destroy: async () => events.push("destroy shared") };
     const deps = {
+        hasActiveUploads: () => false,
         getClient: () => source,
         openSharedClient: async () => destination,
         getSnapshot: () => ({ records }),
@@ -46,6 +48,46 @@ test("moves live files sequentially and switches at end", async () => {
         "adopt",
         "destroy private",
     ]);
+});
+
+test("busy uploads prevent migration", async () => {
+    const f = fixture([]);
+    f.deps.hasActiveUploads = () => true;
+    await assert.rejects(migrateToShared({ deps: f.deps }), {
+        code: "uploads_busy",
+    });
+    assert.equal(isMigrating(), false);
+    assert.deepEqual(f.events, []);
+});
+
+test("lock spans migration and releases after failure", async () => {
+    const f = fixture([
+        {
+            id: "a",
+            type: "file",
+            thumbnail: 2,
+            storyboard: { message: 3 },
+            thumbData: "inline",
+        },
+    ]);
+    const move = f.deps.reencryptRecord;
+    f.deps.reencryptRecord = async (record, options) => {
+        assert.equal(isMigrating(), true);
+        assert.equal(options.sameTelegram({ tg: "shared" }), false);
+        assert.equal(options.sameTelegram({}), true);
+        assert.equal(options.deleteOriginalMedia, true);
+        await move(record, options);
+    };
+    await migrateToShared({ deps: f.deps });
+    assert.equal(isMigrating(), false);
+    assert.equal(f.deps.getSnapshot().records[0].thumbnail, undefined);
+    assert.equal(f.deps.getSnapshot().records[0].storyboard, undefined);
+    assert.equal(f.deps.getSnapshot().records[0].thumbData, "inline");
+    f.deps.openSharedClient = async () => {
+        throw new Error("failed");
+    };
+    await assert.rejects(migrateToShared({ deps: f.deps }), /failed/);
+    assert.equal(isMigrating(), false);
 });
 
 test("failure retains private client and reports error", async () => {

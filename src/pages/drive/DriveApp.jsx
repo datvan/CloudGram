@@ -1844,24 +1844,6 @@ export default function DriveApp({ mode, onToggleMode }) {
                             setNotice({ ...value, kind: "resumeNotice" })
                         }
                     />
-                    {migrationResume && (
-                        <Alert
-                            severity="warning"
-                            action={
-                                <Button
-                                    color="inherit"
-                                    onClick={() =>
-                                        setDialog({ type: "migrateShared" })
-                                    }
-                                >
-                                    Tiếp tục chuyển
-                                </Button>
-                            }
-                        >
-                            Việc chuyển sang Telegram chung chưa xong, một số
-                            file sẽ chưa mở được.
-                        </Alert>
-                    )}
 
                     {/* the items */}
                     <Box
@@ -2214,8 +2196,9 @@ export default function DriveApp({ mode, onToggleMode }) {
                 }
                 onMigrate={() => setDialog({ type: "migrateShared" })}
             />
-            {dialog?.type === "migrateShared" && (
+            {(migrationResume || dialog?.type === "migrateShared") && (
                 <MigrateSharedDialog
+                    required={migrationResume}
                     onClose={() => {
                         setDialog(null);
                         setMigrationScan((value) => value + 1);

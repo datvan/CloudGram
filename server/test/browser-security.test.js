@@ -281,6 +281,7 @@ for (const state of [
             "../../src/utils/uploadQueue.js",
             {
                 ...drive,
+                isMigrating: () => false,
                 UPLOAD_OWNER: true,
                 uploadScope: () => scope,
                 onClientChange() {},
@@ -575,6 +576,7 @@ for (const enabled of [true, false]) {
             const queue = await load(
                 "../../src/utils/uploadQueue.js",
                 {
+                    isMigrating: () => false,
                     UPLOAD_OWNER: enabled,
                     helpers: {},
                     uploadScope: () => scope,
@@ -637,6 +639,7 @@ test("giving up on a cut upload that failed midway deletes its slices", async ()
     const queue = await load(
         "../../src/utils/uploadQueue.js",
         {
+            isMigrating: () => false,
             UPLOAD_OWNER: false,
             helpers: {},
             uploadScope: () => ({}),
