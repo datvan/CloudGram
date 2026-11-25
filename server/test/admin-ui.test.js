@@ -28,7 +28,14 @@ test("Telegram entries require admin", async () => {
     );
     const signIn = await source("pages/auth/SignIn.jsx");
     assert.match(signIn, /admin && quick/);
-    assert.match(signIn, /admin && !locked/);
+    assert.match(
+        signIn,
+        /\{!locked && \(\s*<TextField\s+label=[^\r\n]+\s+autoComplete="username"/,
+    );
+    assert.match(
+        signIn,
+        /\{admin && !locked && \(\s*<Button onClick=\{\(\) => setQuick\(true\)\}/,
+    );
     const dialogs = await source("components/drive/Dialogs.jsx");
     const backup = dialogs.slice(
         dialogs.indexOf("export function BackupDialog"),

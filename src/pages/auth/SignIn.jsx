@@ -65,7 +65,7 @@ export default function SignIn({ locked, username: knownUser, onSwitchUser }) {
         >
             <form onSubmit={submit}>
                 <Stack spacing={2}>
-                    {admin && !locked && (
+                    {!locked && (
                         <TextField
                             label="Tên đăng nhập"
                             autoComplete="username"
@@ -94,7 +94,7 @@ export default function SignIn({ locked, username: knownUser, onSwitchUser }) {
                         label="Ghi nhớ đăng nhập trên thiết bị này"
                     />
                     {error && <Alert severity="error">{error}</Alert>}
-                    {!locked && (
+                    {admin && !locked && (
                         <Button onClick={() => setQuick(true)} disabled={busy}>
                             Đăng nhập nhanh bằng username CloudGram
                         </Button>
