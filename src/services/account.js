@@ -605,11 +605,18 @@ async function describeMe(client) {
 
 // ----- Telegram link -------------------------------------------------------------------
 
+export async function getTelegramMode() {
+    const { session } = await api.getSession();
+    if (!session) return null;
+    const saved = await decryptJson(dek, session, SESSION_LABEL);
+    return saved.session ? (saved.telegramMode ?? "private") : null;
+}
+
 /** Seal a logged-in client's session into the vault and make it the app's client. */
-export async function adoptTelegram(client) {
+export async function adoptTelegram(client, telegramMode = "private") {
     const blob = await encryptJson(
         dek,
-        { session: sessionString(client) },
+        { session: sessionString(client), telegramMode },
         SESSION_LABEL,
     );
     await api.putSession(blob, browserId());

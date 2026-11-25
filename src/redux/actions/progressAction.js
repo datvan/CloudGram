@@ -83,3 +83,7 @@ export function clearFinished() {
         type: "CLEAR_FINISHED",
     };
 }
+
+export function reencryptProgress(id, status, options = {}) {
+    return { id, type: "REENCRYPT", status, ...options };
+}

@@ -54,7 +54,7 @@ export default function TelegramLink() {
                 await sharedLogin(client);
                 if (cancelled) return;
                 clientRef.current = null;
-                await adoptTelegram(client);
+                await adoptTelegram(client, "shared");
             } catch (e) {
                 if (cancelled) return;
                 if (!clientRef.current) clientRef.current = client;

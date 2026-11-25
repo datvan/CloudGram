@@ -1,4 +1,10 @@
-const ACTIVE_TYPES = ["QUEUED", "UPLOADING", "DOWNLOADING", "ERROR"];
+const ACTIVE_TYPES = [
+    "QUEUED",
+    "UPLOADING",
+    "DOWNLOADING",
+    "ERROR",
+    "REENCRYPT",
+];
 const FINISHED_KEEP = 200;
 
 export default function reducer(
@@ -9,6 +15,14 @@ export default function reducer(
     },
     action,
 ) {
+    if (action.type === "REENCRYPT_SKIPPED") {
+        return {
+            ...state,
+            activeProgress: state.activeProgress.filter(
+                (item) => item.id !== action.id,
+            ),
+        };
+    }
     if (action.type === "COMPLETED") {
         const entry = state.activeProgress.find(
             (item) => item.id === action.id,
@@ -92,10 +106,13 @@ function fields(action) {
         percentage: action.percentage ?? 0,
         message: action.message,
         speed: action.speed,
+        status: action.status,
+        phase: action.phase,
     };
     // An ERROR entry carries no direction of its own, so remember which way
     // the transfer was going from the entry it replaces.
     if (action.type === "DOWNLOADING") entry.direction = "down";
+    if (action.type === "REENCRYPT") entry.direction = "reencrypt";
     if (action.type === "QUEUED" || action.type === "UPLOADING")
         entry.direction = "up";
     return entry;
