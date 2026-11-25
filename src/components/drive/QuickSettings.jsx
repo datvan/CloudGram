@@ -13,16 +13,42 @@ import {
     TextField,
     Typography,
 } from "@mui/material";
-import { disableQuick, enableQuick } from "../../services/account";
+import {
+    disableQuick,
+    enableQuick,
+    getTelegramMode,
+} from "../../services/account";
+import { SHARED_TELEGRAM } from "../../config/features";
 import { describeError } from "../../services/api";
 
-export default function QuickSettings({ open, onClose, onPasswordRequired }) {
+export default function QuickSettings({
+    open,
+    onClose,
+    onPasswordRequired,
+    onMigrate,
+}) {
     const quick = useSelector((state) => state.auth.quick);
     const [confirm, setConfirm] = useState(false);
     const [password, setPassword] = useState("");
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState(null);
     const [notice, setNotice] = useState(null);
+    const [privateTelegram, setPrivateTelegram] = useState(false);
+    useEffect(() => {
+        let active = true;
+        if (open && SHARED_TELEGRAM) {
+            getTelegramMode()
+                .then((mode) => {
+                    if (active) setPrivateTelegram(mode === "private");
+                })
+                .catch(() => {
+                    if (active) setPrivateTelegram(false);
+                });
+        }
+        return () => {
+            active = false;
+        };
+    }, [open]);
     useEffect(() => {
         if (open) {
             setConfirm(false);
@@ -107,6 +133,11 @@ export default function QuickSettings({ open, onClose, onPasswordRequired }) {
                     )}
                     {error && <Alert severity="error">{error}</Alert>}
                     {notice && <Alert severity="warning">{notice}</Alert>}
+                    {privateTelegram && SHARED_TELEGRAM && (
+                        <Button onClick={onMigrate} disabled={busy}>
+                            Chuyển sang Telegram chung
+                        </Button>
+                    )}
                 </DialogContent>
                 <DialogActions>
                     <Button
@@ -136,4 +167,5 @@ QuickSettings.propTypes = {
     open: PropTypes.bool,
     onClose: PropTypes.func.isRequired,
     onPasswordRequired: PropTypes.func.isRequired,
+    onMigrate: PropTypes.func.isRequired,
 };

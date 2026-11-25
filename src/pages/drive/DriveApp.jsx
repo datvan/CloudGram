@@ -64,6 +64,7 @@ import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
 
 import TopBar from "../../components/drive/TopBar";
 import QuickSettings from "../../components/drive/QuickSettings";
+import MigrateSharedDialog from "../../components/drive/MigrateSharedDialog";
 import Sidebar, { NewMenu } from "../../components/drive/Sidebar";
 import { ItemGrid, ItemList } from "../../components/drive/ItemViews";
 import ItemMenu from "../../components/drive/ItemMenu";
@@ -98,6 +99,7 @@ import {
 import { Store } from "../../redux/store";
 import { activeEntry } from "../../redux/reducers/progressReducer";
 import * as drive from "../../services/drive";
+import { needsMigrationResume } from "../../services/migrateShared";
 import { regenerateThumbnail } from "../../services/thumbnailOverride";
 import { uploadScope } from "../../services/uploadLog";
 import { UPLOAD_OWNER } from "../../config/security";
@@ -255,6 +257,19 @@ export default function DriveApp({ mode, onToggleMode }) {
     const [details, setDetails] = useState(false);
     const [preview, setPreview] = useState(null);
     const [dialog, setDialog] = useState(null);
+    const [migrationResume, setMigrationResume] = useState(false);
+    const [migrationScan, setMigrationScan] = useState(0);
+    useEffect(() => {
+        let active = true;
+        needsMigrationResume()
+            .then((needed) => {
+                if (active) setMigrationResume(needed);
+            })
+            .catch(() => {});
+        return () => {
+            active = false;
+        };
+    }, [migrationScan]);
     const via = useSelector((state) => state.auth.via);
     const [busy, setBusy] = useState(false);
     const [thumbnailJobs, setThumbnailJobs] = useState(new Map());
@@ -1826,6 +1841,24 @@ export default function DriveApp({ mode, onToggleMode }) {
                             setNotice({ ...value, kind: "resumeNotice" })
                         }
                     />
+                    {migrationResume && (
+                        <Alert
+                            severity="warning"
+                            action={
+                                <Button
+                                    color="inherit"
+                                    onClick={() =>
+                                        setDialog({ type: "migrateShared" })
+                                    }
+                                >
+                                    Tiếp tục chuyển
+                                </Button>
+                            }
+                        >
+                            Việc chuyển sang Telegram chung chưa xong, một số
+                            file sẽ chưa mở được.
+                        </Alert>
+                    )}
 
                     {/* the items */}
                     <Box
@@ -2176,7 +2209,16 @@ export default function DriveApp({ mode, onToggleMode }) {
                 onPasswordRequired={() =>
                     setDialog({ type: "passwordRequired" })
                 }
+                onMigrate={() => setDialog({ type: "migrateShared" })}
             />
+            {dialog?.type === "migrateShared" && (
+                <MigrateSharedDialog
+                    onClose={() => {
+                        setDialog(null);
+                        setMigrationScan((value) => value + 1);
+                    }}
+                />
+            )}
             <BackupDialog
                 open={dialog?.type === "backup"}
                 onClose={() => setDialog(null)}
