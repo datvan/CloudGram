@@ -16,7 +16,9 @@ import {
     sendCode,
     signIn,
     signInWithPassword,
+    sharedLogin,
 } from "../../services/telegramAuth";
+import { SHARED_TELEGRAM } from "../../config/features";
 import { describeError } from "../../services/api";
 import {
     adoptLegacySession,
@@ -33,7 +35,7 @@ export default function TelegramLink() {
     const { hasLegacy, notice, username } = useSelector((state) => state.auth);
     const clientRef = useRef(null);
 
-    const [step, setStep] = useState("phone");
+    const [step, setStep] = useState(SHARED_TELEGRAM ? "auto" : "phone");
     const [phoneNumber, setPhoneNumber] = useState("");
     const [phoneCodeHash, setPhoneCodeHash] = useState("");
     const [phoneCode, setPhoneCode] = useState("");
@@ -44,8 +46,28 @@ export default function TelegramLink() {
     useEffect(() => {
         const client = newClient("");
         clientRef.current = client;
-        client.connect().catch((e) => setError(describeError(e)));
+        let cancelled = false;
+        (async () => {
+            try {
+                await client.connect();
+                if (!SHARED_TELEGRAM || cancelled) return;
+                await sharedLogin(client);
+                if (cancelled) return;
+                clientRef.current = null;
+                await adoptTelegram(client);
+            } catch (e) {
+                if (cancelled) return;
+                if (!clientRef.current) clientRef.current = client;
+                if (e.code === "telegram_not_linked" || e.status === 404)
+                    setStep("phone");
+                else {
+                    setError(describeError(e));
+                    setStep("failed");
+                }
+            }
+        })();
         return () => {
+            cancelled = true;
             // adopted clients are cleared from the ref before this runs
             clientRef.current?.destroy().catch(() => {});
         };
@@ -111,79 +133,108 @@ export default function TelegramLink() {
         >
             <Stack spacing={2}>
                 {notice && <Alert severity="warning">{notice}</Alert>}
-                {hasLegacy && step === "phone" && (
+                {step === "auto" && (
+                    <Typography>Đang liên kết Telegram…</Typography>
+                )}
+                {step === "failed" && (
                     <>
-                        <Button
-                            variant="outlined"
-                            startIcon={<TelegramIcon />}
-                            onClick={useLegacy}
-                            disabled={busy}
-                        >
-                            Dùng phiên Telegram đã đăng nhập trên máy này
+                        <Alert severity="error">{error}</Alert>
+                        <Button onClick={() => window.location.reload()}>
+                            Thử lại
                         </Button>
-                        <Divider>hoặc</Divider>
+                        <Button onClick={logout}>Đăng xuất</Button>
                     </>
                 )}
-                <form onSubmit={submit}>
-                    <Stack spacing={2}>
-                        {step === "phone" && (
-                            <TextField
-                                label="Số điện thoại (kèm mã quốc gia)"
-                                placeholder="+84…"
-                                autoComplete="tel"
-                                required
-                                value={phoneNumber}
-                                onChange={(e) => setPhoneNumber(e.target.value)}
-                            />
-                        )}
-                        {step === "code" && (
+                {(step === "phone" ||
+                    step === "code" ||
+                    step === "password") && (
+                    <>
+                        {hasLegacy && step === "phone" && (
                             <>
-                                <Typography
-                                    variant="body2"
-                                    color="text.secondary"
+                                <Button
+                                    variant="outlined"
+                                    startIcon={<TelegramIcon />}
+                                    onClick={useLegacy}
+                                    disabled={busy}
                                 >
-                                    Mã đăng nhập đã được gửi vào app Telegram
-                                    (hoặc SMS) của {phoneNumber}.
-                                </Typography>
-                                <TextField
-                                    label="Mã xác minh"
-                                    autoComplete="one-time-code"
-                                    inputMode="numeric"
-                                    autoFocus
-                                    required
-                                    value={phoneCode}
-                                    onChange={(e) =>
-                                        setPhoneCode(e.target.value)
-                                    }
-                                />
+                                    Dùng phiên Telegram đã đăng nhập trên máy
+                                    này
+                                </Button>
+                                <Divider>hoặc</Divider>
                             </>
                         )}
-                        {step === "password" && (
-                            <TextField
-                                label="Mật khẩu xác minh 2 bước của Telegram"
-                                type="password"
-                                autoFocus
-                                required
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                            />
-                        )}
-                        {error && <Alert severity="error">{error}</Alert>}
-                        <Stack direction="row" justifyContent="space-between">
-                            <Button onClick={logout} disabled={busy}>
-                                Đăng xuất
-                            </Button>
-                            <Button
-                                type="submit"
-                                variant="contained"
-                                disabled={busy}
-                                sx={{ px: 3 }}
-                            >
-                                {busy ? "Đang xử lý…" : labels[step]}
-                            </Button>
-                        </Stack>
-                    </Stack>
-                </form>
+                        <form onSubmit={submit}>
+                            <Stack spacing={2}>
+                                {step === "phone" && (
+                                    <TextField
+                                        label="Số điện thoại (kèm mã quốc gia)"
+                                        placeholder="+84…"
+                                        autoComplete="tel"
+                                        required
+                                        value={phoneNumber}
+                                        onChange={(e) =>
+                                            setPhoneNumber(e.target.value)
+                                        }
+                                    />
+                                )}
+                                {step === "code" && (
+                                    <>
+                                        <Typography
+                                            variant="body2"
+                                            color="text.secondary"
+                                        >
+                                            Mã đăng nhập đã được gửi vào app
+                                            Telegram (hoặc SMS) của{" "}
+                                            {phoneNumber}.
+                                        </Typography>
+                                        <TextField
+                                            label="Mã xác minh"
+                                            autoComplete="one-time-code"
+                                            inputMode="numeric"
+                                            autoFocus
+                                            required
+                                            value={phoneCode}
+                                            onChange={(e) =>
+                                                setPhoneCode(e.target.value)
+                                            }
+                                        />
+                                    </>
+                                )}
+                                {step === "password" && (
+                                    <TextField
+                                        label="Mật khẩu xác minh 2 bước của Telegram"
+                                        type="password"
+                                        autoFocus
+                                        required
+                                        value={password}
+                                        onChange={(e) =>
+                                            setPassword(e.target.value)
+                                        }
+                                    />
+                                )}
+                                {error && (
+                                    <Alert severity="error">{error}</Alert>
+                                )}
+                                <Stack
+                                    direction="row"
+                                    justifyContent="space-between"
+                                >
+                                    <Button onClick={logout} disabled={busy}>
+                                        Đăng xuất
+                                    </Button>
+                                    <Button
+                                        type="submit"
+                                        variant="contained"
+                                        disabled={busy}
+                                        sx={{ px: 3 }}
+                                    >
+                                        {busy ? "Đang xử lý…" : labels[step]}
+                                    </Button>
+                                </Stack>
+                            </Stack>
+                        </form>
+                    </>
+                )}
             </Stack>
         </AuthShell>
     );

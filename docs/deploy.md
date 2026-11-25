@@ -16,9 +16,8 @@ Repo: https://github.com/datvan/CloudGram
 
 Vite nhúng thẳng mọi biến `VITE_*` vào file JS gửi cho trình duyệt. App nói
 chuyện MTProto với Telegram trực tiếp từ browser; dịch vụ tài khoản trên VPS
-(xem [Tài khoản và kho mã hoá](#tài-khoản-và-kho-mã-hoá)) chỉ giữ bản mã hoá
-của phiên, không chuyển tiếp gì tới Telegram. Đó là kiến trúc của CloudGram chứ
-không phải lỗi cấu hình.
+(xem [Tài khoản và kho mã hoá](#tài-khoản-và-kho-mã-hoá)) cũng có thể duyệt
+phiên mới bằng phiên root được mã hoá.
 
 Hệ quả: **bất kỳ ai mở cloudgram.example.com đều đọc được `api_id` và `api_hash`
 của bạn** bằng cách xem source. Họ không lấy được tài khoản Telegram của bạn
@@ -106,6 +105,19 @@ chưa đăng nhập là đúng).
 
 ## Tài khoản và kho mã hoá
 
+### Telegram dùng chung
+
+Mỗi tài khoản CloudGram có toàn quyền truy cập cùng tài khoản Telegram và tin nhắn.
+Chỉ cấp CloudGram cho người được phép truy cập dữ liệu đó. Trong
+`/etc/cloudgram-api.env`, đặt `CLOUDGRAM_TG_API_ID` và `CLOUDGRAM_TG_API_HASH`
+giống frontend; đặt `CLOUDGRAM_TG_ROOT_KEY` bằng kết quả `openssl rand -base64 32`.
+Sao lưu khóa an toàn và không đổi sau khi liên kết. Khởi động lại API, chạy
+`cloudgram-admin telegram-link`, nhập số điện thoại, mã và mật khẩu 2FA.
+`cloudgram-admin telegram-status` kiểm tra root; `cloudgram-admin telegram-unlink`
+xóa root cục bộ, không thu hồi phiên đã cấp. Thu hồi phiên trong Telegram.
+Máy chủ có khóa nên có thể đọc phiên root. Tắt bằng `CLOUDGRAM_SHARED_TELEGRAM=0`
+và restart API hoặc `VITE_FEATURE_SHARED_TELEGRAM=0` và build lại frontend.
+
 Đăng nhập vào CloudGram bằng tài khoản riêng của nó; tài khoản Telegram nằm
 phía sau. Chỉ admin tạo tài khoản:
 
@@ -119,10 +131,11 @@ ssh root@<ip-vps> cloudgram-admin list
 `cloudgram-admin` dừng dịch vụ trong lúc chạy rồi bật lại, vì dịch vụ giữ
 `db.json` trong bộ nhớ và sẽ ghi đè thay đổi.
 
-Người dùng mở link, đặt mật khẩu (ít nhất 10 ký tự), rồi liên kết Telegram một
-lần. Từ đó đăng nhập trên máy nào cũng dùng được ngay.
+Người dùng mở link, đặt mật khẩu (ít nhất 10 ký tự). Nếu Telegram dùng chung đã
+được cấu hình, app tự tạo phiên riêng; nếu chưa, người dùng liên kết thủ công.
 
-**VPS không đọc được dữ liệu.** Mật khẩu đi qua PBKDF2-SHA256 (600 000 vòng)
+**Kho người dùng được mã hoá.** Với Telegram dùng chung, VPS có thể giải mã
+phiên root và truy cập Telegram. Mật khẩu đi qua PBKDF2-SHA256 (600 000 vòng)
 ngay trong trình duyệt, ra hai nửa: một nửa gửi lên làm khoá đăng nhập (server
 chỉ lưu scrypt của nó), nửa kia là khoá mở một khoá dữ liệu AES-256-GCM ngẫu
 nhiên. Phiên Telegram và cây thư mục được mã hoá bằng khoá dữ liệu đó trước khi
@@ -131,8 +144,8 @@ phải liên kết Telegram lại và cây thư mục trống (file vẫn còn t
 Messages).
 
 **Dữ liệu trên VPS** nằm ở `/var/lib/cloudgram-api` (`db.json` cho tài khoản và
-phiên, `trees/<id>.json` cho cây thư mục đã mã hoá). Sao lưu thư mục đó là đủ;
-nó vô dụng nếu thiếu mật khẩu người dùng. Pepper trong `/etc/cloudgram-api.env`
+phiên, `trees/<id>.json` cho cây thư mục đã mã hoá). Sao lưu thư mục đó và
+khóa root riêng biệt. Pepper trong `/etc/cloudgram-api.env`
 chỉ dùng để sinh salt giả cho tên không tồn tại (để không ai dò được tên nào
 có tài khoản); mất hay đổi nó thì đăng nhập vẫn chạy, nhưng nên giữ cố định.
 

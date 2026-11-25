@@ -191,6 +191,7 @@ export class CloudGramApi {
         credentialGuard = true,
         shareQuotaGuard = true,
         play = {},
+        sharedTelegram = {},
     }) {
         if (!pepper || pepper.length < 32)
             throw new Error("CLOUDGRAM_PEPPER must be set (32+ chars)");
@@ -198,6 +199,8 @@ export class CloudGramApi {
         this.pepper = pepper;
         this.now = now;
         this.credentialGuard = credentialGuard;
+        this.sharedTelegram = sharedTelegram;
+        this.telegramApprovals = new RateLimiter(5, 10 * 60 * 1000);
         this.leases = new Map();
         this.loginByIp = new RateLimiter(10, 15 * 60 * 1000);
         this.loginByUser = new RateLimiter(20, 15 * 60 * 1000);
@@ -649,6 +652,25 @@ export class CloudGramApi {
         return { ok: true };
     }
 
+    async approveTelegram(req, res) {
+        if (this.sharedTelegram.enabled === false)
+            throw new HttpError(404, "not_found");
+        const { user } = await this.authenticate(req, res);
+        this.telegramApprovals.take(user.username, this.now());
+        const token = req.body.token;
+        if (
+            typeof token !== "string" ||
+            !/^[A-Za-z0-9+/]+={0,2}$/.test(token) ||
+            token.length > 512
+        )
+            throw new HttpError(400, "bad_token");
+        if (
+            !(await this.sharedTelegram.approve?.(Buffer.from(token, "base64")))
+        )
+            throw new HttpError(503, "telegram_not_linked");
+        return { ok: true };
+    }
+
     async me(req, res) {
         const { user, session } = await this.authenticate(req, res);
         return {
@@ -976,5 +998,6 @@ export class CloudGramApi {
         this.preloginByIp.sweep();
         this.setupByIp.sweep();
         this.diagBySession.sweep(this.now());
+        this.telegramApprovals.sweep(this.now());
     }
 }

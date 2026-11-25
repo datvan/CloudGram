@@ -12,6 +12,7 @@
  */
 import { CloudGramApi } from "./app.js";
 import { Db } from "./db.js";
+import { SharedTelegram } from "./shared-telegram.js";
 import { createApiServer } from "./http.js";
 
 const port = Number(process.env.PORT ?? 4322);
@@ -22,6 +23,7 @@ const api = new CloudGramApi({
     db,
     pepper: process.env.CLOUDGRAM_PEPPER,
     shareQuota: Number(process.env.CLOUDGRAM_SHARE_QUOTA_GB ?? 20) * 1024 ** 3,
+    sharedTelegram: new SharedTelegram(db.dir),
     credentialGuard: process.env.CLOUDGRAM_SECURITY_CREDENTIAL_GUARD !== "0",
     shareQuotaGuard: process.env.CLOUDGRAM_SECURITY_SHARE_QUOTA !== "0",
     play: {

@@ -17,9 +17,8 @@ Repo: https://github.com/datvan/CloudGram
 Vite inlines every `VITE_*` variable straight into the JS sent to the browser.
 The app speaks MTProto to Telegram directly from the browser; the account
 service on the VPS (see
-[Accounts and the encrypted vault](#accounts-and-the-encrypted-vault)) only
-keeps an encrypted copy of the session and forwards nothing to Telegram. That
-is CloudGram's architecture, not a misconfiguration.
+[Accounts and the encrypted vault](#accounts-and-the-encrypted-vault)) can also
+approve new sessions using the encrypted shared root session.
 
 The consequence: **anyone who opens cloudgram.example.com can read your `api_id`
 and `api_hash`** by viewing the source. They cannot get into your Telegram
@@ -126,10 +125,12 @@ ssh root@<vps-ip> cloudgram-admin list
 `cloudgram-admin` stops the service while it runs and starts it again, because
 the service keeps `db.json` in memory and would overwrite the change.
 
-The user opens the link, sets a password (at least 10 characters), then links
-Telegram once. From then on, signing in on any machine works right away.
+The user opens the link and sets a password (at least 10 characters). A separate
+Telegram session is created automatically when the shared root is configured;
+otherwise the user links Telegram manually.
 
-**The VPS cannot read the data.** The password goes through PBKDF2-SHA256
+**The user vault is encrypted.** With shared Telegram, the VPS can decrypt the
+root session and access Telegram. The password goes through PBKDF2-SHA256
 (600,000 iterations) in the browser and is split in two halves: one is sent as
 the login key (the server stores only its scrypt hash), the other unlocks a
 random AES-256-GCM data key. The Telegram session and the folder tree are
@@ -139,8 +140,8 @@ Telegram must be linked again and the folder tree starts empty (the files are
 still in Saved Messages).
 
 **Data on the VPS** lives in `/var/lib/cloudgram-api` (`db.json` for accounts
-and sessions, `trees/<id>.json` for encrypted folder trees). Backing up that
-directory is enough; it is useless without the users' passwords. The pepper in
+and sessions, `trees/<id>.json` for encrypted folder trees). Back up that
+directory and the root key separately. The pepper in
 `/etc/cloudgram-api.env` is only used to derive fake salts for names that do
 not exist (so nobody can probe which names have accounts); losing or changing
 it does not break sign-in, but it should stay fixed.
@@ -339,3 +340,17 @@ Security fixes have five default-on feature flags. See
 [configuration and rollback](security-flags.md) before disabling a fix.
 
 For CSP or Cloudflare changes, see [nonce policy and nginx deployment](csp.md).
+
+## Shared Telegram
+
+Every CloudGram account receives full access to the same Telegram account and its
+messages. Grant access only to trusted users. Set `CLOUDGRAM_TG_API_ID` and
+`CLOUDGRAM_TG_API_HASH` in `/etc/cloudgram-api.env` to the frontend app values,
+and `CLOUDGRAM_TG_ROOT_KEY` to the output of `openssl rand -base64 32`. Back up
+the key safely and do not change it after linking. Restart the API and run
+`cloudgram-admin telegram-link`; enter phone, code and 2FA password. Use
+`cloudgram-admin telegram-status` to check the root and `telegram-unlink` to
+remove it locally. Unlinking does not revoke issued sessions; revoke them in
+Telegram. The API host can decrypt the root. Disable with
+`CLOUDGRAM_SHARED_TELEGRAM=0` and restart or `VITE_FEATURE_SHARED_TELEGRAM=0`
+and rebuild the frontend.

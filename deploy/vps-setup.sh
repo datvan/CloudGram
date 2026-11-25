@@ -44,6 +44,7 @@ id cloudgram >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/s
 
 rm -rf /opt/cloudgram-api.incoming
 cp -r server /opt/cloudgram-api.incoming
+(cd /opt/cloudgram-api.incoming && npm install --omit=dev --no-audit --no-fund)
 chown -R root:root /opt/cloudgram-api.incoming
 chmod -R a+rX,go-w /opt/cloudgram-api.incoming
 rm -rf /opt/cloudgram-api.old

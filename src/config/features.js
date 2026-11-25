@@ -8,6 +8,8 @@ export const SPLIT_LARGE = import.meta.env.VITE_FEATURE_SPLIT_LARGE !== "0";
 export const LOCAL_HELPER = import.meta.env.VITE_FEATURE_LOCAL_HELPER !== "0";
 
 export const DIAG_LOG = import.meta.env.VITE_FEATURE_DIAG_LOG !== "0";
+export const SHARED_TELEGRAM =
+    import.meta.env.VITE_FEATURE_SHARED_TELEGRAM !== "0";
 
 // VITE_FEATURE_SPLIT_RAW=0 and a rebuild: a file over the limit is stopped
 // again (the dialog above), instead of going up as several messages that

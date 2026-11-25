@@ -15,6 +15,11 @@ security exposure.
 | `CLOUDGRAM_SECURITY_CREDENTIAL_GUARD` | API environment            | Login cannot issue a session using a verifier superseded during password verification                                                                                             |
 | `CLOUDGRAM_SECURITY_SHARE_QUOTA`      | API environment            | Share count and quota checks run immediately before reservation without an intervening await                                                                                      |
 
+| `CLOUDGRAM_SHARED_TELEGRAM` | API environment | `0` disables approval (404); restart API |
+| `VITE_FEATURE_SHARED_TELEGRAM` | Frontend build environment | `0` uses manual linking; rebuild and reload |
+
+Shared Telegram grants each CloudGram account a full session for the same Telegram account, including all its messages. The API host can decrypt the root session. Unlinking does not revoke issued sessions; revoke them in Telegram settings.
+
 ## Frontend rollback
 
 Browser diagnostics default on. Set `VITE_FEATURE_DIAG_LOG=0` and rebuild to
@@ -137,15 +142,15 @@ the tab can put chunks at `VITE_PLAY_DIRECT_URL` (`https://up.example.com:8444`,
 frontend build environment; empty = through the page's address, and it falls
 back to that by itself when the direct address cannot be reached).
 
-- DNS: `up` as an A record to the VPS, **DNS only** (grey cloud).
-- `deploy/vps-direct-upload.sh` installs `deploy/nginx/cloudgram-upload.conf`,
-  gets a Let's Encrypt certificate (port 80 is opened by certbot's hook only
-  while it runs) and opens `8444/tcp` in ufw. Only that nginx listens on 8444;
-  it accepts nothing but `PUT /api/play/<id>/chunks/<n>` and
-  `GET /api/play/<id>/next` (Cloudflare answered the tab's quick polls with
-  429), so no other site on the VPS is reachable without Cloudflare.
-- No cookie crosses origins: the session has its own random key, sent as
-  `X-Play-Key` and checked in constant time (`server/play.js`). The origin IP
-  is now in public DNS for `up.example.com` (it was already in git history).
-- Rollback: remove the `cloudgram-upload.conf` site link, `ufw delete allow
+-   DNS: `up` as an A record to the VPS, **DNS only** (grey cloud).
+-   `deploy/vps-direct-upload.sh` installs `deploy/nginx/cloudgram-upload.conf`,
+    gets a Let's Encrypt certificate (port 80 is opened by certbot's hook only
+    while it runs) and opens `8444/tcp` in ufw. Only that nginx listens on 8444;
+    it accepts nothing but `PUT /api/play/<id>/chunks/<n>` and
+    `GET /api/play/<id>/next` (Cloudflare answered the tab's quick polls with
+    429), so no other site on the VPS is reachable without Cloudflare.
+-   No cookie crosses origins: the session has its own random key, sent as
+    `X-Play-Key` and checked in constant time (`server/play.js`). The origin IP
+    is now in public DNS for `up.example.com` (it was already in git history).
+-   Rollback: remove the `cloudgram-upload.conf` site link, `ufw delete allow
 8444/tcp`, reload nginx, restore `cloudgram.conf` from the script's backup.

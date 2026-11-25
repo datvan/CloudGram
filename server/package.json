@@ -10,5 +10,8 @@
     "scripts": {
         "start": "node index.js",
         "test": "node --test test/*.test.js"
+    },
+    "dependencies": {
+        "telegram": "2.17.9"
     }
 }

@@ -65,6 +65,7 @@ export const api = {
     recover: (body) => request("POST", "/auth/recover", body),
     setRecovery: (body) => request("POST", "/auth/recovery", body),
     me: () => request("GET", "/me"),
+    approveTelegram: (token) => request("POST", "/tg/approve", { token }),
     getSession: () => request("GET", "/vault/session"),
     putSession: (session, browserId) =>
         request("PUT", "/vault/session", { session, browserId }),

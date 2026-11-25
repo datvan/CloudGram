@@ -1,5 +1,31 @@
 import { Api } from "telegram";
 import { API_ID, API_HASH } from "../config/config";
+import { Buffer } from "buffer/";
+import { api } from "./api";
+
+export async function sharedLogin(client) {
+    const exportToken = () =>
+        client.invoke(
+            new Api.auth.ExportLoginToken({
+                apiId: API_ID,
+                apiHash: API_HASH,
+                exceptIds: [],
+            }),
+        );
+    const token = await exportToken();
+    if (!(token instanceof Api.auth.LoginToken))
+        throw new Error("Unexpected Telegram login token");
+    await api.approveTelegram(Buffer.from(token.token).toString("base64"));
+    let result = await exportToken();
+    if (result instanceof Api.auth.LoginTokenMigrateTo) {
+        await client._switchDC(result.dcId);
+        result = await client.invoke(
+            new Api.auth.ImportLoginToken({ token: result.token }),
+        );
+    }
+    if (!(result instanceof Api.auth.LoginTokenSuccess))
+        throw new Error("Telegram login was not completed");
+}
 
 export function normalizePhone(input) {
     return (input || "").replace(/\D/g, "").replace(/^00/, "");

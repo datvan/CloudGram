@@ -46,6 +46,7 @@ ssh -o BatchMode=yes "$DEPLOY_HOST" "rm -rf '$API.incoming' && mkdir -p '$API.in
 # tar thay vì scp để bỏ được dữ liệu và cấu hình dev (server/.data, .env.dev)
 tar -C server --exclude=.data --exclude='.env*' --exclude=test --exclude=node_modules -cf - . |
     ssh -o BatchMode=yes "$DEPLOY_HOST" "tar -xf - -C '$API.incoming'"
+ssh -o BatchMode=yes "$DEPLOY_HOST" "cd '$API.incoming' && npm install --omit=dev --no-audit --no-fund"
 ssh -o BatchMode=yes "$DEPLOY_HOST" "chown -R root:root '$API.incoming' && chmod -R a+rX,go-w '$API.incoming' \
     && rm -rf '$API.old' && mv '$API' '$API.old' && mv '$API.incoming' '$API' && rm -rf '$API.old' \
     && systemctl restart cloudgram-api"
