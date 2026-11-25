@@ -192,6 +192,7 @@ export class CloudGramApi {
         shareQuotaGuard = true,
         play = {},
         sharedTelegram = {},
+        tgx,
         admins = (process.env.CLOUDGRAM_ADMINS ?? "").split(","),
     }) {
         if (!pepper || pepper.length < 32)
@@ -204,6 +205,7 @@ export class CloudGramApi {
         this.now = now;
         this.credentialGuard = credentialGuard;
         this.sharedTelegram = sharedTelegram;
+        this.tgx = tgx;
         this.telegramApprovals = new RateLimiter(5, 10 * 60 * 1000);
         this.leases = new Map();
         this.loginByIp = new RateLimiter(10, 15 * 60 * 1000);
@@ -669,6 +671,53 @@ export class CloudGramApi {
         user.recovery = await requireRecovery(req.body.recovery);
         await this.db.save();
         return { ok: true };
+    }
+
+    async tgxStart(req, res) {
+        const { user } = await this.authenticate(req, res);
+        return this.tgx.startUpload(user.username, req.body);
+    }
+    async tgxPart(req, res) {
+        const { user } = await this.authenticate(req, res);
+        return this.tgx.putPart(
+            user.username,
+            req.params.id,
+            Number(req.params.index),
+            req.raw,
+        );
+    }
+    async tgxFinish(req, res) {
+        const { user } = await this.authenticate(req, res);
+        return this.tgx.finishUpload(user.username, req.params.id, req.body);
+    }
+    async tgxCancel(req, res) {
+        const { user } = await this.authenticate(req, res);
+        return this.tgx.cancelUpload(user.username, req.params.id);
+    }
+    async tgxMessages(req, res) {
+        const { user } = await this.authenticate(req, res);
+        return this.tgx.messages(user.username, req.body.ids);
+    }
+    async tgxFile(req, res) {
+        const { user } = await this.authenticate(req, res);
+        const integer = (value) =>
+            typeof value === "string" && /^\d+$/.test(value)
+                ? Number(value)
+                : NaN;
+        return this.tgx.readFile(
+            user.username,
+            Number(req.params.id),
+            integer(req.query.offset),
+            integer(req.query.limit),
+        );
+    }
+    async tgxThumb(req, res) {
+        const { user } = await this.authenticate(req, res);
+        return this.tgx.thumb(user.username, Number(req.params.id));
+    }
+    async tgxDelete(req, res) {
+        const { user } = await this.authenticate(req, res);
+        return this.tgx.deleteMessages(user.username, req.body.ids);
     }
 
     async issueTelegramSession(req, res) {

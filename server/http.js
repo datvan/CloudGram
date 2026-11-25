@@ -28,6 +28,9 @@ const ROUTES = {
     "POST /api/auth/recover": "recover",
     "POST /api/auth/recovery": "setRecovery",
     "GET /api/me": "me",
+    "POST /api/tgx/upload/start": "tgxStart",
+    "POST /api/tgx/messages": "tgxMessages",
+    "POST /api/tgx/delete": "tgxDelete",
     "POST /api/tg/approve": "approveTelegram",
     "POST /api/tg/session": "issueTelegramSession",
     "GET /api/vault/session": "getSession",
@@ -47,6 +50,37 @@ const ROUTES = {
 
 // routes with ids in the path; `raw` takes the body as bytes, not JSON
 const PATTERNS = [
+    {
+        method: "PUT",
+        re: /^\/api\/tgx\/upload\/([^/]+)\/(\d+)$/,
+        keys: ["id", "index"],
+        handler: "tgxPart",
+        raw: true,
+    },
+    {
+        method: "POST",
+        re: /^\/api\/tgx\/upload\/([^/]+)\/finish$/,
+        keys: ["id"],
+        handler: "tgxFinish",
+    },
+    {
+        method: "POST",
+        re: /^\/api\/tgx\/upload\/([^/]+)\/cancel$/,
+        keys: ["id"],
+        handler: "tgxCancel",
+    },
+    {
+        method: "GET",
+        re: /^\/api\/tgx\/file\/(\d+)$/,
+        keys: ["id"],
+        handler: "tgxFile",
+    },
+    {
+        method: "GET",
+        re: /^\/api\/tgx\/thumb\/(\d+)$/,
+        keys: ["id"],
+        handler: "tgxThumb",
+    },
     {
         method: "PUT",
         re: /^\/api\/shares\/([^/]+)\/chunks\/(\d+)$/,
@@ -308,7 +342,12 @@ export function createApiServer(
                                   : LIMITS.body,
                           ),
                 raw: found.raw
-                    ? await readBytes(req, SHARE_LIMITS.chunkBytes)
+                    ? await readBytes(
+                          req,
+                          found.handler === "tgxPart"
+                              ? 524288
+                              : SHARE_LIMITS.chunkBytes,
+                      )
                     : undefined,
             };
             request.logClient = (ev) =>
@@ -333,6 +372,16 @@ export function createApiServer(
                 stream.on("error", () => res.destroy());
                 stream.pipe(res);
                 return;
+            }
+            if (Buffer.isBuffer(result)) {
+                if (cookies.length) headers["Set-Cookie"] = cookies;
+                headers["Content-Type"] =
+                    found.handler === "tgxThumb"
+                        ? "image/jpeg"
+                        : "application/octet-stream";
+                headers["Content-Length"] = String(result.length);
+                res.writeHead(200, headers);
+                return res.end(req.method === "HEAD" ? undefined : result);
             }
             send(200, result);
         } catch (error) {

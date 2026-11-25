@@ -10,20 +10,48 @@
  *     CLOUDGRAM_PLAY_CACHE_MB  disk for the player cache, all videos (default 1024)
  *     PORT               loopback port (default 4322)
  */
-import { CloudGramApi } from "./app.js";
+import { CloudGramApi, HttpError } from "./app.js";
 import { Db } from "./db.js";
 import { SharedTelegram } from "./shared-telegram.js";
+import { Owners } from "./owners.js";
+import { TelegramProxy } from "./tg-proxy.js";
 import { createApiServer } from "./http.js";
 
 const port = Number(process.env.PORT ?? 4322);
 const db = await new Db(
     process.env.CLOUDGRAM_DATA ?? "/var/lib/cloudgram-api",
 ).open();
+const sharedTelegram = new SharedTelegram(db.dir);
+const owners = await new Owners(db.dir).open();
+let client;
+let connecting;
+async function telegramClient() {
+    if (client?.connected) return client;
+    if (!connecting)
+        connecting = (async () => {
+            const session = await sharedTelegram.load();
+            if (!session) throw new HttpError(503, "telegram_not_linked");
+            if (!client) client = await sharedTelegram.client(session);
+            await client.connect();
+            return client;
+        })().finally(() => {
+            connecting = null;
+        });
+    return connecting;
+}
+const telegram = Object.fromEntries(
+    ["invoke", "getMessages", "sendFile", "deleteMessages"].map((method) => [
+        method,
+        async (...args) => (await telegramClient())[method](...args),
+    ]),
+);
+const tgx = new TelegramProxy({ owners, telegram });
 const api = new CloudGramApi({
     db,
     pepper: process.env.CLOUDGRAM_PEPPER,
     shareQuota: Number(process.env.CLOUDGRAM_SHARE_QUOTA_GB ?? 20) * 1024 ** 3,
-    sharedTelegram: new SharedTelegram(db.dir),
+    sharedTelegram,
+    tgx,
     credentialGuard: process.env.CLOUDGRAM_SECURITY_CREDENTIAL_GUARD !== "0",
     shareQuotaGuard: process.env.CLOUDGRAM_SECURITY_SHARE_QUOTA !== "0",
     play: {
