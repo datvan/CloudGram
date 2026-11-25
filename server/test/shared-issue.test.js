@@ -208,6 +208,28 @@ test("wrong password is marked invalid and never checked twice", async () => {
     }
 });
 
+test("wrong password does not overwrite a replacement", async () => {
+    const f = await fixture({ password: true, wrong: true });
+    try {
+        await f.shared.savePassword("password-secret");
+        const admin = new SharedTelegram(f.dir, f.shared.env);
+        f.shared.passwordCheck = async () => {
+            await admin.savePassword("new-password");
+            return "check";
+        };
+        await assert.rejects(f.shared.issue(), {
+            code: "telegram_password_invalid",
+            message: "telegram_password_invalid",
+        });
+        assert.deepEqual(await f.shared.loadPassword(), {
+            password: "new-password",
+            invalid: false,
+        });
+    } finally {
+        await f.cleanup();
+    }
+});
+
 test("flood waits during export and password check preserve seconds", async () => {
     for (const options of [
         { flood: "FLOOD", floodSeconds: 30 },

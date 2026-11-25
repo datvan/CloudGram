@@ -17,6 +17,7 @@ import {
     signIn,
     signInWithPassword,
     openSharedClient,
+    discardSharedClient,
 } from "../../services/telegramAuth";
 import { SHARED_TELEGRAM } from "../../config/features";
 import { describeError } from "../../services/api";
@@ -53,14 +54,14 @@ export default function TelegramLink() {
                         signal: controller.signal,
                     });
                     if (cancelled) {
-                        await client.destroy();
+                        await discardSharedClient(client);
                         return;
                     }
                     clientRef.current = null;
                     try {
                         await adoptTelegram(client, "shared");
                     } catch (error) {
-                        await client.destroy().catch(() => {});
+                        await discardSharedClient(client);
                         throw error;
                     }
                     return;

@@ -3,40 +3,57 @@ import { API_ID, API_HASH } from "../config/config";
 import { api } from "./api";
 import { newClient } from "./telegram";
 
+export async function discardSharedClient(client) {
+    let timer;
+    try {
+        await Promise.race([
+            client.invoke(new Api.auth.LogOut()),
+            new Promise((resolve) => {
+                timer = setTimeout(resolve, 5000);
+            }),
+        ]);
+    } catch {
+        // Logout is best effort.
+    } finally {
+        clearTimeout(timer);
+        try {
+            await client.destroy();
+        } catch {
+            // Cleanup must not hide the original error.
+        }
+    }
+}
+
 export async function openSharedClient({ deps = {}, signal } = {}) {
     let client;
-    const cancel = () => {
-        client?.destroy().catch(() => {});
-    };
-    signal?.addEventListener("abort", cancel, { once: true });
+    let cancel;
     try {
         signal?.throwIfAborted();
         const { session, dcId } = await (
             deps.issueTelegramSession || api.issueTelegramSession
         )();
-        signal?.throwIfAborted();
         client = (deps.newClient || newClient)(session);
+        signal?.throwIfAborted();
+        const aborted = new Promise((_, reject) => {
+            cancel = () => reject(signal.reason);
+            signal?.addEventListener("abort", cancel, { once: true });
+        });
+        const run = (operation) => Promise.race([operation, aborted]);
         if (client.session.dcId !== dcId)
             throw new Error("Invalid Telegram session DC");
-        const dc = await client.getDC(dcId, false, true);
+        const dc = await run(client.getDC(dcId, false, true));
         signal?.throwIfAborted();
         client.session.setDC(dcId, dc.ipAddress, dc.port);
-        await client.connect();
+        await run(client.connect());
         signal?.throwIfAborted();
-        await client.getMe();
+        await run(client.getMe());
         signal?.throwIfAborted();
         return client;
     } catch (error) {
-        if (client) {
-            try {
-                await client.destroy();
-            } catch {
-                // Keep the original error.
-            }
-        }
+        if (client) await discardSharedClient(client);
         throw error;
     } finally {
-        signal?.removeEventListener("abort", cancel);
+        if (cancel) signal?.removeEventListener("abort", cancel);
     }
 }
 

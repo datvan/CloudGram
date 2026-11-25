@@ -195,7 +195,12 @@ export class SharedTelegram {
                 } catch (passwordError) {
                     if (passwordError.errorMessage !== "PASSWORD_HASH_INVALID")
                         throw passwordError;
-                    await this.savePassword(stored.password, true);
+                    const current = await this.loadPassword();
+                    if (
+                        current?.password === stored.password &&
+                        current.invalid === false
+                    )
+                        await this.savePassword(stored.password, true);
                     throw coded("telegram_password_invalid");
                 }
             }
