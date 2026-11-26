@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
-async function setup() {
+async function setup(admin = true) {
     const source = (
         await readFile(
             new URL("../../src/services/account.js", import.meta.url),
@@ -24,7 +24,10 @@ async function setup() {
         Store: { dispatch() {} },
         setAuth: (state) => state,
         api: {
-            getSession: async () => ({ session: vault }),
+            getSession: async () => {
+                if (!admin) throw new Error("admin_only");
+                return { session: vault };
+            },
             putSession: async (blob) => {
                 vault = blob;
             },
@@ -44,7 +47,7 @@ async function setup() {
         stopClient: async () => {},
     });
     const account = vm.runInContext(
-        `${source}\n;({ adoptTelegram, adoptLegacySession, getTelegramMode, unlinkTelegram })`,
+        `${source}\naccount = { admin: ${admin} }; ({ adoptTelegram, adoptLegacySession, getTelegramMode, unlinkTelegram })`,
         context,
     );
     return {
@@ -56,6 +59,11 @@ async function setup() {
         getVault: () => vault,
     };
 }
+
+test("non-admin mode matches proxy upload records without requesting a vault session", async () => {
+    const { account } = await setup(false);
+    assert.equal(await account.getTelegramMode(), "private");
+});
 
 test("shared and manual link save their mode in the encrypted session", async () => {
     const { account, client, getVault } = await setup();

@@ -382,6 +382,7 @@ test("account mode validates exact saved client session", async () => {
         )[0]
         .replace("export ", "");
     const getMode = vm.runInNewContext(`${fn}; getTelegramMode`, {
+        account: { admin: true },
         api: { getSession: async () => ({ session: "sealed" }) },
         decryptJson: async () => ({ session: "saved", telegramMode: "shared" }),
         dek: {},
