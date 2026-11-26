@@ -124,13 +124,32 @@ export const getMessages = async (ids, signal) =>
 let readKey,
     keyExpires = 0,
     keyRequest,
+    directRetryAt = 0,
+    readGeneration = 0;
+
+export function resetReadKey() {
+    readGeneration++;
+    readKey = null;
+    keyExpires = 0;
+    keyRequest = null;
     directRetryAt = 0;
+}
+
+function checkReadGeneration(generation) {
+    if (generation !== readGeneration) {
+        const error = new Error("Session changed");
+        error.name = "AbortError";
+        throw error;
+    }
+}
 
 function getReadKey() {
     if (readKey && Date.now() < keyExpires) return Promise.resolve(readKey);
     if (!keyRequest) {
-        keyRequest = request("POST", "/read-key", {})
+        const generation = readGeneration;
+        const pending = request("POST", "/read-key", {})
             .then((data) => {
+                checkReadGeneration(generation);
                 if (!data.readKey || !(data.expiresIn > 0))
                     throw new Error("bad key response");
                 readKey = data.readKey;
@@ -139,8 +158,9 @@ function getReadKey() {
                 return readKey;
             })
             .finally(() => {
-                keyRequest = null;
+                if (keyRequest === pending) keyRequest = null;
             });
+        keyRequest = pending;
     }
     return keyRequest;
 }
@@ -164,7 +184,9 @@ async function waitForKey(signal) {
 }
 
 async function directRead(path, signal) {
+    const generation = readGeneration;
     const key = await waitForKey(signal);
+    checkReadGeneration(generation);
     signal?.throwIfAborted();
     try {
         return await request("GET", path, undefined, true, signal, {
@@ -172,12 +194,14 @@ async function directRead(path, signal) {
             key,
         });
     } catch (error) {
+        checkReadGeneration(generation);
         if (error.status !== 404 || error.code !== "not_found") throw error;
         if (readKey === key) {
             readKey = null;
             keyExpires = 0;
         }
         const fresh = await waitForKey(signal);
+        checkReadGeneration(generation);
         signal?.throwIfAborted();
         return await request("GET", path, undefined, true, signal, {
             url: `${PLAY_DIRECT}/api/tgxd${path}`,
@@ -187,6 +211,7 @@ async function directRead(path, signal) {
 }
 
 async function read(path, signal) {
+    const generation = readGeneration;
     let waited = 0;
     for (let delay = 500; ; delay = Math.min(delay * 2, 5000)) {
         try {
@@ -194,6 +219,7 @@ async function read(path, signal) {
                 try {
                     return await directRead(path, signal);
                 } catch (error) {
+                    checkReadGeneration(generation);
                     signal?.throwIfAborted();
                     if (error?.name === "AbortError" || error?.status === 429)
                         throw error;

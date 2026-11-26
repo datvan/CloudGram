@@ -243,7 +243,8 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         )
     )
         .replace(/^import .*;\s*$/gm, "")
-        .replaceAll("export const ", "const ");
+        .replaceAll("export const ", "const ")
+        .replaceAll("export function ", "function ");
     const clientSource = (
         await readFile(
             new URL("../../src/services/proxyClient.js", import.meta.url),
@@ -465,7 +466,8 @@ test("direct upload selects origin, falls back only on network failure and prese
         )
     )
         .replace(/^import .*;\s*$/gm, "")
-        .replaceAll("export const ", "const ");
+        .replaceAll("export const ", "const ")
+        .replaceAll("export function ", "function ");
     const clientSource = (
         await readFile(
             new URL("../../src/services/proxyClient.js", import.meta.url),

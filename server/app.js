@@ -754,7 +754,7 @@ export class CloudGramApi {
     }
     async tgxReadKey(req, res) {
         if (!this.tgxDirectRead) throw new HttpError(404, "not_found");
-        const { user } = await this.authenticate(req, res);
+        const { user, sessionKey } = await this.authenticate(req, res);
         const browserId = req.headers["x-cloudgram-browser"];
         this.#renewUploadLease(user.username, browserId);
         for (const [digest, key] of this.readKeys)
@@ -768,6 +768,7 @@ export class CloudGramApi {
             key: readKey,
             user: user.id,
             username: user.username,
+            sessionKey,
             browserId,
             expires: this.now() + 3600000,
         });
@@ -793,8 +794,15 @@ export class CloudGramApi {
             if (key && key.expires <= this.now()) this.readKeys.delete(digest);
             throw new HttpError(404, "not_found");
         }
+        const session = this.db.data.sessions[key.sessionKey];
         const user = this.db.data.users[key.username];
-        if (!user || user.id !== key.user)
+        if (
+            !session ||
+            session.username !== key.username ||
+            session.expiresAt <= this.now() ||
+            !user?.verifier ||
+            user.id !== key.user
+        )
             throw new HttpError(404, "not_found");
         this.#renewUploadLease(key.username, key.browserId);
         return user;

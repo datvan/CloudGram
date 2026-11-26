@@ -1,5 +1,6 @@
 import { diag, swallow } from "./diag";
 import { createProxyClient } from "./proxyClient";
+import { resetReadKey } from "./tgProxy";
 /**
  * The sign-in flow, from a local CloudGram account down to a live Telegram
  * connection:
@@ -443,6 +444,7 @@ export function logoutOthers() {
  */
 export async function logout() {
     // Invalidate in-memory uploads before any asynchronous logout work.
+    resetReadKey();
     const logClosed = closeUploadLog().catch(console.error);
     try {
         // give a pending tree write a moment so it is not lost

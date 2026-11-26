@@ -44,7 +44,7 @@ function setup(origin, handler) {
         clearTimeout,
     });
     vm.runInContext(
-        source + "\nglobalThis.subject = { readFile, thumb };",
+        source + "\nglobalThis.subject = { readFile, thumb, resetReadKey };",
         context,
     );
     return {
@@ -100,6 +100,49 @@ test("without direct origin reads use same-origin", async () => {
     await s.thumb(7);
     assert.equal(s.calls[0].url, "/api/tgx/thumb/7");
     assert.equal(s.calls[0].options.credentials, "same-origin");
+});
+
+test("reset discards cached and pending keys and clears fallback cooldown", async () => {
+    let count = 0,
+        resolveOld;
+    const s = setup("https://up.example", async (url) => {
+        if (url.endsWith("/read-key")) {
+            count++;
+            if (count === 2)
+                return new Promise((resolve) => (resolveOld = resolve));
+            return key(String(count));
+        }
+        return bytes();
+    });
+    await s.thumb(7);
+    s.resetReadKey();
+    const old = s.thumb(7);
+    s.resetReadKey();
+    await s.thumb(7);
+    resolveOld(key("old"));
+    await assert.rejects(old, { name: "AbortError" });
+    await s.thumb(7);
+    assert.deepEqual(
+        s.calls
+            .filter((c) => c.url.includes("/tgxd/"))
+            .map((c) => c.options.headers["X-Read-Key"]),
+        ["1", "3", "3"],
+    );
+
+    let fail = true;
+    const fallback = setup("https://up.example", async (url) => {
+        if (url.endsWith("/read-key")) return key();
+        if (url.startsWith("https://") && fail) throw new TypeError("network");
+        return bytes();
+    });
+    await fallback.thumb(7);
+    fail = false;
+    fallback.resetReadKey();
+    await fallback.thumb(7);
+    assert.equal(
+        fallback.calls.filter((c) => c.url.startsWith("https://")).length,
+        2,
+    );
 });
 
 test("not_found replaces key and retries once", async () => {

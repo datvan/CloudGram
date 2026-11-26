@@ -507,6 +507,24 @@ test("direct read keys enforce ownership, lease, expiry and revocation", async (
         assert.equal(lost.status, 409);
         assert.equal((await lost.json()).error, "lease_required");
         api.leases.get("alice").holder = "browser";
+        const aliceSession = createHash("sha256").update("alice").digest("hex");
+        db.data.sessions[
+            createHash("sha256").update("alice-other").digest("hex")
+        ] = {
+            username: "alice",
+            expiresAt: now + 7200000,
+        };
+        const savedSession = db.data.sessions[aliceSession];
+        savedSession.expiresAt = now;
+        const expiredSession = await read("thumb/7", second.readKey);
+        assert.equal(expiredSession.status, 404);
+        assert.deepEqual(await expiredSession.json(), { error: "not_found" });
+        savedSession.expiresAt = now + 7200000;
+        delete db.data.sessions[aliceSession];
+        const removedSession = await read("thumb/7", second.readKey);
+        assert.equal(removedSession.status, 404);
+        assert.deepEqual(await removedSession.json(), { error: "not_found" });
+        db.data.sessions[aliceSession] = savedSession;
         now += 3600000;
         assert.equal((await read("thumb/7", second.readKey)).status, 404);
         api.leases.get("alice").expires = now + 7200000;
