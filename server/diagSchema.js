@@ -7,6 +7,7 @@ const EVENTS = {
         via: ["drop", "picker", "input", "pieces"],
         nRoots: "num",
     },
+    "upload.direct.fallback": {},
     "upload.scan.progress": { files: "num", sizeB: "sizeB" },
     "upload.scan.done": { files: "num", ms: "num" },
     "upload.scan.fail": { errName: "errName" },

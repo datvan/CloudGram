@@ -1,16 +1,18 @@
 import { ApiError } from "./api";
 import { browserId } from "./keystore";
 
-async function request(method, path, body, binary = false, signal) {
+async function request(method, path, body, binary = false, signal, direct) {
     signal?.throwIfAborted();
     let response;
     try {
-        response = await fetch(`/api/tgx${path}`, {
+        response = await fetch(direct?.url ?? `/api/tgx${path}`, {
             method,
-            credentials: "same-origin",
+            credentials: direct ? "omit" : "same-origin",
             signal,
             headers: {
-                "X-CloudGram-Browser": browserId(),
+                ...(direct
+                    ? { "X-Upload-Key": direct.key }
+                    : { "X-CloudGram-Browser": browserId() }),
                 ...(body === undefined
                     ? {}
                     : {
@@ -23,11 +25,13 @@ async function request(method, path, body, binary = false, signal) {
                 body === undefined
                     ? undefined
                     : binary
-                      ? body
-                      : JSON.stringify(body),
+                    ? body
+                    : JSON.stringify(body),
         });
     } catch (error) {
         if (signal?.aborted) throw signal.reason;
+        if (error?.name === "AbortError") throw error;
+        if (direct) throw new ApiError(0, "direct_offline");
         throw new ApiError(0, "offline");
     }
     if (binary && method == "GET" && response.ok)
@@ -59,13 +63,17 @@ async function request(method, path, body, binary = false, signal) {
 
 export const startUpload = (size, parts, signal) =>
     request("POST", "/upload/start", { size, parts }, false, signal);
-export const putPart = (id, index, bytes, signal) =>
+export const putPart = (id, index, bytes, signal, direct) =>
     request(
         "PUT",
         `/upload/${encodeURIComponent(id)}/${index}`,
         bytes,
         true,
         signal,
+        direct && {
+            url: `${direct.origin}/api/tgxd/${encodeURIComponent(id)}/${index}`,
+            key: direct.key,
+        },
     );
 export const finishUpload = async (id, metadata) => {
     const deadline = Date.now() + 180000;

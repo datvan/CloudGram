@@ -3,6 +3,9 @@ import { Buffer } from "buffer/";
 import * as proxy from "./tgProxy";
 import { api } from "./api";
 import { browserId } from "./keystore";
+import { PLAY_DIRECT } from "../config/features";
+import { diag } from "./diag";
+import { ApiError } from "./api";
 
 const PART = 512 * 1024;
 const READ = 1024 * 1024;
@@ -62,13 +65,17 @@ export function createProxyClient() {
                 : controller.signal;
             signal?.throwIfAborted();
             const parts = Math.ceil(file.size / PART);
-            const { uploadId } = await withLease(
+            const { uploadId, directKey } = await withLease(
                 () => proxy.startUpload(file.size, parts, signal),
                 signal,
             );
             let sent = 0;
             let next = 0;
             let failed = false;
+            let direct =
+                PLAY_DIRECT && directKey
+                    ? { origin: PLAY_DIRECT, key: directKey }
+                    : null;
             try {
                 const worker = async () => {
                     while (next < parts && !failed) {
@@ -91,12 +98,42 @@ export function createProxyClient() {
                             try {
                                 await withLease(
                                     () =>
-                                        proxy.putPart(
-                                            uploadId,
-                                            index,
-                                            bytes,
-                                            signal,
-                                        ),
+                                        (async () => {
+                                            const selected = direct;
+                                            try {
+                                                return await proxy.putPart(
+                                                    uploadId,
+                                                    index,
+                                                    bytes,
+                                                    signal,
+                                                    selected,
+                                                );
+                                            } catch (error) {
+                                                signal?.throwIfAborted();
+                                                if (
+                                                    !selected ||
+                                                    !(
+                                                        error instanceof
+                                                        ApiError
+                                                    ) ||
+                                                    error.code !==
+                                                        "direct_offline"
+                                                )
+                                                    throw error;
+                                                if (direct) {
+                                                    direct = null;
+                                                    diag(
+                                                        "upload.direct.fallback",
+                                                    );
+                                                }
+                                                return proxy.putPart(
+                                                    uploadId,
+                                                    index,
+                                                    bytes,
+                                                    signal,
+                                                );
+                                            }
+                                        })(),
                                     signal,
                                 );
                                 break;

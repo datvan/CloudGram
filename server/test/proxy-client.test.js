@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { Api } from "telegram";
 import { Buffer } from "buffer";
+import { sanitizeDiag } from "../diagSchema.js";
 
 test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async () => {
     const calls = [];
@@ -170,6 +171,8 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         fetch,
         ApiError,
         browserId: () => "browser",
+        PLAY_DIRECT: "",
+        diag() {},
         api: {
             lease: async (id, takeover) => {
                 assert.equal(id, "browser");
@@ -353,6 +356,158 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
     ])
         await assert.rejects(call(), { message: "Telegram is not connected" });
     assert.equal(calls.length, count);
+});
+
+test("direct upload selects origin, falls back only on network failure and preserves HTTP retries", async () => {
+    const proxySource = (
+        await readFile(
+            new URL("../../src/services/tgProxy.js", import.meta.url),
+            "utf8",
+        )
+    )
+        .replace(/^import .*;\s*$/gm, "")
+        .replaceAll("export const ", "const ");
+    const clientSource = (
+        await readFile(
+            new URL("../../src/services/proxyClient.js", import.meta.url),
+            "utf8",
+        )
+    )
+        .replace(/^import .*;\s*$/gm, "")
+        .replace(
+            "export function createProxyClient",
+            "function createProxyClient",
+        );
+    class ApiError extends Error {
+        constructor(status, code, body) {
+            super(code);
+            Object.assign(this, { status, code, body });
+        }
+    }
+    async function run({
+        origin = "https://up.example",
+        key = "secret",
+        failures = [],
+        abort = false,
+    } = {}) {
+        const calls = [],
+            events = [],
+            waits = [];
+        let leases = 0;
+        const controller = new AbortController();
+        const context = vm.createContext({
+            Api,
+            Buffer,
+            Uint8Array,
+            ApiError,
+            AbortController,
+            AbortSignal,
+            clearTimeout,
+            PLAY_DIRECT: origin,
+            browserId: () => "browser",
+            diag: (...args) => events.push(args),
+            api: {
+                lease: async () => {
+                    leases++;
+                    return { status: "granted" };
+                },
+            },
+            setTimeout: (fn, ms) => {
+                waits.push(ms);
+                return setTimeout(fn, 0);
+            },
+            fetch: async (url, options) => {
+                calls.push({ url, options });
+                if (url.endsWith("/start"))
+                    return {
+                        ok: true,
+                        json: async () => ({ uploadId: "u", directKey: key }),
+                    };
+                if (url.includes("/cancel"))
+                    return { ok: true, json: async () => ({}) };
+                const failure = failures.shift();
+                if (abort) {
+                    controller.abort();
+                    throw controller.signal.reason;
+                }
+                if (failure === "network") throw new TypeError("network");
+                if (failure)
+                    return {
+                        ok: false,
+                        status: failure.status,
+                        headers: { get: () => failure.retryAfter || null },
+                        json: async () => failure.body,
+                    };
+                return { ok: true, json: async () => ({}) };
+            },
+        });
+        vm.runInContext(
+            `${proxySource}\nconst proxy = { startUpload, putPart, finishUpload, cancelUpload, getMessages, readFile, thumb, deleteMessages };\n${clientSource}\nglobalThis.create = createProxyClient;`,
+            context,
+        );
+        const file = new Blob([Buffer.alloc(33 * 524288)]);
+        file.name = "x";
+        const upload = context
+            .create()
+            .proxyUpload(file, { signal: controller.signal });
+        if (abort) await assert.rejects(upload, { name: "AbortError" });
+        else await upload;
+        return {
+            calls: calls.filter((c) =>
+                /\/(?:tgxd\/u|upload\/u)\/\d+$/.test(c.url),
+            ),
+            events,
+            waits,
+            leases,
+        };
+    }
+    let result = await run();
+    assert.ok(
+        result.calls.every((c) =>
+            c.url.startsWith("https://up.example/api/tgxd/"),
+        ),
+    );
+    assert.equal(result.calls[0].options.credentials, "omit");
+    assert.equal(result.calls[0].options.headers["X-Upload-Key"], "secret");
+    for (const settings of [{ key: null }, { origin: "" }]) {
+        result = await run(settings);
+        assert.ok(result.calls.every((c) => c.url.startsWith("/api/tgx/")));
+    }
+    result = await run({ failures: ["network"] });
+    assert.ok(result.calls.some((c) => c.url === "/api/tgx/upload/u/0"));
+    assert.ok(result.calls.some((c) => c.url === "/api/tgx/upload/u/32"));
+    assert.equal(result.events.length, 1);
+    assert.equal(result.events[0][0], "upload.direct.fallback");
+    assert.deepEqual(
+        sanitizeDiag({
+            evt: result.events[0][0],
+            key: "secret",
+            url: "https://up.example",
+        }),
+        {
+            event: { evt: "upload.direct.fallback" },
+            dropped: 2,
+        },
+    );
+    result = await run({
+        failures: [
+            {
+                status: 429,
+                retryAfter: "4",
+                body: { error: "busy", seconds: 5 },
+            },
+            { status: 409, body: { error: "lease_required" } },
+        ],
+    });
+    assert.ok(
+        result.calls.every((c) => c.url.startsWith("https://up.example/")),
+    );
+    assert.ok(result.waits.includes(5000));
+    assert.equal(result.leases, 1);
+    assert.equal(result.events.length, 0);
+    result = await run({ abort: true });
+    assert.equal(result.calls.length, 1);
+    assert.equal(result.events.length, 0);
 });
 
 test("non-admin installs proxy only after lease and stops it on lease loss", async () => {

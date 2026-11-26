@@ -153,7 +153,9 @@ key at start. `PUT /api/tgxd/<uploadId>/<index>` uses `X-Upload-Key` without a
 cookie and retains the account's lease and upload limits. Keys expire with the
 upload and are revoked on finish, cancellation, logout, account reset or deletion.
 Set the flag to `0` and restart to disable the route and discard existing keys.
-Direct-host nginx routing and CORS must be configured separately.
+The browser uses `VITE_PLAY_DIRECT_URL` when both it and the key are present;
+network failure falls back to the cookie route for the rest of that upload.
+The direct-host nginx location permits only PUT and OPTIONS from the app origin.
 
 Uploading a 2 MiB chunk to `cloudgram.example.com` measured 3-11 KB/s from the
 owner's network (Cloudflare to the VPS), against 7 MB/s straight to the VPS, so
