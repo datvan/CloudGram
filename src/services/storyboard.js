@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { getClient, isOnline, onClientChange } from "./telegram";
 import { getRecord, getSnapshot, update, flush } from "./drive";
-import { ApiError, describeError } from "./api";
+import { describeError } from "./api";
 import { uploadScope } from "./uploadLog";
 import { getTelegramMode } from "./account";
 import { isMigrating } from "./migrateShared";
@@ -29,6 +29,7 @@ const SEEK_TIMEOUT = 30000;
 // this many frames left out in a row: the stream is stuck, give up
 const STUCK = 3;
 const RETRY_DELAYS = [2000, 5000];
+const saveErrors = new WeakSet();
 
 /** The time frame `index` shows, in a video `duration` seconds long. */
 export const frameTime = (index, duration) =>
@@ -465,7 +466,15 @@ function make(record, src, options = {}) {
             for (const r of records)
                 update(r.id, { storyboard }, { preserveModifiedAt: true });
             try {
-                await flush();
+                await flush().catch((error) => {
+                    if (
+                        error &&
+                        (typeof error === "object" ||
+                            typeof error === "function")
+                    )
+                        saveErrors.add(error);
+                    throw error;
+                });
                 op.assert();
             } catch (error) {
                 if (uploadScope() === s.scope) {
@@ -690,7 +699,7 @@ async function getStoryboard(record, streamSrc, allowMake, options = {}) {
 
 /** What follows "Hình xem trước" in the player when there is none. */
 function describeProblem(error) {
-    if (error instanceof ApiError)
+    if (error && saveErrors.has(error))
         return `đã tạo nhưng chưa lưu được: ${describeError(error)}`;
     return `bị lỗi: ${describeError(error)}`;
 }

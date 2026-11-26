@@ -114,7 +114,7 @@ async function harness({
         .replace(/^import [\s\S]*?;\r?\n/gm, "")
         .replace(/\bexport /g, "");
     const mod = vm.runInNewContext(
-        `${source}\n;({draw,make,load,regenerate,getStoryboard,sessionState,useStoryboard,storyboardsOf})`,
+        `${source}\n;({draw,make,load,regenerate,getStoryboard,sessionState,describeProblem,useStoryboard,storyboardsOf})`,
         {
             ...react,
             console: { log() {} },
@@ -239,6 +239,36 @@ test("partial frames rejected before upload", async () => {
         /Too few/,
     );
     assert.equal(h.stats().sent, 0);
+});
+
+test("storyboard errors identify reading versus saving", async () => {
+    const read = await harness({ errors: [new Error("read failed")] });
+    let readError;
+    try {
+        await read.make(1, () => "stream", { retryDelays: [] });
+    } catch (error) {
+        readError = error;
+    }
+    assert.match(read.describeProblem(readError), /^bị lỗi:/);
+    assert.match(
+        read.describeProblem(new read.ApiError("rate limited")),
+        /^bị lỗi:/,
+    );
+    const save = await harness({
+        flush: async () => {
+            throw new Error("save failed");
+        },
+    });
+    let saveError;
+    try {
+        await save.make(1, () => "stream", { retryDelays: [] });
+    } catch (error) {
+        saveError = error;
+    }
+    assert.match(
+        save.describeProblem(saveError),
+        /^đã tạo nhưng chưa lưu được:/,
+    );
 });
 
 test("session validation retries API outage and fails closed on 401 or changed session", async () => {

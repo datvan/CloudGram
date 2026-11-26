@@ -44,7 +44,11 @@ async function request(method, path, body, binary = false, signal, direct) {
         signal?.throwIfAborted();
         const error = new ApiError(
             response.status,
-            response.status === 502 ? "server_down" : "bad_response",
+            response.status === 429
+                ? "rate_limited"
+                : response.status === 502
+                ? "server_down"
+                : "bad_response",
         );
         error.retryAfter = retryAfter;
         throw error;
@@ -112,15 +116,40 @@ export const cancelUpload = (id, signal) =>
     );
 export const getMessages = async (ids, signal) =>
     (await request("POST", "/messages", { ids }, false, signal)).messages;
+async function read(path, signal) {
+    let waited = 0;
+    for (let delay = 500; ; delay = Math.min(delay * 2, 5000)) {
+        try {
+            return await request("GET", path, undefined, true, signal);
+        } catch (error) {
+            if (!(error instanceof ApiError) || error.status !== 429)
+                throw error;
+            const remaining = 60000 - waited;
+            if (remaining <= 0) throw error;
+            const pause = Math.max(
+                delay,
+                (Number(error.retryAfter) || 0) * 1000,
+            );
+            const duration = Math.min(pause, remaining);
+            await new Promise((resolve, reject) => {
+                signal?.throwIfAborted();
+                const abort = () => {
+                    clearTimeout(timer);
+                    reject(signal.reason);
+                };
+                const timer = setTimeout(() => {
+                    signal?.removeEventListener("abort", abort);
+                    resolve();
+                }, duration);
+                signal?.addEventListener("abort", abort, { once: true });
+            });
+            waited += duration;
+            if (pause > remaining || waited >= 60000) throw error;
+        }
+    }
+}
 export const readFile = (id, offset, limit, signal) =>
-    request(
-        "GET",
-        `/file/${id}?offset=${offset}&limit=${limit}`,
-        undefined,
-        true,
-        signal,
-    );
-export const thumb = (id, signal) =>
-    request("GET", `/thumb/${id}`, undefined, true, signal);
+    read(`/file/${id}?offset=${offset}&limit=${limit}`, signal);
+export const thumb = (id, signal) => read(`/thumb/${id}`, signal);
 export const deleteMessages = async (ids, signal) =>
     (await request("POST", "/delete", { ids }, false, signal)).deleted;

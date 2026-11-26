@@ -38,10 +38,16 @@ async function parse(res) {
         data = await res.json();
     } catch {
         // an HTML error page from nginx or Cloudflare
-        throw new ApiError(
+        const error = new ApiError(
             res.status,
-            res.status === 502 ? "server_down" : "bad_response",
+            res.status === 429
+                ? "rate_limited"
+                : res.status === 502
+                ? "server_down"
+                : "bad_response",
         );
+        error.retryAfter = Number(res.headers?.get("Retry-After")) || 0;
+        throw error;
     }
     if (!res.ok) throw new ApiError(res.status, data.error ?? "error", data);
     return data;

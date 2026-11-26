@@ -6,6 +6,103 @@ import { Api } from "telegram";
 import { Buffer } from "buffer";
 import { sanitizeDiag } from "../diagSchema.js";
 
+test("plain rate limits are parsed and proxy reads retry, abort and stop at the cap", async () => {
+    const apiSource = (
+        await readFile(
+            new URL("../../src/services/api.js", import.meta.url),
+            "utf8",
+        )
+    ).replace(/\bexport /g, "");
+    const proxySource = (
+        await readFile(
+            new URL("../../src/services/tgProxy.js", import.meta.url),
+            "utf8",
+        )
+    )
+        .replace(/^import .*;\s*$/gm, "")
+        .replace(/\bexport /g, "");
+    let calls = 0,
+        now = 0,
+        mode = "success";
+    const waits = [];
+    const rate = () => ({
+        ok: false,
+        status: 429,
+        headers: { get: () => "7" },
+        json: async () => {
+            throw new Error("plain");
+        },
+    });
+    const context = vm.createContext({
+        Uint8Array,
+        AbortController,
+        browserId: () => "browser",
+        Date: class extends Date {
+            static now() {
+                return now;
+            }
+        },
+        fetch: async () => {
+            calls++;
+            return mode === "success" && calls > 1
+                ? {
+                      ok: true,
+                      arrayBuffer: async () => Uint8Array.of(1, 2).buffer,
+                  }
+                : rate();
+        },
+        setTimeout: (fn, ms) => {
+            waits.push(ms);
+            if (mode === "abort") return setTimeout(fn, ms);
+            now += ms;
+            return setTimeout(fn, 0);
+        },
+        clearTimeout,
+    });
+    vm.runInContext(
+        `const { ApiError, parse } = (() => { ${apiSource}\nreturn { ApiError, parse }; })();\n${proxySource}\nglobalThis.subject = { parse, readFile, thumb, putPart };`,
+        context,
+    );
+    const { parse, readFile: readProxyFile, thumb, putPart } = context.subject;
+    for (const action of [
+        () => parse(rate()),
+        () => putPart("x", 0, new Uint8Array()),
+    ])
+        await assert.rejects(
+            action(),
+            (e) =>
+                e.status === 429 &&
+                e.code === "rate_limited" &&
+                e.retryAfter === 7,
+        );
+    for (const [status, code] of [
+        [502, "server_down"],
+        [403, "bad_response"],
+    ]) {
+        const response = { ...rate(), status };
+        await assert.rejects(
+            parse(response),
+            (e) => e.status === status && e.code === code,
+        );
+    }
+    calls = 0;
+    assert.deepEqual(Array.from(await readProxyFile(1, 0, 2)), [1, 2]);
+    assert.equal(waits.at(-1), 7000);
+    calls = 0;
+    now = 0;
+    mode = "abort";
+    const controller = new AbortController();
+    const pending = thumb(1, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await assert.rejects(pending, { name: "AbortError" });
+    calls = 0;
+    now = 0;
+    mode = "cap";
+    await assert.rejects(readProxyFile(1, 0, 2), (e) => e.status === 429);
+    assert.ok(now <= 60000 && now >= 53000);
+});
+
 test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async () => {
     const calls = [];
     const parts = [];
