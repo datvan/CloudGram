@@ -106,14 +106,14 @@ for (const deleteOriginal of [false, true])
         f.deps.reencryptRecord = async (item, options) => {
             assert.equal(options.deleteOriginal, deleteOriginal);
             assert.equal(options.deleteOriginalMedia, true);
-            assert.ok(Object.hasOwn(options.extraChanges, "thumbnailBlob"));
+            assert.ok(!Object.hasOwn(options.extraChanges, "thumbnailBlob"));
             await move(item, options);
             item.file_id = 99;
         };
         await migrateToShared({ deps: f.deps, deleteOriginal });
         assert.equal(record.file_id, 99);
         assert.equal(record.thumbnail, undefined);
-        assert.equal(record.thumbnailBlob, undefined);
+        assert.equal(record.thumbnailBlob.message, 3);
         assert.equal(record.storyboard, undefined);
         assert.equal(record.thumbData, "inline");
     });

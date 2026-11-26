@@ -488,12 +488,73 @@ for (const linked of [true, false])
                 getClient: () => ({
                     deleteMessages: async (_, ids) => deleted.push(...ids),
                 }),
+                getTelegramMode: async () => "private",
                 removeRecords: async () => {},
             },
             "deleteForever",
         );
         await h.deleteForever(["a"]);
         assert.deepEqual(deleted, linked ? [1] : [1, 50]);
+    });
+for (const scenario of ["last", "linked", "other-session", "save-fails"])
+    test(`deleteForever encrypted cover: ${scenario}`, async () => {
+        let records = [
+            {
+                id: "a",
+                type: "file",
+                file_id: 1,
+                thumbnailBlob: { message: 50 },
+            },
+            ...(scenario === "linked" || scenario === "other-session"
+                ? [
+                      {
+                          id: "b",
+                          type: "file",
+                          file_id: 2,
+                          tg:
+                              scenario === "other-session"
+                                  ? "shared"
+                                  : undefined,
+                          thumbnailBlob: { message: 50 },
+                      },
+                  ]
+                : []),
+        ];
+        const deleted = [];
+        const h = await load(
+            "../../src/utils/driveActions.js",
+            {
+                getSnapshot: () => ({ records }),
+                withConverted: (ids) => ids,
+                messagesOf: (r) => [r.file_id],
+                recordIdsOf: (s) => [...s.folders, ...s.files].map((r) => r.id),
+                messageIdsOf: (s) => s.files.map((r) => r.file_id),
+                cancelUploads() {},
+                dropShares: async () => {},
+                storyboardsOf: () => [],
+                getClient: () => ({
+                    deleteMessages: async (_, ids) => deleted.push(...ids),
+                }),
+                getTelegramMode: async () => "private",
+                removeRecords: async (ids) => {
+                    if (scenario === "save-fails")
+                        throw new Error("save failed");
+                    records = records.filter((r) => !ids.includes(r.id));
+                },
+            },
+            "deleteForever",
+        );
+        if (scenario === "save-fails")
+            await assert.rejects(h.deleteForever(["a"]), /save failed/);
+        else await h.deleteForever(["a"]);
+        assert.deepEqual(
+            deleted,
+            scenario === "last"
+                ? [1, 50]
+                : scenario === "save-fails"
+                ? []
+                : [1],
+        );
     });
 test("thumbnail survives encrypted drive save/load round trip", async () => {
     let stored = { version: 0 };

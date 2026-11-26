@@ -30,6 +30,7 @@ import { messagesOf } from "./splitPlan";
 import { uploadLimit } from "./uploadLimit";
 import { dropShares } from "../services/shares";
 import { getClient } from "../services/telegram";
+import { getTelegramMode } from "../services/account";
 import { diag } from "../services/diag";
 
 const trace = (fn) => {
@@ -588,7 +589,52 @@ export async function deleteForever(ids, { withLinks = false } = {}) {
     // The vault forgets them first: should that save fail, the messages stay
     // as orphans in Saved Messages rather than the tree pointing at nothing
     const client = getClient();
+    const covers = records.filter(
+        (r) => recordIds.has(r.id) && r.thumbnailBlob?.message != null,
+    );
+    const mode = covers.length
+        ? await getTelegramMode(client).catch(() => null)
+        : null;
     await removeRecords([...recordIds]);
+    const savedMode = covers.length
+        ? await getTelegramMode(client).catch(() => null)
+        : null;
+    const remaining = getSnapshot().records;
+    for (const other of remaining)
+        if (!other.deleted && other.thumbnailBlob?.message != null)
+            messageIds.delete(other.thumbnailBlob.message);
+    for (const r of covers) {
+        const cover = r.thumbnailBlob?.message;
+        if (!Number.isSafeInteger(cover) || cover <= 0)
+            continue;
+        const safe =
+            mode === savedMode &&
+            (r.tg == null || r.tg === "private" || r.tg === "shared") &&
+            (r.tg === "shared" ? mode === "shared" : mode === "private") &&
+            !records.some(
+                (other) =>
+                    recordIds.has(other.id) &&
+                    other.thumbnailBlob?.message === cover &&
+                    (other.tg === "shared"
+                        ? mode !== "shared"
+                        : mode !== "private"),
+            ) &&
+            ![
+                ...records.filter((other) => !recordIds.has(other.id)),
+                ...remaining,
+            ].some(
+                (other) =>
+                    !other.deleted &&
+                    [
+                        other.thumbnail,
+                        other.thumbnailBlob?.message,
+                        other.storyboard?.message,
+                        ...messagesOf(other),
+                    ].includes(cover),
+            );
+        if (safe) messageIds.add(cover);
+        else messageIds.delete(cover);
+    }
     if (messageIds.size) {
         await client.deleteMessages("me", [...messageIds], {
             revoke: true,

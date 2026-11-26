@@ -65,7 +65,6 @@ export async function migrateToShared({
                     extraChanges: {
                         tg: "shared",
                         thumbnail: undefined,
-                        thumbnailBlob: undefined,
                         storyboard: undefined,
                     },
                     sameTelegram: (r) => r.tg !== "shared",

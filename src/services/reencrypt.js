@@ -10,9 +10,11 @@ export function unsharedMessages(
     const idsOf = (item) => [
         ...messagesOf(item),
         ...(includeMedia
-            ? [item.thumbnail, item.storyboard?.message].filter(
-                  (id) => id != null,
-              )
+            ? [
+                  item.thumbnail,
+                  item.thumbnailBlob?.message,
+                  item.storyboard?.message,
+              ].filter((id) => id != null)
             : []),
     ];
     const referenced = new Set(
@@ -108,6 +110,23 @@ async function realDeps() {
         getSnapshot: drive.getSnapshot,
         deleteMessages: (client, ids) =>
             client.deleteMessages("me", ids, { revoke: true }),
+        copyThumbnail: async (thumbnail, source, destination) => {
+            const [{ uploadParts }] = await Promise.all([
+                import("../utils/transfer.js"),
+            ]);
+            const [message] = await source.getMessages("me", {
+                ids: [thumbnail.message],
+            });
+            if (!message?.media) throw new Error("Thumbnail not found");
+            const bytes = await source.downloadMedia(message.media, {});
+            const file = new File([bytes], "cloudgram-thumbnail-v1.bin", {
+                type: "application/octet-stream",
+            });
+            return destination.sendFile("me", {
+                file: await uploadParts(destination, file),
+                forceDocument: true,
+            });
+        },
     };
 }
 
@@ -128,6 +147,7 @@ export async function reencryptRecord(
     const api = deps ?? (await realDeps());
     const resume = { encrypted: true };
     let uploaded;
+    let thumbnail;
     let changed = false;
     let saved = false;
     const check = () => signal?.throwIfAborted();
@@ -147,6 +167,13 @@ export async function reencryptRecord(
             onProgress: (percentage) =>
                 onProgress?.({ phase: "upload", percentage }),
         });
+        if (source !== destination && record.thumbnailBlob?.message != null) {
+            thumbnail = await api.copyThumbnail(
+                record.thumbnailBlob,
+                source,
+                destination,
+            );
+        }
         check();
         const current = api
             .getSnapshot()
@@ -154,12 +181,20 @@ export async function reencryptRecord(
         if (
             !current ||
             JSON.stringify(messagesOf(current)) !==
-                JSON.stringify(messagesOf(record))
+                JSON.stringify(messagesOf(record)) ||
+            JSON.stringify(current.thumbnailBlob) !==
+                JSON.stringify(record.thumbnailBlob)
         )
             throw new Error("File changed during encryption");
         const changes = {
             ...uploaded.changes,
             ...extraChanges,
+            ...(thumbnail && {
+                thumbnailBlob: {
+                    ...record.thumbnailBlob,
+                    message: thumbnail.id,
+                },
+            }),
             file_id: uploaded.message.id,
         };
         if (!changes.parts) changes.parts = undefined;
@@ -179,6 +214,7 @@ export async function reencryptRecord(
                 file_id: null,
                 parts: null,
                 enc: null,
+                ...(thumbnail && { thumbnailBlob: null }),
             }))
                 changes[key] = record[key];
             api.update(record.id, changes, { preserveModifiedAt: true });
@@ -194,6 +230,7 @@ export async function reencryptRecord(
                 ...(resume.pieces ?? []).map((p) => p.id),
                 ...(uploaded?.messages ?? []),
                 ...(uploaded?.message ? [uploaded.message.id] : []),
+                ...(thumbnail ? [thumbnail.id] : []),
             ]),
         ];
         if (safeToDelete && ids.length)
@@ -208,7 +245,11 @@ export async function reencryptRecord(
                 ? [
                       ...messagesOf(current),
                       ...(deleteOriginalMedia
-                          ? [current.thumbnail, current.storyboard?.message]
+                          ? [
+                                current.thumbnail,
+                                current.thumbnailBlob?.message,
+                                current.storyboard?.message,
+                            ]
                           : []),
                   ]
                 : [],
@@ -218,7 +259,25 @@ export async function reencryptRecord(
             records,
             sameTelegram,
             deleteOriginalMedia,
-        ).filter((id) => !currentIds.has(id));
+        ).filter(
+            (id) =>
+                !currentIds.has(id) &&
+                (id !== record.thumbnailBlob?.message ||
+                    (current &&
+                        (!thumbnail ||
+                            current.thumbnailBlob?.message === thumbnail.id) &&
+                        !records.some(
+                            (other) =>
+                                other.id !== record.id &&
+                                !other.deleted &&
+                                [
+                                    other.thumbnail,
+                                    other.thumbnailBlob?.message,
+                                    other.storyboard?.message,
+                                    ...messagesOf(other),
+                                ].includes(id),
+                        ))),
+        );
         if (ids.length) await api.deleteMessages(source, ids);
     }
     return uploaded;

@@ -27,6 +27,10 @@ function fixture(record = { id: "a", type: "file", name: "file", file_id: 1 }) {
         deleteMessages: async (client, ids) => {
             events.push([client, ids]);
         },
+        copyThumbnail: async () => {
+            events.push("copy cover");
+            return { id: 20 };
+        },
     };
     const run = (options = {}) =>
         reencryptRecord(record, {
@@ -37,6 +41,58 @@ function fixture(record = { id: "a", type: "file", name: "file", file_id: 1 }) {
         });
     return { deps, events, other, run, current: () => current };
 }
+
+for (const deleteOriginal of [false, true])
+    test(`migration copies encrypted cover, deleteOriginal=${deleteOriginal}`, async () => {
+        const f = fixture({
+            id: "a",
+            type: "file",
+            file_id: 1,
+            thumbnailBlob: { message: 3, nonce: "old" },
+        });
+        await f.run({
+            deleteOriginal,
+            deleteOriginalMedia: true,
+            extraChanges: { tg: "shared" },
+            sameTelegram: (r) => r.tg !== "shared",
+        });
+        assert.deepEqual(f.current().thumbnailBlob, {
+            message: 20,
+            nonce: "old",
+        });
+        assert.deepEqual(f.events, [
+            "read",
+            "upload",
+            "copy cover",
+            "update",
+            "flush",
+            ...(deleteOriginal ? [["source", [1, 3]]] : []),
+        ]);
+    });
+
+test("migration keeps cover referenced by another session", async () => {
+    const f = fixture({ id: "a", file_id: 1, thumbnailBlob: { message: 3 } });
+    f.other.push({ id: "b", tg: "shared", thumbnailBlob: { message: 3 } });
+    await f.run({
+        deleteOriginalMedia: true,
+        extraChanges: { tg: "shared" },
+        sameTelegram: (r) => r.tg !== "shared",
+    });
+    assert.deepEqual(f.events.at(-1), ["source", [1]]);
+});
+
+test("migration keeps original cover when saving fails", async () => {
+    const f = fixture({ id: "a", file_id: 1, thumbnailBlob: { message: 3 } });
+    f.deps.flush = async () => {
+        throw new Error("save failed");
+    };
+    await assert.rejects(
+        f.run({ deleteOriginalMedia: true, extraChanges: { tg: "shared" } }),
+        /save failed/,
+    );
+    assert.equal(f.current().thumbnailBlob.message, 3);
+    assert.equal(f.events.some(Array.isArray), false);
+});
 
 test("success saves before deleting old message", async () => {
     const f = fixture();
