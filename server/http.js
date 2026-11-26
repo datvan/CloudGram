@@ -52,6 +52,14 @@ const ROUTES = {
 const PATTERNS = [
     {
         method: "PUT",
+        re: /^\/api\/tgxd\/([^/]+)\/(\d+)$/,
+        keys: ["id", "index"],
+        handler: "tgxPart",
+        raw: true,
+        directUpload: true,
+    },
+    {
+        method: "PUT",
         re: /^\/api\/tgx\/upload\/([^/]+)\/(\d+)$/,
         keys: ["id", "index"],
         handler: "tgxPart",
@@ -160,6 +168,7 @@ function route(method, pathname) {
             handler: pattern.handler,
             params,
             raw: pattern.raw,
+            directUpload: pattern.directUpload,
         };
     }
     return null;
@@ -292,6 +301,8 @@ export function createApiServer(
 
         try {
             if (!found) throw new HttpError(404, "not_found");
+            if (found.directUpload && !api.tgxDirect)
+                throw new HttpError(404, "not_found");
             if (!diagLog && found.handler === "diagnosticLog") {
                 res.writeHead(204, headers);
                 res.end();
@@ -332,6 +343,7 @@ export function createApiServer(
                         "unknown",
                 ),
                 params: found.params,
+                directUpload: found.directUpload,
                 query: Object.fromEntries(url.searchParams),
                 body:
                     method === "GET" || found.raw

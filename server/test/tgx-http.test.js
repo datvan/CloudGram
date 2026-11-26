@@ -253,6 +253,20 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
                 username: "bob",
             })
         ).json();
+        assert.equal(start.directKey, undefined);
+        assert.equal(
+            (
+                await fetch(base.replace(/tgx$/, `tgxd/${start.uploadId}/0`), {
+                    method: "PUT",
+                    headers: {
+                        Origin: "https://cg.test",
+                        "Content-Type": "application/octet-stream",
+                    },
+                    body: "x",
+                })
+            ).status,
+            404,
+        );
         assert.equal(
             (
                 await call(
@@ -371,6 +385,159 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
         } finally {
             console.log = originalLog;
         }
+    } finally {
+        if (server) await new Promise((resolve) => server.close(resolve));
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test("direct upload keys retain lease, limits and revocation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tgxd-"));
+    let server;
+    try {
+        const db = await new Db(dir).open();
+        for (const name of ["alice", "bob"]) {
+            db.data.users[name] = {
+                id: name === "bob" ? "b".repeat(32) : name,
+                username: name,
+                verifier: {},
+            };
+            db.data.sessions[createHash("sha256").update(name).digest("hex")] =
+                {
+                    username: name,
+                    expiresAt: Date.now() + 60000,
+                };
+        }
+        const owners = await new Owners(dir).open();
+        const telegram = {
+            savePart: async () => true,
+            send: async () => ({
+                id: 7,
+                date: 1,
+                document: { size: 1, mimeType: "text/plain", attributes: [] },
+            }),
+        };
+        const tgx = new TelegramProxy({ owners, telegram });
+        const api = new CloudGramApi({
+            db,
+            pepper: "x".repeat(40),
+            tgx,
+            tgxDirect: true,
+        });
+        for (const name of ["alice", "bob"])
+            api.leases.set(name, {
+                holder: "browser",
+                expires: Date.now() + 10000,
+            });
+        const logs = [];
+        server = createApiServer(api, {
+            origin: "https://cg.test",
+            log: { log: (line) => logs.push(line) },
+        });
+        await new Promise((resolve, reject) =>
+            server.listen(0, "127.0.0.1", resolve).on("error", reject),
+        );
+        const base = `http://127.0.0.1:${server.address().port}/api`;
+        const call = (path, user = "alice", body = {}) =>
+            fetch(base + path, {
+                method: "POST",
+                headers: {
+                    Origin: "https://cg.test",
+                    "Content-Type": "application/json",
+                    Cookie: `cg_session=${user}`,
+                    "X-CloudGram-Browser": "browser",
+                },
+                body: JSON.stringify(body),
+            });
+        const start = async (user = "alice") =>
+            (
+                await call("/tgx/upload/start", user, { size: 1, parts: 1 })
+            ).json();
+        const put = (id, key, extra = {}) =>
+            fetch(`${base}/tgxd/${id}/0`, {
+                method: "PUT",
+                headers: {
+                    Origin: "https://cg.test",
+                    "Content-Type": "application/octet-stream",
+                    "X-Upload-Key": key,
+                    ...extra,
+                },
+                body: "x",
+            });
+        const a = await start();
+        const b = await start("bob");
+        assert.match(a.directKey, /^[A-Za-z0-9_-]{32}$/);
+        const before = api.leases.get("alice").expires;
+        assert.equal((await put(a.uploadId, a.directKey)).status, 200);
+        assert.ok(api.leases.get("alice").expires > before);
+        assert.equal(
+            (await put(a.uploadId, a.directKey, { Origin: "https://bad.test" }))
+                .status,
+            403,
+        );
+        for (const [id, key] of [
+            [a.uploadId, b.directKey],
+            [b.uploadId, a.directKey],
+            ["unknown", a.directKey],
+        ]) {
+            const response = await put(id, key);
+            assert.equal(response.status, 404);
+            assert.deepEqual(await response.json(), { error: "not_found" });
+        }
+        api.leases.get("alice").holder = "other";
+        assert.equal((await put(a.uploadId, a.directKey)).status, 409);
+        api.leases.get("alice").holder = "browser";
+        tgx.rates.get("alice").part = 64;
+        assert.equal((await put(a.uploadId, a.directKey)).status, 429);
+        tgx.rates.get("alice").part = 0;
+        assert.equal(
+            (
+                await call(`/tgx/upload/${a.uploadId}/finish`, "alice", {
+                    name: "x",
+                    mime: "text/plain",
+                })
+            ).status,
+            200,
+        );
+        assert.equal((await put(a.uploadId, a.directKey)).status, 404);
+        assert.equal(
+            (await call(`/tgx/upload/${b.uploadId}/cancel`, "bob")).status,
+            200,
+        );
+        assert.equal((await put(b.uploadId, b.directKey)).status, 404);
+        const c = await start();
+        assert.equal(
+            (await call("/auth/logout", "alice", { browserId: "browser" }))
+                .status,
+            200,
+        );
+        assert.equal((await put(c.uploadId, c.directKey)).status, 404);
+        const d = await start("bob");
+        tgx.uploads.get(d.uploadId).created -= tgx.limits.ttl;
+        assert.equal((await put(d.uploadId, d.directKey)).status, 404);
+        const e = await start("bob");
+        await api.issueSetup("bob", { reset: true });
+        assert.equal((await put(e.uploadId, e.directKey)).status, 404);
+        const f = await tgx.startUpload(
+            db.data.users.bob.id,
+            { size: 1, parts: 1 },
+            { username: "bob", browserId: "browser" },
+        );
+        await api.deleteUser("bob");
+        assert.equal((await put(f.uploadId, f.directKey)).status, 404);
+        assert.ok(
+            logs.every(
+                (line) =>
+                    ![
+                        a.directKey,
+                        b.directKey,
+                        c.directKey,
+                        d.directKey,
+                        e.directKey,
+                        f.directKey,
+                    ].some((key) => line.includes(key)),
+            ),
+        );
     } finally {
         if (server) await new Promise((resolve) => server.close(resolve));
         await rm(dir, { recursive: true, force: true });

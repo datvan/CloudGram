@@ -9,7 +9,7 @@ security exposure.
 | ------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `CLOUDGRAM_DIAG_LOG`                  | API environment            | `0` disables API access logs and client diagnostic ingestion at startup; `/api/log` returns 204                                                                                   |
 | `VITE_FEATURE_DIAG_LOG`               | Frontend build environment | `0` disables browser diagnostic collection, listeners and sending; rebuild and reload tabs                                                                                        |
-| `VITE_FEATURE_FILE_ENCRYPTION`        | Frontend build environment | `0` disables encryption for new uploads; existing encrypted files still require their keys                                                                                       |
+| `VITE_FEATURE_FILE_ENCRYPTION`        | Frontend build environment | `0` disables encryption for new uploads; existing encrypted files still require their keys                                                                                        |
 | `VITE_SECURITY_STREAM_GUARD`          | Frontend build environment | Stream requests require a requesting tab and audio/video destination; responses carry restrictive CSP and nosniff, with passive MIME fallback                                     |
 | `VITE_SECURITY_UPLOAD_OWNER`          | Frontend build environment | Queued, retrying and in-flight uploads remain bound to their original account session; stale dialogs, resume and Dropbox producers stop before enqueuing into a different account |
 | `VITE_SECURITY_LOG_OWNER`             | Frontend build environment | Pending upload-log batches capture owner and key before logout; reads discard results after an account switch                                                                     |
@@ -127,6 +127,7 @@ they are listed here. Only the exact value `0` disables them.
 | ------------------------------ | -------------------------- | --------------------------------------------------------------------------------------------- |
 | `VITE_FEATURE_EXTERNAL_PLAYER` | Frontend build environment | The "Mở bằng PotPlayer, VLC..." button; `0` removes it                                        |
 | `CLOUDGRAM_PLAY`               | API environment            | `0` makes `POST /api/play` answer 403 `play_off`; existing addresses stop at the next restart |
+| `CLOUDGRAM_TGX_DIRECT`         | API environment            | `1` enables per-upload keys for direct tgx part PUTs; default off, restart API after changes  |
 | `CLOUDGRAM_PLAY_CACHE_MB`      | API environment            | Cache cap for all videos together (default 1024 MB); each video also keeps at most 512 MB     |
 | `VITE_PLAY_DIRECT_URL`         | Frontend build environment | Where the tab puts chunks and polls, past Cloudflare (below); empty = the page's own address  |
 
@@ -146,6 +147,13 @@ verified without a real Telegram account: a real player on the VPS address,
 Cloudflare's terms and timeouts for video, `potplayer://https://...` in Chrome.
 
 ### Direct upload past Cloudflare
+
+For Telegram proxy uploads, `CLOUDGRAM_TGX_DIRECT=1` returns a random per-upload
+key at start. `PUT /api/tgxd/<uploadId>/<index>` uses `X-Upload-Key` without a
+cookie and retains the account's lease and upload limits. Keys expire with the
+upload and are revoked on finish, cancellation, logout, account reset or deletion.
+Set the flag to `0` and restart to disable the route and discard existing keys.
+Direct-host nginx routing and CORS must be configured separately.
 
 Uploading a 2 MiB chunk to `cloudgram.example.com` measured 3-11 KB/s from the
 owner's network (Cloudflare to the VPS), against 7 MB/s straight to the VPS, so

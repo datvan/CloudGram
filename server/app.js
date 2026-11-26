@@ -193,6 +193,7 @@ export class CloudGramApi {
         play = {},
         sharedTelegram = {},
         tgx,
+        tgxDirect = false,
         owners = tgx?.owners,
         admins = (process.env.CLOUDGRAM_ADMINS ?? "").split(","),
     }) {
@@ -207,6 +208,7 @@ export class CloudGramApi {
         this.credentialGuard = credentialGuard;
         this.sharedTelegram = sharedTelegram;
         this.tgx = tgx;
+        this.tgxDirect = tgxDirect;
         this.owners = owners;
         this.telegramApprovals = new RateLimiter(5, 10 * 60 * 1000);
         this.leases = new Map();
@@ -265,6 +267,7 @@ export class CloudGramApi {
             this.db.data.users[name] = user;
         }
         if (reset) {
+            this.tgx?.revokeDirectUploads?.(name);
             // the vault is sealed by the old password, so it goes too
             delete user.verifier;
             delete user.kdf;
@@ -285,6 +288,7 @@ export class CloudGramApi {
         const name = normalizeUsername(username);
         const user = this.db.data.users[name];
         if (!user) throw new Error(`no user ${name}`);
+        this.tgx?.revokeDirectUploads?.(name);
         await this.db.deleteTree(user.id);
         await this.shares.dropOwner(name);
         await this.play.dropOwner(name);
@@ -332,6 +336,7 @@ export class CloudGramApi {
     }
 
     #dropSessions(username, keep) {
+        this.tgx?.revokeDirectUploads?.(username);
         for (const [key, session] of Object.entries(this.db.data.sessions)) {
             if (session.username === username && key !== keep)
                 delete this.db.data.sessions[key];
@@ -682,14 +687,32 @@ export class CloudGramApi {
             user.username,
             req.headers["x-cloudgram-browser"],
         );
-        return this.tgx.startUpload(user.id, req.body);
+        return this.tgx.startUpload(
+            user.id,
+            req.body,
+            this.tgxDirect && {
+                username: user.username,
+                browserId: req.headers["x-cloudgram-browser"],
+            },
+        );
     }
     async tgxPart(req, res) {
-        const { user } = await this.authenticate(req, res);
-        this.#renewUploadLease(
-            user.username,
-            req.headers["x-cloudgram-browser"],
-        );
+        let user, browserId;
+        if (req.directUpload) {
+            if (!this.tgxDirect) throw new HttpError(404, "not_found");
+            const upload = this.tgx.directUpload(
+                req.params.id,
+                req.headers["x-upload-key"],
+            );
+            user = this.db.data.users[upload.username];
+            if (!user || user.id !== upload.user)
+                throw new HttpError(404, "not_found");
+            browserId = upload.browserId;
+        } else {
+            ({ user } = await this.authenticate(req, res));
+            browserId = req.headers["x-cloudgram-browser"];
+        }
+        this.#renewUploadLease(user.username, browserId);
         if (Number(req.headers["content-length"]) > 8 * 524288)
             throw new HttpError(413, "too_large");
         return this.tgx.putPart(
@@ -802,6 +825,7 @@ export class CloudGramApi {
         if (token) {
             const session = this.db.data.sessions[sha256(token)];
             if (session) {
+                this.tgx?.revokeDirectUploads?.(session.username);
                 this.#releaseLeaseOf(session.username, req.body.browserId);
                 // a video relayed to a player holds its own key, not the cookie
                 await this.play.dropOwner(session.username);

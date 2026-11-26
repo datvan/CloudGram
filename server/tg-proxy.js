@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import bigInt from "big-integer";
 import { Api } from "telegram";
 import { HttpError } from "./app.js";
@@ -260,7 +260,25 @@ export class TelegramProxy {
         const messages = await this.telegram.getMessages([id]);
         return messages?.find((m) => m?.id === id) ?? null;
     }
-    startUpload(user, body) {
+    directUpload(id, key) {
+        this.#expire();
+        const upload = this.uploads.get(id);
+        const given = Buffer.from(typeof key === "string" ? key : "");
+        const wanted = Buffer.from(upload?.directKey ?? "");
+        if (
+            !wanted.length ||
+            this.now() - upload.created >= this.limits.ttl ||
+            given.length !== wanted.length ||
+            !timingSafeEqual(given, wanted)
+        )
+            throw new HttpError(404, "not_found");
+        return upload;
+    }
+    revokeDirectUploads(username) {
+        for (const upload of this.uploads.values())
+            if (upload.username === username) delete upload.directKey;
+    }
+    startUpload(user, body, direct) {
         return this.#run(user, async () => {
             this.#expire();
             const { size, parts } = body ?? {};
@@ -280,8 +298,12 @@ export class TelegramProxy {
             const fileId = bigInt(randomBytes(8).toString("hex"), 16).subtract(
                 bigInt(2).pow(63),
             );
+            const directKey = direct
+                ? randomBytes(24).toString("base64url")
+                : undefined;
             this.uploads.set(uploadId, {
                 user,
+                ...(direct ? { ...direct, directKey } : {}),
                 size,
                 parts,
                 fileId,
@@ -292,7 +314,7 @@ export class TelegramProxy {
                 locked: false,
                 pending: 0,
             });
-            return { uploadId };
+            return direct ? { uploadId, directKey } : { uploadId };
         });
     }
     putPart(user, id, index, body) {
@@ -444,7 +466,7 @@ export class TelegramProxy {
             );
             return {
                 messages: ids.map((id) =>
-                    this.owners.owns(user, id) ? (byId.get(id) ?? null) : null,
+                    this.owners.owns(user, id) ? byId.get(id) ?? null : null,
                 ),
             };
         });

@@ -77,6 +77,7 @@ const api = new CloudGramApi({
     shareQuota: Number(process.env.CLOUDGRAM_SHARE_QUOTA_GB ?? 20) * 1024 ** 3,
     sharedTelegram,
     tgx,
+    tgxDirect: process.env.CLOUDGRAM_TGX_DIRECT === "1",
     credentialGuard: process.env.CLOUDGRAM_SECURITY_CREDENTIAL_GUARD !== "0",
     shareQuotaGuard: process.env.CLOUDGRAM_SECURITY_SHARE_QUOTA !== "0",
     play: {
