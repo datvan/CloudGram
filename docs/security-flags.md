@@ -121,13 +121,14 @@ switch/resume and service-worker rollback still need browser validation.
 ## Playing in an outside player (VPS relay)
 
 These are features, not security fixes, but they move video through the VPS, so
-they are listed here. Only the exact value `0` disables them.
+they are listed here. Direct tgx flags require `1`; other flags are described below.
 
 | Flag                           | Configuration              | Effect                                                                                        |
 | ------------------------------ | -------------------------- | --------------------------------------------------------------------------------------------- |
 | `VITE_FEATURE_EXTERNAL_PLAYER` | Frontend build environment | The "Mở bằng PotPlayer, VLC..." button; `0` removes it                                        |
 | `CLOUDGRAM_PLAY`               | API environment            | `0` makes `POST /api/play` answer 403 `play_off`; existing addresses stop at the next restart |
 | `CLOUDGRAM_TGX_DIRECT`         | API environment            | `1` enables per-upload keys for direct tgx part PUTs; default off, restart API after changes  |
+| `CLOUDGRAM_TGX_DIRECT_READ`    | API environment            | `1` enables per-browser keys for direct tgx reads; default off, restart API after changes |
 | `CLOUDGRAM_PLAY_CACHE_MB`      | API environment            | Cache cap for all videos together (default 1024 MB); each video also keeps at most 512 MB     |
 | `VITE_PLAY_DIRECT_URL`         | Frontend build environment | Where the tab puts chunks and polls, past Cloudflare (below); empty = the page's own address  |
 
@@ -156,6 +157,20 @@ Set the flag to `0` and restart to disable the route and discard existing keys.
 The browser uses `VITE_PLAY_DIRECT_URL` when both it and the key are present;
 network failure falls back to the cookie route for the rest of that upload.
 The direct-host nginx location permits only PUT and OPTIONS from the app origin.
+
+### Direct Telegram proxy reads
+
+`CLOUDGRAM_TGX_DIRECT_READ=1` enables `POST /api/tgx/read-key` for a signed-in
+browser holding the account lease. It returns a one-hour in-memory key; issuing
+another for the same account and browser replaces it. `GET /api/tgxd/file/<id>`
+and `GET /api/tgxd/thumb/<id>` accept the key in `X-Read-Key` without a cookie.
+They enforce the same ownership, range and rate limits as cookie reads and renew
+the bound browser's lease. Logout, session drop, account reset or deletion revoke
+keys. Set the flag to `0` and restart to disable these routes and discard keys.
+When `VITE_PLAY_DIRECT_URL` is set, the browser obtains a key lazily and reads
+through the direct host without cookies. On direct failure it uses the cookie
+route for five minutes; aborted reads do not fall back. The direct nginx location
+allows GET and OPTIONS with `X-Read-Key` from the app origin only.
 
 Uploading a 2 MiB chunk to `cloudgram.example.com` measured 3-11 KB/s from the
 owner's network (Cloudflare to the VPS), against 7 MB/s straight to the VPS, so

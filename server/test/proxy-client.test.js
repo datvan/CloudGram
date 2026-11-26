@@ -37,6 +37,8 @@ test("plain rate limits are parsed and proxy reads retry, abort and stop at the 
         Uint8Array,
         AbortController,
         browserId: () => "browser",
+        PLAY_DIRECT: "",
+        diag() {},
         Date: class extends Date {
             static now() {
                 return now;

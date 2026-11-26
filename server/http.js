@@ -29,6 +29,7 @@ const ROUTES = {
     "POST /api/auth/recovery": "setRecovery",
     "GET /api/me": "me",
     "POST /api/tgx/upload/start": "tgxStart",
+    "POST /api/tgx/read-key": "tgxReadKey",
     "POST /api/tgx/messages": "tgxMessages",
     "POST /api/tgx/delete": "tgxDelete",
     "POST /api/tg/approve": "approveTelegram",
@@ -50,6 +51,20 @@ const ROUTES = {
 
 // routes with ids in the path; `raw` takes the body as bytes, not JSON
 const PATTERNS = [
+    {
+        method: "GET",
+        re: /^\/api\/tgxd\/file\/(\d+)$/,
+        keys: ["id"],
+        handler: "tgxFile",
+        directRead: true,
+    },
+    {
+        method: "GET",
+        re: /^\/api\/tgxd\/thumb\/(\d+)$/,
+        keys: ["id"],
+        handler: "tgxThumb",
+        directRead: true,
+    },
     {
         method: "PUT",
         re: /^\/api\/tgxd\/([^/]+)\/(\d+)$/,
@@ -169,6 +184,7 @@ function route(method, pathname) {
             params,
             raw: pattern.raw,
             directUpload: pattern.directUpload,
+            directRead: pattern.directRead,
         };
     }
     return null;
@@ -303,6 +319,11 @@ export function createApiServer(
             if (!found) throw new HttpError(404, "not_found");
             if (found.directUpload && !api.tgxDirect)
                 throw new HttpError(404, "not_found");
+            if (
+                (found.directRead || found.handler === "tgxReadKey") &&
+                !api.tgxDirectRead
+            )
+                throw new HttpError(404, "not_found");
             if (!diagLog && found.handler === "diagnosticLog") {
                 res.writeHead(204, headers);
                 res.end();
@@ -344,6 +365,7 @@ export function createApiServer(
                 ),
                 params: found.params,
                 directUpload: found.directUpload,
+                directRead: found.directRead,
                 query: Object.fromEntries(url.searchParams),
                 body:
                     method === "GET" || found.raw

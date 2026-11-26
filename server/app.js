@@ -194,6 +194,7 @@ export class CloudGramApi {
         sharedTelegram = {},
         tgx,
         tgxDirect = false,
+        tgxDirectRead = false,
         owners = tgx?.owners,
         admins = (process.env.CLOUDGRAM_ADMINS ?? "").split(","),
     }) {
@@ -209,6 +210,8 @@ export class CloudGramApi {
         this.sharedTelegram = sharedTelegram;
         this.tgx = tgx;
         this.tgxDirect = tgxDirect;
+        this.tgxDirectRead = tgxDirectRead;
+        this.readKeys = new Map();
         this.owners = owners;
         this.telegramApprovals = new RateLimiter(5, 10 * 60 * 1000);
         this.leases = new Map();
@@ -268,6 +271,7 @@ export class CloudGramApi {
         }
         if (reset) {
             this.tgx?.revokeDirectUploads?.(name);
+            this.#revokeReadKeys(name);
             // the vault is sealed by the old password, so it goes too
             delete user.verifier;
             delete user.kdf;
@@ -289,6 +293,7 @@ export class CloudGramApi {
         const user = this.db.data.users[name];
         if (!user) throw new Error(`no user ${name}`);
         this.tgx?.revokeDirectUploads?.(name);
+        this.#revokeReadKeys(name);
         await this.db.deleteTree(user.id);
         await this.shares.dropOwner(name);
         await this.play.dropOwner(name);
@@ -337,6 +342,7 @@ export class CloudGramApi {
 
     #dropSessions(username, keep) {
         this.tgx?.revokeDirectUploads?.(username);
+        this.#revokeReadKeys(username);
         for (const [key, session] of Object.entries(this.db.data.sessions)) {
             if (session.username === username && key !== keep)
                 delete this.db.data.sessions[key];
@@ -742,8 +748,59 @@ export class CloudGramApi {
         const { user } = await this.authenticate(req, res);
         return this.tgx.messages(user.id, req.body.ids);
     }
-    async tgxFile(req, res) {
+    #revokeReadKeys(username) {
+        for (const [digest, key] of this.readKeys)
+            if (key.username === username) this.readKeys.delete(digest);
+    }
+    async tgxReadKey(req, res) {
+        if (!this.tgxDirectRead) throw new HttpError(404, "not_found");
         const { user } = await this.authenticate(req, res);
+        const browserId = req.headers["x-cloudgram-browser"];
+        this.#renewUploadLease(user.username, browserId);
+        for (const [digest, key] of this.readKeys)
+            if (
+                key.expires <= this.now() ||
+                (key.user === user.id && key.browserId === browserId)
+            )
+                this.readKeys.delete(digest);
+        const readKey = randomBytes(24).toString("base64url");
+        this.readKeys.set(sha256(readKey), {
+            key: readKey,
+            user: user.id,
+            username: user.username,
+            browserId,
+            expires: this.now() + 3600000,
+        });
+        return { readKey, expiresIn: 3600 };
+    }
+    async #tgxReadUser(req, res) {
+        if (!req.directRead) return (await this.authenticate(req, res)).user;
+        if (!this.tgxDirectRead) throw new HttpError(404, "not_found");
+        const supplied =
+            typeof req.headers["x-read-key"] === "string"
+                ? req.headers["x-read-key"]
+                : "";
+        const digest = sha256(supplied);
+        const key = this.readKeys.get(digest);
+        const given = Buffer.from(supplied);
+        const wanted = Buffer.from(key?.key ?? "");
+        if (
+            !key ||
+            key.expires <= this.now() ||
+            given.length !== wanted.length ||
+            !timingSafeEqual(given, wanted)
+        ) {
+            if (key && key.expires <= this.now()) this.readKeys.delete(digest);
+            throw new HttpError(404, "not_found");
+        }
+        const user = this.db.data.users[key.username];
+        if (!user || user.id !== key.user)
+            throw new HttpError(404, "not_found");
+        this.#renewUploadLease(key.username, key.browserId);
+        return user;
+    }
+    async tgxFile(req, res) {
+        const user = await this.#tgxReadUser(req, res);
         const integer = (value) =>
             typeof value === "string" && /^\d+$/.test(value)
                 ? Number(value)
@@ -756,7 +813,7 @@ export class CloudGramApi {
         );
     }
     async tgxThumb(req, res) {
-        const { user } = await this.authenticate(req, res);
+        const user = await this.#tgxReadUser(req, res);
         return this.tgx.thumb(user.id, Number(req.params.id));
     }
     async tgxDelete(req, res) {
@@ -826,6 +883,7 @@ export class CloudGramApi {
             const session = this.db.data.sessions[sha256(token)];
             if (session) {
                 this.tgx?.revokeDirectUploads?.(session.username);
+                this.#revokeReadKeys(session.username);
                 this.#releaseLeaseOf(session.username, req.body.browserId);
                 // a video relayed to a player holds its own key, not the cookie
                 await this.play.dropOwner(session.username);

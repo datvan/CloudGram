@@ -78,6 +78,7 @@ const api = new CloudGramApi({
     sharedTelegram,
     tgx,
     tgxDirect: process.env.CLOUDGRAM_TGX_DIRECT === "1",
+    tgxDirectRead: process.env.CLOUDGRAM_TGX_DIRECT_READ === "1",
     credentialGuard: process.env.CLOUDGRAM_SECURITY_CREDENTIAL_GUARD !== "0",
     shareQuotaGuard: process.env.CLOUDGRAM_SECURITY_SHARE_QUOTA !== "0",
     play: {

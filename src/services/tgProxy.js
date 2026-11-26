@@ -1,5 +1,7 @@
 import { ApiError } from "./api";
 import { browserId } from "./keystore";
+import { PLAY_DIRECT } from "../config/features";
+import { diag } from "./diag";
 
 async function request(method, path, body, binary = false, signal, direct) {
     signal?.throwIfAborted();
@@ -11,7 +13,10 @@ async function request(method, path, body, binary = false, signal, direct) {
             signal,
             headers: {
                 ...(direct
-                    ? { "X-Upload-Key": direct.key }
+                    ? {
+                          [method === "GET" ? "X-Read-Key" : "X-Upload-Key"]:
+                              direct.key,
+                      }
                     : { "X-CloudGram-Browser": browserId() }),
                 ...(body === undefined
                     ? {}
@@ -116,10 +121,90 @@ export const cancelUpload = (id, signal) =>
     );
 export const getMessages = async (ids, signal) =>
     (await request("POST", "/messages", { ids }, false, signal)).messages;
+let readKey,
+    keyExpires = 0,
+    keyRequest,
+    directRetryAt = 0;
+
+function getReadKey() {
+    if (readKey && Date.now() < keyExpires) return Promise.resolve(readKey);
+    if (!keyRequest) {
+        keyRequest = request("POST", "/read-key", {})
+            .then((data) => {
+                if (!data.readKey || !(data.expiresIn > 0))
+                    throw new Error("bad key response");
+                readKey = data.readKey;
+                keyExpires =
+                    Date.now() + Math.max(0, data.expiresIn * 1000 - 30000);
+                return readKey;
+            })
+            .finally(() => {
+                keyRequest = null;
+            });
+    }
+    return keyRequest;
+}
+
+async function waitForKey(signal) {
+    signal?.throwIfAborted();
+    let abort;
+    try {
+        return signal
+            ? await Promise.race([
+                  getReadKey(),
+                  new Promise((_, reject) => {
+                      abort = () => reject(signal.reason);
+                      signal.addEventListener("abort", abort, { once: true });
+                  }),
+              ])
+            : await getReadKey();
+    } finally {
+        if (abort) signal.removeEventListener("abort", abort);
+    }
+}
+
+async function directRead(path, signal) {
+    const key = await waitForKey(signal);
+    signal?.throwIfAborted();
+    try {
+        return await request("GET", path, undefined, true, signal, {
+            url: `${PLAY_DIRECT}/api/tgxd${path}`,
+            key,
+        });
+    } catch (error) {
+        if (error.status !== 404 || error.code !== "not_found") throw error;
+        if (readKey === key) {
+            readKey = null;
+            keyExpires = 0;
+        }
+        const fresh = await waitForKey(signal);
+        signal?.throwIfAborted();
+        return await request("GET", path, undefined, true, signal, {
+            url: `${PLAY_DIRECT}/api/tgxd${path}`,
+            key: fresh,
+        });
+    }
+}
+
 async function read(path, signal) {
     let waited = 0;
     for (let delay = 500; ; delay = Math.min(delay * 2, 5000)) {
         try {
+            if (PLAY_DIRECT && Date.now() >= directRetryAt) {
+                try {
+                    return await directRead(path, signal);
+                } catch (error) {
+                    signal?.throwIfAborted();
+                    if (error?.name === "AbortError" || error?.status === 429)
+                        throw error;
+                    if (Date.now() >= directRetryAt) {
+                        directRetryAt = Date.now() + 300000;
+                        readKey = null;
+                        keyExpires = 0;
+                        diag("read.direct.fallback");
+                    }
+                }
+            }
             return await request("GET", path, undefined, true, signal);
         } catch (error) {
             if (!(error instanceof ApiError) || error.status !== 429)

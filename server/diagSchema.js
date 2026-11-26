@@ -8,6 +8,7 @@ const EVENTS = {
         nRoots: "num",
     },
     "upload.direct.fallback": {},
+    "read.direct.fallback": {},
     "upload.scan.progress": { files: "num", sizeB: "sizeB" },
     "upload.scan.done": { files: "num", ms: "num" },
     "upload.scan.fail": { errName: "errName" },

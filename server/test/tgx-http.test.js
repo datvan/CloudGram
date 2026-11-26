@@ -391,6 +391,165 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
     }
 });
 
+test("direct read keys enforce ownership, lease, expiry and revocation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "tgxd-read-"));
+    let server;
+    try {
+        const db = await new Db(dir).open();
+        for (const name of ["alice", "bob"]) {
+            db.data.users[name] = {
+                id: name === "bob" ? "b".repeat(32) : name,
+                username: name,
+                verifier: {},
+            };
+            db.data.sessions[createHash("sha256").update(name).digest("hex")] =
+                {
+                    username: name,
+                    expiresAt: Date.now() + 7200000,
+                };
+        }
+        const owners = await new Owners(dir).open();
+        await owners.add("alice", 7);
+        await owners.add(db.data.users.bob.id, 8);
+        const telegram = {
+            savePart: async () => true,
+            getMessages: async (ids) =>
+                ids.map((id) => ({
+                    id,
+                    document: { thumbs: [{ type: "a" }] },
+                })),
+            getFile: async (_doc, _offset, _limit, thumb) =>
+                Buffer.from(thumb ? "thumb" : "file"),
+        };
+        const tgx = new TelegramProxy({ owners, telegram });
+        let now = Date.now();
+        const api = new CloudGramApi({
+            db,
+            pepper: "x".repeat(40),
+            tgx,
+            now: () => now,
+        });
+        for (const name of ["alice", "bob"])
+            api.leases.set(name, { holder: "browser", expires: now + 7200000 });
+        const logs = [];
+        server = createApiServer(api, {
+            origin: "https://cg.test",
+            diagLog: true,
+            log: { log: (line) => logs.push(line) },
+        });
+        await new Promise((resolve, reject) =>
+            server.listen(0, "127.0.0.1", resolve).on("error", reject),
+        );
+        const base = `http://127.0.0.1:${server.address().port}/api`;
+        const issue = (user = "alice") =>
+            fetch(base + "/tgx/read-key", {
+                method: "POST",
+                headers: {
+                    Origin: "https://cg.test",
+                    "Content-Type": "application/json",
+                    Cookie: `cg_session=${user}`,
+                    "X-CloudGram-Browser": "browser",
+                },
+                body: "{}",
+            });
+        const read = (path, key) =>
+            fetch(base + "/tgxd/" + path, {
+                headers: {
+                    Origin: "https://cg.test",
+                    ...(key ? { "X-Read-Key": key } : {}),
+                },
+            });
+        assert.equal((await issue()).status, 404);
+        assert.equal((await read("file/7?offset=0&limit=4")).status, 404);
+        assert.equal((await read("thumb/7")).status, 404);
+        api.tgxDirectRead = true;
+        const first = await (await issue()).json();
+        assert.match(first.readKey, /^[A-Za-z0-9_-]{32}$/);
+        assert.equal(first.expiresIn, 3600);
+        const second = await (await issue()).json();
+        assert.equal(
+            (await read("file/7?offset=0&limit=4", first.readKey)).status,
+            404,
+        );
+        const beforeRenewal = api.leases.get("alice").expires;
+        now += 1000;
+        assert.equal(
+            await (
+                await read("file/7?offset=0&limit=4", second.readKey)
+            ).text(),
+            "file",
+        );
+        assert.ok(api.leases.get("alice").expires > beforeRenewal);
+        assert.equal(
+            await (await read("thumb/7", second.readKey)).text(),
+            "thumb",
+        );
+        for (const [path, key] of [
+            ["file/8?offset=0&limit=4", second.readKey],
+            ["thumb/8", second.readKey],
+            ["thumb/7", "wrong"],
+            ["thumb/7", undefined],
+        ]) {
+            const response = await read(path, key);
+            assert.equal(response.status, 404);
+            assert.deepEqual(await response.json(), { error: "not_found" });
+        }
+        assert.equal(
+            (await read("file/7?offset=0&limit=1048577", second.readKey))
+                .status,
+            400,
+        );
+        tgx.rates.get("alice").other = 200;
+        assert.equal((await read("thumb/7", second.readKey)).status, 429);
+        tgx.rates.get("alice").other = 0;
+        api.leases.get("alice").holder = "other";
+        const lost = await read("thumb/7", second.readKey);
+        assert.equal(lost.status, 409);
+        assert.equal((await lost.json()).error, "lease_required");
+        api.leases.get("alice").holder = "browser";
+        now += 3600000;
+        assert.equal((await read("thumb/7", second.readKey)).status, 404);
+        api.leases.get("alice").expires = now + 7200000;
+        const third = await (await issue()).json();
+        api.leases.get("bob").expires = now + 7200000;
+        const bob = await (await issue("bob")).json();
+        await api.issueSetup("bob", { reset: true });
+        assert.equal((await read("thumb/8", bob.readKey)).status, 404);
+        db.data.sessions[createHash("sha256").update("bob").digest("hex")] = {
+            username: "bob",
+            expiresAt: now + 7200000,
+        };
+        const bobAgain = await (await issue("bob")).json();
+        await api.deleteUser("bob");
+        assert.equal((await read("thumb/8", bobAgain.readKey)).status, 404);
+        await fetch(base + "/auth/logout", {
+            method: "POST",
+            headers: {
+                Origin: "https://cg.test",
+                "Content-Type": "application/json",
+                Cookie: "cg_session=alice",
+            },
+            body: JSON.stringify({ browserId: "browser" }),
+        });
+        assert.equal((await read("thumb/7", third.readKey)).status, 404);
+        assert.ok(
+            logs.every(
+                (line) =>
+                    ![
+                        first.readKey,
+                        second.readKey,
+                        third.readKey,
+                        bob.readKey,
+                        bobAgain.readKey,
+                    ].some((key) => line.includes(key)),
+            ),
+        );
+    } finally {
+        if (server) await new Promise((resolve) => server.close(resolve));
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
 test("direct upload keys retain lease, limits and revocation", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tgxd-"));
     let server;
