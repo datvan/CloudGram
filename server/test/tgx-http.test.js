@@ -169,6 +169,35 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
             ).status,
             200,
         );
+        const lease = api.leases.get("alice");
+        lease.expires = Date.now() + 10000;
+        await call(
+            "PUT",
+            `/upload/${batchUpload.uploadId}/0`,
+            Buffer.from("x"),
+            "alice",
+            true,
+        );
+        assert.ok(lease.expires > Date.now() + 25000);
+        lease.expires = Date.now() + 10000;
+        lease.pending = { browserId: "other", expires: Date.now() + 30000 };
+        const beforePending = lease.expires;
+        await call(
+            "PUT",
+            `/upload/${batchUpload.uploadId}/0`,
+            Buffer.from("x"),
+            "alice",
+            true,
+        );
+        assert.equal(lease.expires, beforePending);
+        delete lease.pending;
+        lease.expires = Date.now() - 1;
+        assert.equal(
+            (await call("PUT", "/upload/x/0", Buffer.from("x"), "alice", true))
+                .status,
+            409,
+        );
+        assert.ok(lease.expires < Date.now());
         api.leases.delete("alice");
         for (const [method, path, body, raw] of [
             ["POST", "/upload/start", { size: 1, parts: 1 }],
@@ -189,10 +218,12 @@ test("authenticated Telegram proxy HTTP round trip and ownership", async () => {
             holder: "other",
             expires: Date.now() + 60000,
         });
+        const otherLease = { ...api.leases.get("alice") };
         assert.equal(
             (await call("POST", "/upload/start", { size: 1, parts: 1 })).status,
             409,
         );
+        assert.deepEqual(api.leases.get("alice"), otherLease);
         api.leases.set("alice", {
             holder: "browser",
             expires: Date.now() + 60000,

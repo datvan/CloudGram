@@ -86,6 +86,7 @@ const EVENTS = {
         state: ["connecting", "ready", "offline", "leaseLost", "leaseOk"],
         leaseOk: "bool",
     },
+    "conn.heartbeatGap": { ms: "num", visibility: ["visible", "hidden", "prerender"] },
     "remove.original": {
         result: ["deleted", "kept", "changed", "locked", "permission"],
     },

@@ -13,6 +13,9 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         retried = false;
     let hold = false;
     let partError;
+    let leaseErrors = 0;
+    let leaseCalls = 0;
+    let leaseStatus = "granted";
     let rateFailures = 0;
     let partCalls = 0;
     let finishFailures = [];
@@ -29,6 +32,12 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         if (url.endsWith("/upload/start")) result = { uploadId: "u" };
         else if (/\/upload\/u\/\d+$/.test(url)) {
             partCalls += 1;
+            if (leaseErrors-- > 0)
+                return {
+                    ok: false,
+                    status: 409,
+                    json: async () => ({ error: "lease_required" }),
+                };
             if (rateFailures-- > 0)
                 return {
                     ok: false,
@@ -161,6 +170,14 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
         fetch,
         ApiError,
         browserId: () => "browser",
+        api: {
+            lease: async (id, takeover) => {
+                assert.equal(id, "browser");
+                assert.equal(takeover, false);
+                leaseCalls++;
+                return { status: leaseStatus };
+            },
+        },
         AbortController,
         AbortSignal,
         Date: class extends Date {
@@ -238,7 +255,12 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
     const small = new Blob(["x"]);
     small.name = "small";
     partCalls = 0;
-    partError = { status: 409, body: { error: "lease_required" } };
+    leaseErrors = 1;
+    await client.proxyUpload(small);
+    assert.equal(partCalls, 2);
+    assert.equal(leaseCalls, 1);
+    partCalls = 0;
+    leaseErrors = 2;
     await assert.rejects(
         client.proxyUpload(small),
         (error) =>
@@ -246,7 +268,17 @@ test("proxy upload, range, thumbnail and deletion use owned HTTP routes", async 
             error.status === 409 &&
             error.code === "lease_required",
     );
+    assert.equal(partCalls, 2);
+    assert.equal(leaseCalls, 2);
+    partCalls = 0;
+    leaseErrors = 1;
+    leaseStatus = "busy";
+    await assert.rejects(
+        client.proxyUpload(small),
+        (error) => error.code === "lease_required",
+    );
     assert.equal(partCalls, 1);
+    leaseStatus = "granted";
     partError = { status: 429, body: { error: "busy", seconds: 3 } };
     await client.proxyUpload(small);
     assert.ok(waits.includes(3000));
@@ -342,6 +374,8 @@ test("non-admin installs proxy only after lease and stops it on lease loss", asy
             ),
         ) + "throw new Error('admin path'); } catch (error) { throw error; } }";
     const calls = [];
+    const events = [];
+    let clock = 0;
     let poll,
         heartbeat,
         status = "busy";
@@ -353,6 +387,13 @@ test("non-admin installs proxy only after lease and stops it on lease loss", asy
         leaseGrantedAt: 0,
         HEARTBEAT: 10000,
         LEASE_GRACE: 22000,
+        Date: class extends Date {
+            static now() {
+                return clock;
+            }
+        },
+        document: { visibilityState: "hidden" },
+        diag: (event, fields) => events.push({ event, ...fields }),
         set: (state) => calls.push(state.phase),
         openDrive: async () => calls.push("drive"),
         openUploadLog() {},
@@ -397,6 +438,11 @@ test("non-admin installs proxy only after lease and stops it on lease loss", asy
         "ready",
     ]);
     status = "revoked";
+    clock = 16001;
     await heartbeat();
+    assert.equal(events.length, 1);
+    assert.equal(events[0].event, "conn.heartbeatGap");
+    assert.equal(events[0].ms, 16001);
+    assert.equal(events[0].visibility, "hidden");
     assert.deepEqual(calls.slice(-4), ["lease", "stopped", "release", "lease"]);
 });

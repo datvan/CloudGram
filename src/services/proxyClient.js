@@ -1,9 +1,24 @@
 import { Api } from "telegram";
 import { Buffer } from "buffer/";
 import * as proxy from "./tgProxy";
+import { api } from "./api";
+import { browserId } from "./keystore";
 
 const PART = 512 * 1024;
 const READ = 1024 * 1024;
+async function withLease(request, signal) {
+    try {
+        return await request();
+    } catch (error) {
+        if (error.status !== 409 || error.code !== "lease_required")
+            throw error;
+        signal?.throwIfAborted();
+        const lease = await api.lease(browserId(), false);
+        signal?.throwIfAborted();
+        if (lease.status !== "granted") throw error;
+        return request();
+    }
+}
 const unavailable = () => {
     throw new Error("not available for this account");
 };
@@ -47,9 +62,8 @@ export function createProxyClient() {
                 : controller.signal;
             signal?.throwIfAborted();
             const parts = Math.ceil(file.size / PART);
-            const { uploadId } = await proxy.startUpload(
-                file.size,
-                parts,
+            const { uploadId } = await withLease(
+                () => proxy.startUpload(file.size, parts, signal),
                 signal,
             );
             let sent = 0;
@@ -75,10 +89,14 @@ export function createProxyClient() {
                         let rateRetries = 0;
                         for (;;) {
                             try {
-                                await proxy.putPart(
-                                    uploadId,
-                                    index,
-                                    bytes,
+                                await withLease(
+                                    () =>
+                                        proxy.putPart(
+                                            uploadId,
+                                            index,
+                                            bytes,
+                                            signal,
+                                        ),
                                     signal,
                                 );
                                 break;
@@ -168,9 +186,10 @@ export function createProxyClient() {
                 };
             } catch (error) {
                 if (!controller.signal.aborted)
-                    await proxy
-                        .cancelUpload(uploadId, controller.signal)
-                        .catch(() => {});
+                    await withLease(
+                        () => proxy.cancelUpload(uploadId, controller.signal),
+                        controller.signal,
+                    ).catch(() => {});
                 throw error;
             }
         },
@@ -180,20 +199,24 @@ export function createProxyClient() {
             const video = options.attributes?.find(
                 (a) => a.className === "DocumentAttributeVideo",
             );
-            const result = await proxy.finishUpload(options.file.uploadId, {
-                name: options.file.name,
-                mime: options.file.mime,
-                caption: options.caption,
-                video: video
-                    ? {
-                          duration: video.duration,
-                          w: video.w,
-                          h: video.h,
-                          supportsStreaming: video.supportsStreaming,
-                      }
-                    : undefined,
-                forceDocument: options.forceDocument || undefined,
-            });
+            const result = await withLease(
+                () =>
+                    proxy.finishUpload(options.file.uploadId, {
+                        name: options.file.name,
+                        mime: options.file.mime,
+                        caption: options.caption,
+                        video: video
+                            ? {
+                                  duration: video.duration,
+                                  w: video.w,
+                                  h: video.h,
+                                  supportsStreaming: video.supportsStreaming,
+                              }
+                            : undefined,
+                        forceDocument: options.forceDocument || undefined,
+                    }),
+                controller.signal,
+            );
             return message(result.message);
         },
         async getMessages(peer, { ids } = {}) {

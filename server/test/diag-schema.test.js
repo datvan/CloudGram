@@ -86,6 +86,7 @@ const samples = {
     },
     "tree.save": { ok: true, ms: 1, retries409: 0 },
     "conn.state": { state: "ready", leaseOk: true },
+    "conn.heartbeatGap": { ms: 16000, visibility: "hidden" },
     "remove.original": { file: "file12", result: "kept" },
     "run.finish": {
         queued: 1,

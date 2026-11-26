@@ -678,12 +678,18 @@ export class CloudGramApi {
 
     async tgxStart(req, res) {
         const { user } = await this.authenticate(req, res);
-        this.#requireLease(user.username, req.headers["x-cloudgram-browser"]);
+        this.#renewUploadLease(
+            user.username,
+            req.headers["x-cloudgram-browser"],
+        );
         return this.tgx.startUpload(user.id, req.body);
     }
     async tgxPart(req, res) {
         const { user } = await this.authenticate(req, res);
-        this.#requireLease(user.username, req.headers["x-cloudgram-browser"]);
+        this.#renewUploadLease(
+            user.username,
+            req.headers["x-cloudgram-browser"],
+        );
         if (Number(req.headers["content-length"]) > 8 * 524288)
             throw new HttpError(413, "too_large");
         return this.tgx.putPart(
@@ -695,12 +701,18 @@ export class CloudGramApi {
     }
     async tgxFinish(req, res) {
         const { user } = await this.authenticate(req, res);
-        this.#requireLease(user.username, req.headers["x-cloudgram-browser"]);
+        this.#renewUploadLease(
+            user.username,
+            req.headers["x-cloudgram-browser"],
+        );
         return this.tgx.finishUpload(user.id, req.params.id, req.body);
     }
     async tgxCancel(req, res) {
         const { user } = await this.authenticate(req, res);
-        this.#requireLease(user.username, req.headers["x-cloudgram-browser"]);
+        this.#renewUploadLease(
+            user.username,
+            req.headers["x-cloudgram-browser"],
+        );
         return this.tgx.cancelUpload(user.id, req.params.id);
     }
     async tgxMessages(req, res) {
@@ -1067,6 +1079,18 @@ export class CloudGramApi {
             delete lease.holder;
             delete lease.expires;
         }
+    }
+
+    #renewUploadLease(username, browserId) {
+        this.#requireLease(username, browserId);
+        const lease = this.leases.get(username);
+        const now = this.now();
+        if (
+            !lease.pending ||
+            lease.pending.expires <= now ||
+            lease.pending.browserId === browserId
+        )
+            lease.expires = now + LEASE_TTL;
     }
 
     #requireLease(username, browserId) {

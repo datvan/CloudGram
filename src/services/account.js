@@ -541,7 +541,16 @@ export async function acquireLease(takeover) {
 
 function startHeartbeat() {
     stopHeartbeat();
+    let previous = Date.now();
     heartbeat = setInterval(async () => {
+        const now = Date.now();
+        const gap = now - previous;
+        previous = now;
+        if (gap > 15000)
+            diag("conn.heartbeatGap", {
+                ms: gap,
+                visibility: document.visibilityState,
+            });
         try {
             const res = await api.lease(browserId(), false);
             if (res.status === "granted") {
