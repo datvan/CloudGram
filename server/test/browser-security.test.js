@@ -32,6 +32,8 @@ async function load(path, globals, exports) {
     const context = vm.createContext({
         console,
         FILE_ENCRYPTION: false,
+        DIAG_LOG: false,
+        treeStats() {},
         URL,
         Response,
         setTimeout,

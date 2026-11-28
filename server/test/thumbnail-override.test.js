@@ -431,6 +431,8 @@ async function load(path, globals, exports) {
         clearTimeout,
         structuredClone,
         decryptPreview,
+        DIAG_LOG: false,
+        treeStats() {},
         ...globals,
     });
 }

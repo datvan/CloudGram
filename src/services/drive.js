@@ -30,6 +30,8 @@ import { v4 as uuid4 } from "uuid";
 import { ApiError } from "./api";
 import { loadTree, saveShards, shardOf, SHARD_COUNT } from "./treeStore";
 import { fold } from "../utils/format";
+import { DIAG_LOG } from "../config/features.js";
+import { treeStats } from "./treeStats";
 
 const TOMBSTONE_TTL = 90 * 24 * 60 * 60 * 1000;
 const PUSH_DELAY = 400;
@@ -187,6 +189,25 @@ export async function openDrive(key) {
     shardCount = remote.count;
     legacy = remote.legacy;
     merge(remote.records);
+    if (DIAG_LOG) {
+        try {
+            const openedRecords = records;
+            setTimeout(() => {
+                try {
+                    if (records !== openedRecords) return;
+                    const { totals, maxima } = treeStats(
+                        openedRecords.values(),
+                    );
+                    diag("tree.stats", totals);
+                    diag("tree.stats.max", maxima);
+                } catch {
+                    // Diagnostics are optional.
+                }
+            }, 0);
+        } catch {
+            // Diagnostics are optional.
+        }
+    }
     noteSaved(remote.records);
     publish();
     if (legacy) {

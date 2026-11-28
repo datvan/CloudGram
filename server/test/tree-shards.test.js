@@ -68,6 +68,8 @@ async function harness(initial = { version: 0 }) {
         ApiError,
         uuid4: () => "new",
         diag() {},
+        DIAG_LOG: false,
+        treeStats() {},
         swallow: () => () => {},
         setTimeout: (fn, ms) => (ms === 150 ? setTimeout(fn, 0) : 0),
         clearTimeout,

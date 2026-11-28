@@ -55,6 +55,8 @@ test("offline bulk upload benchmark", async () => {
                 throw new Error("Explicit IDs required");
             },
             diag() {},
+            DIAG_LOG: false,
+            treeStats() {},
             swallow: () => () => {},
             setTimeout: (fn, ms) => (ms === 150 ? setTimeout(fn, 0) : 0),
             clearTimeout,
