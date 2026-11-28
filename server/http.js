@@ -42,6 +42,9 @@ const ROUTES = {
     "GET /api/vault/tree": "getTree",
     "PUT /api/vault/tree": "putTree",
     "PUT /api/vault/tree/shards": "putTreeShards",
+    "PUT /api/vault/thumbs": "putThumbs",
+    "POST /api/vault/thumbs/get": "getThumbs",
+    "POST /api/vault/thumbs/delete": "deleteThumbs",
     "POST /api/lease": "lease",
     "POST /api/lease/release": "release",
     "POST /api/shares": "shares.create",
@@ -452,7 +455,9 @@ export function createApiServer(
                         ? {}
                         : await readJson(
                               req,
-                              found.handler === "diagnosticLog"
+                              found.handler === "putThumbs"
+                                  ? LIMITS.thumbsBody
+                                  : found.handler === "diagnosticLog"
                                   ? LIMITS.diagBody
                                   : LIMITS.body,
                           ),

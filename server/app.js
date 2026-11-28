@@ -33,6 +33,7 @@ import { Dropbox } from "./dropbox.js";
 import { Play } from "./play.js";
 import { Shares } from "./shares.js";
 import { sanitizeDiag } from "./diagSchema.js";
+import { Thumbs } from "./thumbs.js";
 
 const scryptAsync = promisify(scrypt);
 
@@ -44,6 +45,13 @@ export const LIMITS = {
     // a sharded tree: no request carries the whole tree any more
     shardBytes: 4 * 1024 * 1024,
     shardCount: 4096,
+    thumbsBody: 4 * 1024 * 1024,
+    thumbCt: 96 * 1024,
+    thumbsPut: 64,
+    thumbsGet: 200,
+    thumbsDelete: 500,
+    thumbsCount: 200_000,
+    thumbsBytes: 2 * 1024 * 1024 * 1024,
 };
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -204,6 +212,7 @@ export class CloudGramApi {
             admins.filter((name) => String(name).trim()).map(normalizeUsername),
         );
         this.db = db;
+        this.thumbs = db.dir ? new Thumbs(db.dir) : null;
         this.pepper = pepper;
         this.now = now;
         this.credentialGuard = credentialGuard;
@@ -270,6 +279,7 @@ export class CloudGramApi {
             this.db.data.users[name] = user;
         }
         if (reset) {
+            if (this.thumbs) await this.thumbs.deleteUser(user.id);
             this.tgx?.revokeDirectUploads?.(name);
             this.#revokeReadKeys(name);
             // the vault is sealed by the old password, so it goes too
@@ -294,6 +304,7 @@ export class CloudGramApi {
         if (!user) throw new Error(`no user ${name}`);
         this.tgx?.revokeDirectUploads?.(name);
         this.#revokeReadKeys(name);
+        if (this.thumbs) await this.thumbs.deleteUser(user.id);
         await this.db.deleteTree(user.id);
         await this.shares.dropOwner(name);
         await this.play.dropOwner(name);
@@ -395,6 +406,78 @@ export class CloudGramApi {
     }
 
     // ----- handlers -----------------------------------------------------------
+
+    async putThumbs(req, res) {
+        const { user } = await this.authenticate(req, res);
+        if (!this.thumbs) throw new HttpError(503, "thumbs_unavailable");
+        const input = req.body.thumbs;
+        if (
+            !input ||
+            typeof input !== "object" ||
+            Array.isArray(input) ||
+            Object.keys(input).length > LIMITS.thumbsPut
+        )
+            throw new HttpError(400, "bad_thumbs");
+        const entries = Object.entries(input).map(([id, blob]) => {
+            if (
+                !/^[A-Za-z0-9_-]{16,64}$/.test(id) ||
+                !blob ||
+                typeof blob.iv !== "string" ||
+                blob.iv.length > 128 ||
+                !b64.test(blob.iv) ||
+                typeof blob.ct !== "string" ||
+                blob.ct.length > LIMITS.thumbCt ||
+                !b64.test(blob.ct) ||
+                Buffer.from(blob.ct, "base64").toString("base64") !== blob.ct
+            )
+                throw new HttpError(400, "bad_thumbs");
+            return [id, { iv: blob.iv, ct: Buffer.from(blob.ct, "base64") }];
+        });
+        if (
+            !(await this.thumbs.put(
+                user.id,
+                entries,
+                { count: LIMITS.thumbsCount, bytes: LIMITS.thumbsBytes },
+                this.now(),
+            ))
+        )
+            throw new HttpError(413, "thumbs_quota");
+        return { ok: true };
+    }
+
+    #thumbIds(body, limit) {
+        if (
+            !Array.isArray(body.ids) ||
+            body.ids.length > limit ||
+            body.ids.some(
+                (id) =>
+                    typeof id !== "string" ||
+                    !/^[A-Za-z0-9_-]{16,64}$/.test(id),
+            )
+        )
+            throw new HttpError(400, "bad_thumbs");
+        return body.ids;
+    }
+
+    async getThumbs(req, res) {
+        const { user } = await this.authenticate(req, res);
+        if (!this.thumbs) throw new HttpError(503, "thumbs_unavailable");
+        return this.thumbs.get(
+            user.id,
+            this.#thumbIds(req.body, LIMITS.thumbsGet),
+            LIMITS.thumbsBody,
+        );
+    }
+
+    async deleteThumbs(req, res) {
+        const { user } = await this.authenticate(req, res);
+        if (!this.thumbs) throw new HttpError(503, "thumbs_unavailable");
+        await this.thumbs.delete(
+            user.id,
+            this.#thumbIds(req.body, LIMITS.thumbsDelete),
+        );
+        return { ok: true };
+    }
 
     /**
      * The KDF parameters for a username. Unknown names get a salt derived from
