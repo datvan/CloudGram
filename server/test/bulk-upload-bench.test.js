@@ -112,14 +112,18 @@ test("offline bulk upload benchmark", async () => {
             })),
             finished: [],
         };
+        progress.activeEntry({ progress: state }, "file-0");
         let found = 0;
+        let reducerMs = 0;
         start = performance.now();
         for (let tick = 0; tick < 100; tick++) {
+            const reducerStart = performance.now();
             state = progress.reducer(state, {
                 type: "UPLOADING",
                 id: `file-${tick % n}`,
                 percentage: tick,
             });
+            reducerMs += performance.now() - reducerStart;
             const root = { progress: state };
             for (let i = 0; i < n; i++)
                 if (progress.activeEntry(root, `file-${i}`)) found++;
@@ -149,6 +153,7 @@ test("offline bulk upload benchmark", async () => {
             "create ms": createMs.toFixed(2),
             "create in batch ms": batchCreateMs.toFixed(2),
             "100 ticks ms": progressMs.toFixed(2),
+            "reducer ms": reducerMs.toFixed(2),
             "selection ms": selectionMs.toFixed(2),
         });
     }
