@@ -69,8 +69,8 @@ async function harness(initial = { version: 0 }) {
         uuid4: () => "new",
         diag() {},
         swallow: () => () => {},
-        setTimeout: () => 0,
-        clearTimeout() {},
+        setTimeout: (fn, ms) => (ms === 150 ? setTimeout(fn, 0) : 0),
+        clearTimeout,
         encryptJson: async (_, tree) => ({ ...tree, ct: "x" }),
         decryptJson: async (_, blob) => blob,
     });
@@ -175,6 +175,39 @@ test("an edit during a save stays dirty and is not acknowledged early", async ()
     await h.drive.flush();
     assert.equal(h.drive.isSaved("new"), true);
     assert.equal(h.calls.length, 2);
+});
+
+test("flush coalesces calls and waits for a follow-up save", async () => {
+    const h = await harness();
+    await h.drive.openDrive({});
+    h.drive.createFile({ id: "a", name: "A" });
+    let release, started;
+    const waiting = new Promise((resolve) => {
+        release = resolve;
+    });
+    const saving = new Promise((resolve) => {
+        started = resolve;
+    });
+    h.beforeSave(async () => {
+        h.beforeSave(null);
+        started();
+        await waiting;
+    });
+    const first = h.drive.flush();
+    assert.equal(h.drive.flush(), first);
+    await saving;
+    h.drive.update("a", { file_id: 42 });
+    let done = false;
+    const follow = h.drive.flush().then(() => {
+        done = true;
+    });
+    h.drive.flush();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(done, false);
+    release();
+    await Promise.all([first, follow]);
+    assert.equal(h.calls.length, 2);
+    assert.equal(h.drive.isSaved("a"), true);
 });
 
 test("batch publishes once, including nested changes and changes before a throw", async () => {

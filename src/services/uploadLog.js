@@ -146,15 +146,21 @@ async function writeOut(context, strict = false) {
     }
     // encrypted before the transaction opens: an IndexedDB transaction
     // commits on its own as soon as it is left waiting on anything else
-    const sealed = await Promise.all(
-        batch.map(async ([id, entry]) => [
-            id,
-            entry && {
-                username: owner,
-                blob: await encryptJson(encryptionKey, entry, LABEL),
-            },
-        ]),
-    );
+    const sealed = [];
+    for (let i = 0; i < batch.length; i += 50) {
+        if (i) await new Promise((resolve) => setTimeout(resolve, 0));
+        sealed.push(
+            ...(await Promise.all(
+                batch.slice(i, i + 50).map(async ([id, entry]) => [
+                    id,
+                    entry && {
+                        username: owner,
+                        blob: await encryptJson(encryptionKey, entry, LABEL),
+                    },
+                ]),
+            )),
+        );
+    }
     try {
         await transact("readwrite", (entries, handleStore) => {
             for (const [id, value] of sealed) {

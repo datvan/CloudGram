@@ -4,6 +4,56 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
+test("upload log encrypts identical entries in chunks of 50", async () => {
+    const source = (
+        await readFile(
+            new URL("../../src/services/uploadLog.js", import.meta.url),
+            "utf8",
+        )
+    )
+        .replace(/^import [\s\S]*?;\r?\n/gm, "")
+        .replace(/\bexport /g, "");
+    const counts = [];
+    let encrypted = 0;
+    const stored = new Map();
+    const context = vm.createContext({
+        navigator: {},
+        uuid4: () => "tab",
+        LOG_OWNER: true,
+        swallow: () => () => {},
+        console,
+        setTimeout: (fn) => {
+            counts.push(encrypted);
+            fn();
+        },
+        encryptJson: async (_key, entry, label) => {
+            encrypted++;
+            return { text: JSON.stringify(entry), label };
+        },
+    });
+    const write = vm.runInContext(
+        source +
+            `\ntransact = async (_mode, work) => work({put: (value, id) => stored.set(id, value), delete: () => {}}, {delete: () => {}, put: () => {}}); writeOut`,
+        context,
+    );
+    context.stored = stored;
+    const batch = Array.from({ length: 121 }, (_, i) => [
+        String(i),
+        { name: `file-${i}`, parts: [i] },
+    ]);
+    await write(
+        { owner: "owner", encryptionKey: {}, batch, handles: [] },
+        true,
+    );
+    assert.deepEqual(counts, [50, 100]);
+    assert.equal(stored.size, 121);
+    for (const [id, entry] of batch) {
+        assert.equal(stored.get(id).username, "owner");
+        assert.equal(stored.get(id).blob.text, JSON.stringify(entry));
+        assert.equal(stored.get(id).blob.label, "upload-log");
+    }
+});
+
 async function load(globals) {
     const source = (
         await readFile(

@@ -56,8 +56,8 @@ test("offline bulk upload benchmark", async () => {
             },
             diag() {},
             swallow: () => () => {},
-            setTimeout: () => 0,
-            clearTimeout() {},
+            setTimeout: (fn, ms) => (ms === 150 ? setTimeout(fn, 0) : 0),
+            clearTimeout,
             saveShards: async (_key, { version }, groups, { onSaved }) => {
                 selected = groups;
                 onSaved([...groups.keys()], version + 1);
@@ -141,6 +141,12 @@ test("offline bulk upload benchmark", async () => {
             n + 300,
         );
         drive.update("file-0", { name: "changed" });
+        const beforeStart = performance.now();
+        vm.runInContext(
+            "groupByShard(records.values(), shardCount, dirtyShards.keys())",
+            context,
+        );
+        const beforeSelection = performance.now() - beforeStart;
         await drive.flush();
         assert.equal(selected.size, 1);
         assert.equal(
@@ -155,6 +161,8 @@ test("offline bulk upload benchmark", async () => {
             "100 ticks ms": progressMs.toFixed(2),
             "reducer ms": reducerMs.toFixed(2),
             "selection ms": selectionMs.toFixed(2),
+            "selection after 1 change before ms": beforeSelection.toFixed(2),
+            "selection after 1 change after ms": selectionMs.toFixed(2),
         });
     }
     console.log("Bulk upload benchmark (offline)");
