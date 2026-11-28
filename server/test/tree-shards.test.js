@@ -70,6 +70,7 @@ async function harness(initial = { version: 0 }) {
         diag() {},
         DIAG_LOG: false,
         treeStats() {},
+        setThumbKey() {},
         swallow: () => () => {},
         setTimeout: (fn, ms) => (ms === 150 ? setTimeout(fn, 0) : 0),
         clearTimeout,

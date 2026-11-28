@@ -32,6 +32,7 @@ import { loadTree, saveShards, shardOf, SHARD_COUNT } from "./treeStore";
 import { fold } from "../utils/format";
 import { DIAG_LOG } from "../config/features.js";
 import { treeStats } from "./treeStats";
+import { setThumbKey } from "./thumbStore";
 
 const TOMBSTONE_TTL = 90 * 24 * 60 * 60 * 1000;
 const PUSH_DELAY = 400;
@@ -178,6 +179,7 @@ function merge(incoming, track = false) {
 
 export async function openDrive(key) {
     dek = key;
+    setThumbKey(key);
     records = new Map();
     shardRecords = new Map();
     tombstones = new Set();
@@ -219,6 +221,7 @@ export async function openDrive(key) {
 export function closeDrive() {
     clearTimeout(pushTimer);
     dek = null;
+    setThumbKey(null);
     version = 0;
     records = new Map();
     shardRecords = new Map();

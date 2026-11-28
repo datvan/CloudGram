@@ -82,6 +82,9 @@ export const api = {
     putTreeShards: (body) => request("PUT", "/vault/tree/shards", body),
     putTree: (tree, baseVersion) =>
         request("PUT", "/vault/tree", { tree, baseVersion }),
+    putThumbs: (thumbs) => request("PUT", "/vault/thumbs", { thumbs }),
+    getThumbs: (ids) => request("POST", "/vault/thumbs/get", { ids }),
+    deleteThumbs: (ids) => request("POST", "/vault/thumbs/delete", { ids }),
     lease: (browserId, takeover) =>
         request("POST", "/lease", { browserId, takeover }),
     release: (browserId) => request("POST", "/lease/release", { browserId }),

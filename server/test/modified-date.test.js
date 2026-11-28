@@ -23,6 +23,7 @@ async function harness() {
             clearTimeout,
             SHARD_COUNT: 512,
             shardOf: () => 0,
+            setThumbKey() {},
             diag() {},
             swallow: () => () => {},
             flush: async () => {},

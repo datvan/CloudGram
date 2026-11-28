@@ -34,6 +34,7 @@ async function load(path, globals, exports) {
         FILE_ENCRYPTION: false,
         DIAG_LOG: false,
         treeStats() {},
+        setThumbKey() {},
         URL,
         Response,
         setTimeout,

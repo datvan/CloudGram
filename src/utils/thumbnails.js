@@ -8,6 +8,7 @@ import {
 } from "../services/telegram";
 import { fetchFile } from "./downloadFile";
 import { decryptPreview } from "../services/previewCrypto";
+import { thumbUrl } from "../services/thumbStore";
 
 // Telegram's own limit for a document thumbnail: JPEG, at most 320px a side
 const SIZE = 320;
@@ -256,7 +257,12 @@ export async function encryptedThumb(file) {
 const cache = new Map();
 const pointers = new Map();
 const identityOf = (record) =>
-    JSON.stringify([record.thumbnailBlob, record.thumbData, record.thumbnail]);
+    JSON.stringify([
+        record.thumbnailBlob,
+        record.thumbData,
+        record.thumbnail,
+        record.thumbRef,
+    ]);
 const hasBlob = (record) => record.thumbnailBlob !== undefined;
 // record key -> { key, record, attempts, promise, resolve }
 const pending = new Map();
@@ -504,9 +510,15 @@ function loadThumb(record) {
         (pending.has(key) && pending.get(key).identity !== identityOf(record))
     )
         evictThumbnails([record]);
-    if (!hasBlob(record) && record.thumbData) {
+    if (
+        !hasBlob(record) &&
+        (record.thumbData ||
+            record.thumbRef ||
+            (typeof record.thumbnail === "string" &&
+                record.thumbnail.startsWith("data:")))
+    ) {
         if (cache.has(key) || pending.has(key)) evictThumbnails([record]);
-        return Promise.resolve(record.thumbData);
+        return thumbUrl(record);
     }
     if (
         hasBlob(record) &&
@@ -577,6 +589,7 @@ export function useThumbnail(record, wanted, visible) {
         record.file_id,
         record.thumbnail,
         record.thumbData,
+        record.thumbRef,
         identity,
         ready,
         visible,

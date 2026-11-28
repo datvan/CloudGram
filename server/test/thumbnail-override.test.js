@@ -433,6 +433,8 @@ async function load(path, globals, exports) {
         decryptPreview,
         DIAG_LOG: false,
         treeStats() {},
+        setThumbKey() {},
+        thumbUrl: async (record) => record.thumbData ?? null,
         ...globals,
     });
 }
@@ -1072,7 +1074,7 @@ test("tree data respects hold and replaces cached legacy thumbnail", async () =>
     );
     const old = { id: "a", file_id: 1, thumbnail: 50 };
     h.cache.set("a:1", "blob:old");
-    h.pointers.set("a:1", JSON.stringify([null, null, 50]));
+    h.pointers.set("a:1", JSON.stringify([null, null, 50, null]));
     const release = h.holdThumbnails([old]);
     const next = {
         ...old,

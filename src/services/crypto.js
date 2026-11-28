@@ -157,7 +157,7 @@ function importDek(raw) {
 
 // The label is bound in as additional data, so a session blob can never be
 // swapped in where the tree is expected, or the other way round.
-async function encryptBytes(key, bytes, label) {
+export async function encryptBytes(key, bytes, label) {
     const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
     const ct = await subtle.encrypt(
         { name: "AES-GCM", iv, additionalData: encoder.encode(label) },
@@ -167,7 +167,7 @@ async function encryptBytes(key, bytes, label) {
     return { iv: toBase64(iv), ct: toBase64(ct) };
 }
 
-async function decryptBytes(key, blob, label) {
+export async function decryptBytes(key, blob, label) {
     const plain = await subtle.decrypt(
         {
             name: "AES-GCM",

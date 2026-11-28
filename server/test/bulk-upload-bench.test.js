@@ -57,6 +57,7 @@ test("offline bulk upload benchmark", async () => {
             diag() {},
             DIAG_LOG: false,
             treeStats() {},
+            setThumbKey() {},
             swallow: () => () => {},
             setTimeout: (fn, ms) => (ms === 150 ? setTimeout(fn, 0) : 0),
             clearTimeout,
