@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import http from "node:http";
 import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -8,7 +11,7 @@ import { fileURLToPath } from "node:url";
 // a local address, and the helper asks the page (played here by `page()`) for
 // the bytes. "mpv" is node itself, which fails at once on the address, so no
 // real player starts.
-const helper = fileURLToPath(
+const helperSource = fileURLToPath(
     new URL("../../public/helper/cloudgram-helper.mjs", import.meta.url),
 );
 const PORT = 48000 + Math.floor(Math.random() * 900);
@@ -17,6 +20,7 @@ const VIDEO = Buffer.alloc(5_000_000);
 for (let i = 0; i < VIDEO.length; i++) VIDEO[i] = (i * 7 + (i >> 8)) & 255;
 
 let child;
+let helperDir;
 
 function call(method, url, { headers = {}, body, host, origin = true } = {}) {
     return new Promise((resolve, reject) => {
@@ -53,6 +57,14 @@ function call(method, url, { headers = {}, body, host, origin = true } = {}) {
 const json = (r) => JSON.parse(r.body.toString());
 
 before(async () => {
+    helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "helper-origin-"));
+    const helper = path.join(helperDir, "helper.mjs");
+    fs.writeFileSync(
+        helper,
+        fs
+            .readFileSync(helperSource, "utf8")
+            .replaceAll("__CLOUDGRAM_ORIGIN__", ORIGIN),
+    );
     child = spawn(process.execPath, [helper], {
         env: {
             ...process.env,
@@ -64,7 +76,10 @@ before(async () => {
     await new Promise((resolve) => child.stdout.once("data", resolve));
 });
 
-after(() => child.kill());
+after(() => {
+    child.kill();
+    fs.rmSync(helperDir, { recursive: true, force: true });
+});
 
 /** What the CloudGram page does: answers the helper's requests with bytes. */
 function page(token, { fail = false } = {}) {

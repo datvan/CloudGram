@@ -5,6 +5,7 @@ Description=CloudGram account API
 After=network.target
 
 [Service]
+Environment=NODE_ENV=production
 User=cloudgram
 Group=cloudgram
 EnvironmentFile=/etc/cloudgram-api.env

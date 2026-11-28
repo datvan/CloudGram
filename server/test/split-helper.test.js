@@ -8,7 +8,7 @@ import test, { after, before } from "node:test";
 import { fileURLToPath } from "node:url";
 
 // The local helper (public/helper) is started as the user would start it.
-const helper = fileURLToPath(
+const helperSource = fileURLToPath(
     new URL("../../public/helper/cloudgram-helper.mjs", import.meta.url),
 );
 const PORT = 47000 + Math.floor(Math.random() * 900);
@@ -18,6 +18,7 @@ const hasFfmpeg =
     spawnSync("ffprobe", ["-version"], { stdio: "ignore" }).status === 0;
 
 let child;
+let helperDir;
 let dir;
 
 function call(method, url, { headers = {}, body, host } = {}) {
@@ -55,6 +56,14 @@ const json = (r) => JSON.parse(r.body.toString());
 
 before(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "helper-test-"));
+    helperDir = fs.mkdtempSync(path.join(os.tmpdir(), "helper-origin-"));
+    const helper = path.join(helperDir, "helper.mjs");
+    fs.writeFileSync(
+        helper,
+        fs
+            .readFileSync(helperSource, "utf8")
+            .replaceAll("__CLOUDGRAM_ORIGIN__", ORIGIN),
+    );
     child = spawn(process.execPath, [helper], {
         env: { ...process.env, CLOUDGRAM_HELPER_PORT: String(PORT) },
         stdio: ["ignore", "pipe", "ignore"],
@@ -64,6 +73,7 @@ before(async () => {
 
 after(() => {
     child.kill();
+    fs.rmSync(helperDir, { recursive: true, force: true });
     fs.rmSync(dir, { recursive: true, force: true });
 });
 

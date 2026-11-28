@@ -17,11 +17,24 @@ set -euo pipefail
 ROOT=/var/www/cloudgram
 STAGE=/var/www/cloudgram.incoming
 API=/opt/cloudgram-api
-SITE=${DEPLOY_URL:-https://cloudgram.example.com}
 
-if [ -z "${DEPLOY_HOST:-}" ] && [ -f .env ]; then
-    DEPLOY_HOST=$(sed -n "s/^[[:space:]]*DEPLOY_HOST[[:space:]]*=[[:space:]]*//p" .env | tr -d "\"' \r" | head -1)
-fi
+
+
+for key in DEPLOY_HOST SITE_HOST; do
+    if [ -z "${!key:-}" ] && [ -f .env ]; then
+        value=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" .env | sed 's/[[:space:]]*#.*$//' | tr -d "\"' \r" | head -1)
+        printf -v "$key" '%s' "$value"
+    fi
+done
+for key in SITE_HOST; do
+    value=${!key:-}
+    if [[ ! "$value" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+        echo "$key missing or invalid in .env" >&2
+        exit 1
+    fi
+done
+
+SITE=${DEPLOY_URL:-https://$SITE_HOST}
 
 if [ -z "${DEPLOY_HOST:-}" ]; then
     echo "Chưa có DEPLOY_HOST. Thêm vào .env một dòng như:" >&2

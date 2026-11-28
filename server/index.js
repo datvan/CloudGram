@@ -4,7 +4,7 @@
  *
  *     CLOUDGRAM_PEPPER   random secret, 32+ chars; never in this repo
  *     CLOUDGRAM_DATA     data directory (default /var/lib/cloudgram-api)
- *     CLOUDGRAM_ORIGIN   expected Origin header (default https://cloudgram.example.com)
+ *     CLOUDGRAM_ORIGIN   expected Origin header (required in production)
  *     CLOUDGRAM_SHARE_QUOTA_GB  disk each account may use for share links (default 20)
  *     CLOUDGRAM_PLAY     0 turns off opening a video in PotPlayer/VLC (default on)
  *     CLOUDGRAM_PLAY_CACHE_MB  disk for the player cache, all videos (default 1024)
@@ -17,6 +17,10 @@ import { Owners } from "./owners.js";
 import { TelegramProxy } from "./tg-proxy.js";
 import { createApiServer } from "./http.js";
 
+const origin =
+    process.env.CLOUDGRAM_ORIGIN ||
+    (process.env.NODE_ENV === "production" ? null : "http://localhost:5173");
+if (!origin) throw new Error("CLOUDGRAM_ORIGIN is required in production");
 const port = Number(process.env.PORT ?? 4322);
 const db = await new Db(
     process.env.CLOUDGRAM_DATA ?? "/var/lib/cloudgram-api",
@@ -93,7 +97,7 @@ const api = new CloudGramApi({
 await api.play.reset();
 
 const server = createApiServer(api, {
-    origin: process.env.CLOUDGRAM_ORIGIN ?? "https://cloudgram.example.com",
+    origin,
     secureCookies: process.env.CLOUDGRAM_INSECURE_COOKIES !== "1",
     diagLog: process.env.CLOUDGRAM_DIAG_LOG !== "0",
 });

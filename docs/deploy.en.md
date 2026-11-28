@@ -2,7 +2,7 @@
 
 **English** · [Tiếng Việt](deploy.md)
 
-Live at https://cloudgram.example.com, served by nginx on a private VPS behind
+Example: https://cloudgram.example.com, served by nginx on a private VPS behind
 the Cloudflare proxy.
 
 > This repository is public, so the server IP is not written here. It lives in
@@ -68,9 +68,12 @@ Add the target machine to `.env`, next to the Telegram keys:
 
 ```
 DEPLOY_HOST=root@<vps-ip>
+SITE_HOST=cloudgram.example.com
+UPLOAD_HOST=up.example.com
+VITE_SITE_HOST=cloudgram.example.com
 ```
 
-The prefix is not `VITE_`, so Vite does not inline it into the bundle sent to
+`DEPLOY_HOST` has no `VITE_` prefix, so Vite does not inline it into the bundle sent to
 the browser.
 
 **The first time**, install the account service and the new nginx config:
@@ -180,88 +183,7 @@ Telegram session stays for other machines. To cut Telegram off entirely, use
 This section records things that took effort to find out, so they need not be
 rediscovered.
 
-**All web traffic must go through Cloudflare.** `ufw` on the VPS opens 80/443
-only to Cloudflare's 22 IP ranges (15 IPv4 + 7 IPv6) and blocks every other
-source. Calling the server IP directly from outside times out, port 443
-included.
-
-In practice: **the DNS record must be Proxied (orange cloud).** Set to
-`DNS only`, the site does not work — not as a security matter, there is simply
-no way in.
-
-This design is good: DDoS is absorbed by Cloudflare, and any WAF or rate-limit
-rule set at Cloudflare cannot be bypassed. It also keeps the origin IP private
-— but only as long as that IP is not written down elsewhere, so keep it out of
-the repo, issues and screenshots.
-
-**The zone's SSL mode is Full (strict).** Known because, while the origin had no
-certificate for the hostname, Cloudflare returned `526` instead of serving
-anyway.
-
-**Certbot works behind the proxy**, because Cloudflare lets
-`/.well-known/acme-challenge/` through to the origin over plain HTTP without
-forcing HTTPS. Verified: that path returns 200 and shows up in nginx's access
-log, while every other path gets a 301 from Cloudflare at the edge.
-
-**The certificate** expires on 2027-01-22; Certbot has already installed its
-renewal task.
-
-**The nginx config** is in
-[deploy/nginx/cloudgram.conf](../deploy/nginx/cloudgram.conf), a copy of
-`/etc/nginx/sites-available/cloudgram.conf`. Points worth noting:
-
--   `location /` uses `try_files $uri $uri/ /index.html` — this is what keeps
-    `/folder/<id>` from 404ing on F5.
--   `location /assets/` uses `try_files $uri =404` — on purpose. A missing
-    asset must say so; letting it fall back to `index.html` hands the browser
-    HTML with status 200 while it waits for JavaScript, and that failure is
-    very hard to trace.
--   `location /api/` uses `proxy_pass` to the account service at
-    `127.0.0.1:4322`, with no `try_files`: a wrong `/api` path must get a JSON 404.
--   The Content-Security-Policy allows scripts only from the site itself and
-    connections to `wss://*.web.telegram.org` (where GramJS speaks MTProto).
-    Adding a library that calls out means opening it up here, or the browser
-    blocks it silently — check the console. `worker-src blob:` is for the
-    HEIC decoder (`heic-to/csp`), which runs in a worker made from a blob.
-
-**SSH login is key-only.** Since 2026-10-24 the server no longer accepts
-passwords. These three lines live in
-`/etc/ssh/sshd_config.d/00-hardening.conf`:
-
-```
-PermitRootLogin prohibit-password
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-```
-
-**The `00` at the start of the file name is deliberate.** sshd takes the
-**first** value it reads, and that directory already holds
-`50-cloud-init.conf` with `PasswordAuthentication yes`. `00` is read before
-`50`, so it wins. Appending to the end of `/etc/ssh/sshd_config` has no effect,
-because the `Include` line sits at the top of the file and loads the whole
-directory before the end is reached.
-
-`prohibit-password` rather than `no`: root is the only account with a real
-shell on the machine, and `no` would lock you out.
-
-Operational consequence: **there is no password fallback any more.** To get in
-from another machine, run `ssh-copy-id` from a machine that already works
-**first**. Losing every key leaves only the VPS provider's VNC console.
-
-Check by asking the server directly which login methods it offers:
-
-```bash
-ssh -v -o BatchMode=yes -o PubkeyAuthentication=no <user>@<vps-ip> 2>&1 | grep -i "that can continue"
-```
-
-Correct output is `publickey` alone. Seeing `password` means the config has
-not taken effect — usually a forgotten `systemctl reload ssh`. (`BatchMode=yes`
-is there precisely for that broken case: without it, the command prints the
-line you want and then sits waiting for a password.) Do not judge by sshd's
-PID: `SIGHUP` makes it `exec` itself again, so the PID and start time stay the
-same even though the config changed.
-
----
+Configure DNS, TLS and firewall rules for your own deployment. Restrict origin access to your trusted proxy where applicable.
 
 ## Rebuilding from scratch
 
@@ -277,7 +199,7 @@ exist yet.
 ```bash
 # on the VPS
 mkdir -p /var/www/cloudgram
-# copy deploy/nginx/cloudgram.bootstrap.conf to
+# replace __SITE_HOST__ with your site host, then copy deploy/nginx/cloudgram.bootstrap.conf to
 #   /etc/nginx/sites-available/cloudgram.conf
 ln -s /etc/nginx/sites-available/cloudgram.conf /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
@@ -290,8 +212,7 @@ and:
 certbot --nginx -d cloudgram.example.com -n --redirect
 ```
 
-Order matters: DNS must point correctly and the proxy must be on before
-calling certbot, or Let's Encrypt hits the IP directly and ufw blocks it.
+Ensure DNS and your firewall permit certificate validation before running certbot.
 
 The bootstrap config has no `/api`. Once certbot is done, run
 `bash deploy/vps-setup.sh` to install the account service and switch to

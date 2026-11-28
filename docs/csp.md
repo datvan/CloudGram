@@ -26,7 +26,7 @@ older nonce. Hashed `/assets/` files keep their immutable caching.
 ## Deployment and verification
 
 The ordinary app deployment does not install nginx configuration. Back up the
-active CloudGram site config, install this file, run `nginx -t`, then reload
+active CloudGram site config, render `__SITE_HOST__` and `__UPLOAD_HOST__` in this template, install it, run `nginx -t`, then reload
 nginx. Restore the backup if validation fails. Keep the API environment and all
 five [security feature flags](security-flags.md) unchanged.
 

@@ -14,9 +14,20 @@
 # pepper làm vô hiệu mọi link thiết lập và phiên đăng nhập đang có.
 set -euo pipefail
 
-if [ -z "${DEPLOY_HOST:-}" ] && [ -f .env ]; then
-    DEPLOY_HOST=$(sed -n "s/^[[:space:]]*DEPLOY_HOST[[:space:]]*=[[:space:]]*//p" .env | tr -d "\"' \r" | head -1)
-fi
+
+for key in DEPLOY_HOST SITE_HOST UPLOAD_HOST; do
+    if [ -z "${!key:-}" ] && [ -f .env ]; then
+        value=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" .env | sed 's/[[:space:]]*#.*$//' | tr -d "\"' \r" | head -1)
+        printf -v "$key" '%s' "$value"
+    fi
+done
+for key in SITE_HOST UPLOAD_HOST; do
+    value=${!key:-}
+    if [[ ! "$value" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+        echo "$key missing or invalid in .env" >&2
+        exit 1
+    fi
+done
 if [ -z "${DEPLOY_HOST:-}" ]; then
     echo "Chưa có DEPLOY_HOST trong .env." >&2
     exit 1
@@ -32,10 +43,11 @@ tar -C server --exclude=.data --exclude='.env*' --exclude=test --exclude=node_mo
 scp -q deploy/systemd/cloudgram-api.service deploy/cloudgram-admin deploy/nginx/cloudgram.conf "$DEPLOY_HOST:$STAGE/"
 
 echo "→ cài đặt"
-ssh -o BatchMode=yes "$DEPLOY_HOST" "STAGE='$STAGE' bash -s" <<'REMOTE'
+ssh -o BatchMode=yes "$DEPLOY_HOST" "STAGE='$STAGE' SITE_HOST='$SITE_HOST' UPLOAD_HOST='$UPLOAD_HOST' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$STAGE"
 sed -i 's/\r$//' cloudgram-admin cloudgram-api.service cloudgram.conf
+sed -i "s/__SITE_HOST__/$SITE_HOST/g; s/__UPLOAD_HOST__/$UPLOAD_HOST/g" cloudgram.conf
 
 node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' ||
     { echo "Cần Node 20 trở lên, đang có $(node -v)" >&2; exit 1; }
@@ -55,6 +67,9 @@ rm -rf /opt/cloudgram-api.old
 if [ ! -f /etc/cloudgram-api.env ]; then
     (umask 077 && printf 'CLOUDGRAM_PEPPER=%s\n' "$(openssl rand -hex 32)" > /etc/cloudgram-api.env)
     echo "   đã sinh /etc/cloudgram-api.env"
+fi
+if ! grep -q '^CLOUDGRAM_ORIGIN=' /etc/cloudgram-api.env; then
+    printf 'CLOUDGRAM_ORIGIN=https://%s\n' "$SITE_HOST" >> /etc/cloudgram-api.env
 fi
 chown root:root /etc/cloudgram-api.env
 chmod 600 /etc/cloudgram-api.env

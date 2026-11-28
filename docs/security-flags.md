@@ -172,21 +172,6 @@ through the direct host without cookies. On direct failure it uses the cookie
 route for five minutes; aborted reads do not fall back. The direct nginx location
 allows GET and OPTIONS with `X-Read-Key` from the app origin only.
 
-Uploading a 2 MiB chunk to `cloudgram.example.com` measured 3-11 KB/s from the
-owner's network (Cloudflare to the VPS), against 7 MB/s straight to the VPS, so
-the tab can put chunks at `VITE_PLAY_DIRECT_URL` (`https://up.example.com:8444`,
-frontend build environment; empty = through the page's address, and it falls
-back to that by itself when the direct address cannot be reached).
-
--   DNS: `up` as an A record to the VPS, **DNS only** (grey cloud).
--   `deploy/vps-direct-upload.sh` installs `deploy/nginx/cloudgram-upload.conf`,
-    gets a Let's Encrypt certificate (port 80 is opened by certbot's hook only
-    while it runs) and opens `8444/tcp` in ufw. Only that nginx listens on 8444;
-    it accepts nothing but `PUT /api/play/<id>/chunks/<n>` and
-    `GET /api/play/<id>/next` (Cloudflare answered the tab's quick polls with
-    429), so no other site on the VPS is reachable without Cloudflare.
--   No cookie crosses origins: the session has its own random key, sent as
-    `X-Play-Key` and checked in constant time (`server/play.js`). The origin IP
-    is now in public DNS for `up.example.com` (it was already in git history).
--   Rollback: remove the `cloudgram-upload.conf` site link, `ufw delete allow
-8444/tcp`, reload nginx, restore `cloudgram.conf` from the script's backup.
+Set `VITE_PLAY_DIRECT_URL` to your upload endpoint when using direct upload.
+`deploy/vps-direct-upload.sh` configures the endpoint and keeps a backup for rollback.
+No cookie crosses origins: the session uses its own random key.
