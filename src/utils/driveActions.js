@@ -10,10 +10,9 @@
 import { buildTreeFromPaths } from "./buildTreeFromPaths";
 import downloadFile from "./downloadFile";
 import { KEPT, entriesOf, isAbort } from "./pickers";
-import { partsOf } from "./partGroup";
 import { Store } from "../redux/store";
 import { keptProgress } from "../redux/actions/progressAction";
-import { collectSubtree, findFolder, messageIdsOf, recordIdsOf } from "./tree";
+import { collectSubtree, messageIdsOf, recordIdsOf } from "./tree";
 import { cancelUploads, enqueueUpload, isQueued } from "./uploadQueue";
 import { storyboardsOf } from "../services/storyboard";
 import {
@@ -95,7 +94,10 @@ export async function uploadEntries(
         );
     const scope = uploadScope();
     const tree = buildTreeFromPaths(entries);
-    const records = getSnapshot().records;
+    const snapshot = getSnapshot();
+    const { folders, named, uploaded, byId, parts } = uploadIndex(snapshot);
+    const reserved = new Set();
+    const nextName = new Map();
     const realId = new Map();
     const parentOf = (item) =>
         item.parentTempId ? realId.get(item.parentTempId) : parentID;
@@ -108,22 +110,10 @@ export async function uploadEntries(
     for (const folder of tree.folders) {
         const parent = parentOf(folder);
         const existing =
-            parent !== MISSING && findFolder(records, parent, folder.name);
+            parent !== MISSING &&
+            folders.get(parent ?? undefined)?.get(folder.name);
         realId.set(folder.tempId, existing ? existing.id : MISSING);
         if (!existing) missing.push(folder);
-    }
-
-    // what each folder already holds, by name; finished files anywhere, by
-    // name and size
-    const named = new Map();
-    const uploaded = new Map();
-    for (const record of records) {
-        if (record.trashedAt) continue;
-        const key = nameKey(record.parent, record.name);
-        if (!named.has(key)) named.set(key, []);
-        named.get(key).push(record);
-        if (record.type === "file" && record.file_id != null)
-            uploaded.set(sizeKey(record.name, record.size), record);
     }
 
     let placed = tree.files.map((entry) => {
@@ -131,15 +121,13 @@ export async function uploadEntries(
         const name = entry.name ?? entry.file.name;
         const there =
             parent === MISSING ? [] : named.get(nameKey(parent, name)) ?? [];
-        const files = there.filter((r) => r.type === "file");
+
         return {
             entry,
             parent,
             name,
-            unfinished: files.find(
-                (r) => r.file_id == null && r.size === entry.file.size,
-            ),
-            taken: files.find((r) => r.file_id != null),
+            unfinished: there.unfinished?.get(entry.file.size),
+            taken: there.taken,
             elsewhere: there.length
                 ? undefined
                 : uploaded.get(sizeKey(name, entry.file.size)),
@@ -156,7 +144,8 @@ export async function uploadEntries(
     // by this id to say what became of the original
     for (const p of oversize) p.keptId = `kept:${Math.random()}`;
     if (oversize.length) {
-        placed = placed.filter((p) => !oversize.includes(p));
+        const oversized = new Set(oversize);
+        placed = placed.filter((p) => !oversized.has(p));
         onTooBig?.(
             oversize.map((p) => ({
                 name: p.name,
@@ -175,7 +164,9 @@ export async function uploadEntries(
                 parts:
                     p.parent === MISSING
                         ? 0
-                        : partsOf(p.name, p.parent, records),
+                        : parts
+                              .get(p.parent ?? null)
+                              ?.get(p.name.replace(/\.[^.]+$/, ""))?.size ?? 0,
             })),
             limit,
         );
@@ -225,9 +216,7 @@ export async function uploadEntries(
                   name: p.name,
                   size: p.entry.file.size,
                   // the folder it is in; null for the top level
-                  where:
-                      records.find((r) => r.id === p.elsewhere.parent)?.name ??
-                      null,
+                  where: byId.get(p.elsewhere.parent)?.name ?? null,
               })),
           )) ?? "upload"
         : null;
@@ -369,9 +358,15 @@ export async function uploadEntries(
                     counts.reason =
                         "Không thể đưa một số tệp vào hàng tải lên.";
             } else if (choice === "keep") {
-                const name = freeName(named, parentOf(entry), p.name);
+                const name = freeName(
+                    named,
+                    reserved,
+                    nextName,
+                    parentOf(entry),
+                    p.name,
+                );
                 // taken from now on, for the next file of this batch
-                named.set(nameKey(parentOf(entry), name), [{ name }]);
+                reserved.add(nameKey(parentOf(entry), name));
                 // renamed, so it is no piece of the cut: not counted for the group
                 if (queue(p, { name, group: undefined })) counts.renamed += 1;
                 else
@@ -399,14 +394,67 @@ const MISSING = Symbol("missing folder");
 const nameKey = (parent, name) => `${parent ?? ""}\n${name}`;
 const sizeKey = (name, size) => `${size}\n${name}`;
 
+let indexedSnapshot;
+let cachedUploadIndex;
+
+function uploadIndex(snapshot) {
+    if (snapshot === indexedSnapshot) return cachedUploadIndex;
+    const folders = new Map();
+    const named = new Map();
+    const uploaded = new Map();
+    const byId = new Map();
+    const parts = new Map();
+    for (const record of snapshot.records) {
+        if (!byId.has(record.id)) byId.set(record.id, record);
+        if (record.trashedAt) continue;
+        if (record.type === "folder") {
+            const parent = record.parent ?? undefined;
+            if (!folders.has(parent)) folders.set(parent, new Map());
+            const siblings = folders.get(parent);
+            if (!siblings.has(record.name)) siblings.set(record.name, record);
+        }
+        const key = nameKey(record.parent, record.name);
+        if (!named.has(key))
+            named.set(key, { length: 0, unfinished: new Map() });
+        const group = named.get(key);
+        group.length++;
+        if (record.type === "file") {
+            if (record.file_id != null) {
+                group.taken ??= record;
+                uploaded.set(sizeKey(record.name, record.size), record);
+                const match = /^(.*)\.part(\d{2,4})\.([A-Za-z0-9]+)$/.exec(
+                    record.name,
+                );
+                if (match) {
+                    const parent = record.parent ?? null;
+                    if (!parts.has(parent)) parts.set(parent, new Map());
+                    const bases = parts.get(parent);
+                    if (!bases.has(match[1])) bases.set(match[1], new Set());
+                    bases.get(match[1]).add(Number(match[2]));
+                }
+            } else if (!group.unfinished.has(record.size)) {
+                group.unfinished.set(record.size, record);
+            }
+        }
+    }
+    indexedSnapshot = snapshot;
+    cachedUploadIndex = { folders, named, uploaded, byId, parts };
+    return cachedUploadIndex;
+}
+
 /** "name (1).ext", "name (2).ext"... whichever is free in the folder. */
-function freeName(named, parent, name) {
+function freeName(named, reserved, nextName, parent, name) {
     const dot = name.lastIndexOf(".");
     const [stem, ext] =
         dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
-    for (let n = 1; ; n += 1) {
+    const key = nameKey(parent, name);
+    for (let n = nextName.get(key) ?? 1; ; n += 1) {
         const candidate = `${stem} (${n})${ext}`;
-        if (!named.has(nameKey(parent, candidate))) return candidate;
+        const candidateKey = nameKey(parent, candidate);
+        if (!named.has(candidateKey) && !reserved.has(candidateKey)) {
+            nextName.set(key, n + 1);
+            return candidate;
+        }
     }
 }
 

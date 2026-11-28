@@ -160,3 +160,129 @@ test("offline bulk upload benchmark", async () => {
     console.log("Bulk upload benchmark (offline)");
     console.table(rows);
 });
+
+test("folder planner index benchmark", async () => {
+    const [treeSource, actionsSource] = await Promise.all(
+        ["../../src/utils/tree.js", "../../src/utils/driveActions.js"].map(
+            (path) => readFile(new URL(path, import.meta.url), "utf8"),
+        ),
+    );
+    const strip = (source) =>
+        source
+            .replace(/^import [\s\S]*?;\r?\n/gm, "")
+            .replace(/\bexport /g, "");
+    const context = vm.createContext({});
+    const planner = vm.runInContext(
+        strip(treeSource) +
+            "\n" +
+            strip(actionsSource) +
+            "\n;({findFolder, uploadIndex, freeName})",
+        context,
+    );
+    const records = Array.from({ length: 10000 }, (_, i) => ({
+        id: `id-${i}`,
+        type: "folder",
+        name: `folder-${i}`,
+        parent: null,
+    }));
+    const snapshot = { records };
+    let start = performance.now();
+    for (let batch = 0; batch < 100; batch++) {
+        const named = new Map();
+        const uploaded = new Map();
+        for (const record of records) {
+            const key = `${record.parent ?? ""}\n${record.name}`;
+            if (!named.has(key)) named.set(key, []);
+            named.get(key).push(record);
+            if (record.type === "file" && record.file_id != null)
+                uploaded.set(`${record.size}\n${record.name}`, record);
+        }
+        for (let i = batch * 100; i < (batch + 1) * 100; i++)
+            assert.equal(
+                planner.findFolder(records, null, `folder-${i}`).id,
+                `id-${i}`,
+            );
+    }
+    const before = performance.now() - start;
+    start = performance.now();
+    for (let batch = 0; batch < 100; batch++) {
+        const index = planner.uploadIndex(snapshot);
+        for (let i = batch * 100; i < (batch + 1) * 100; i++)
+            assert.equal(
+                index.folders.get(undefined).get(`folder-${i}`).id,
+                `id-${i}`,
+            );
+    }
+    const after = performance.now() - start;
+    assert.notEqual(
+        planner.uploadIndex({ records }),
+        planner.uploadIndex(snapshot),
+    );
+    console.log(
+        `Folder lookup + index, 100 batches x 100 / 10000 records: before ${before.toFixed(
+            2,
+        )} ms, after ${after.toFixed(2)} ms`,
+    );
+});
+
+test("planner index preserves first matches, part counts and rename order", async () => {
+    const source = await readFile(
+        new URL("../../src/utils/driveActions.js", import.meta.url),
+        "utf8",
+    );
+    const code = source
+        .replace(/^import [\s\S]*?;\r?\n/gm, "")
+        .replace(/\bexport /g, "");
+    const { uploadIndex, freeName } = vm.runInNewContext(
+        code + "\n;({uploadIndex, freeName})",
+    );
+    const records = [
+        { id: "folder", type: "folder", name: "dir" },
+        { id: "u1", type: "file", parent: "folder", name: "a.txt", size: 4 },
+        { id: "u2", type: "file", parent: "folder", name: "a.txt", size: 4 },
+        {
+            id: "f1",
+            type: "file",
+            parent: "folder",
+            name: "a.txt",
+            size: 4,
+            file_id: 1,
+        },
+        { id: "f2", type: "file", name: "a.txt", size: 4, file_id: 2 },
+        {
+            type: "file",
+            parent: "folder",
+            name: "video.part001.mp4",
+            file_id: 3,
+        },
+        {
+            type: "file",
+            parent: "folder",
+            name: "video.part01.mkv",
+            file_id: 4,
+        },
+        {
+            type: "file",
+            parent: "folder",
+            name: "video.part002.mp4",
+            file_id: 5,
+            trashedAt: 1,
+        },
+    ];
+    const snapshot = { records };
+    const index = uploadIndex(snapshot);
+    assert.equal(uploadIndex(snapshot), index);
+    assert.equal(index.folders.get(undefined).get("dir").id, "folder");
+    const group = index.named.get("folder\na.txt");
+    assert.equal(group.unfinished.get(4).id, "u1");
+    assert.equal(group.taken.id, "f1");
+    assert.equal(index.uploaded.get("4\na.txt").id, "f2");
+    assert.equal(index.parts.get("folder").get("video").size, 1);
+    const reserved = new Set();
+    const next = new Map();
+    for (const expected of ["a (1).txt", "a (2).txt"]) {
+        const name = freeName(index.named, reserved, next, "folder", "a.txt");
+        assert.equal(name, expected);
+        reserved.add(`folder\n${name}`);
+    }
+});
