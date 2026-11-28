@@ -1750,6 +1750,9 @@ export default function DriveApp({ mode, onToggleMode }) {
                                             icon={
                                                 <BuildIcon fontSize="small" />
                                             }
+                                            disabled={
+                                                !selectedItems.some(canRepair)
+                                            }
                                             onClick={() => act("repair")}
                                         />
                                         <ToolbarButton

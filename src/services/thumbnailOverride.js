@@ -1,6 +1,12 @@
 /** Regenerated covers are encrypted and shared by file_id. */
 import { getClient, isOnline, onClientChange } from "./telegram";
-import { getRecord, getSnapshot, update, flush } from "./drive";
+import {
+    getRecord,
+    getSnapshot,
+    update,
+    flush,
+    forgetUnusedThumbs,
+} from "./drive";
 import { uploadScope } from "./uploadLog";
 import { getTelegramMode } from "./account";
 import { isMigrating } from "./migrateShared";
@@ -353,7 +359,17 @@ export function regenerateThumbnail(record, options = {}) {
             const release = holdThumbnails(old);
             let changed = [];
             for (const r of records)
-                update(r.id, { thumbnailBlob }, { preserveModifiedAt: true });
+                update(
+                    r.id,
+                    {
+                        thumbnailBlob,
+                        ...(r.thumbRef && { thumbRef: undefined }),
+                    },
+                    {
+                        preserveModifiedAt: true,
+                        ...(r.thumbRef && { deferThumbCleanup: true }),
+                    },
+                );
             try {
                 await flush();
                 op.assert();
@@ -371,6 +387,7 @@ export function regenerateThumbnail(record, options = {}) {
                                 r.id,
                                 {
                                     thumbnailBlob: r.thumbnailBlob,
+                                    thumbRef: r.thumbRef,
                                 },
                                 { preserveModifiedAt: true },
                             );
@@ -393,6 +410,7 @@ export function regenerateThumbnail(record, options = {}) {
                 release();
                 if (changed.length) evictThumbnails(changed);
             }
+            forgetUnusedThumbs(records.map((r) => r.thumbRef));
             evictThumbnails(records);
             return thumbnailBlob;
         })

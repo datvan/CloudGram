@@ -179,6 +179,7 @@ export default function PreviewDialog({
     const [copied, setCopied] = useState(null);
     const viewer = useRef(null);
     const player = useRef(null);
+    const playerContainer = useRef(null);
     const kind = item ? previewKind(item) : null;
     const isImage = kind === "image";
     // a streamed video plays as it arrives, so its size does not matter
@@ -626,6 +627,7 @@ export default function PreviewDialog({
                             // events cannot touch this one's saved place
                             key={group ? group.chain[0].id : item.id}
                             ref={player}
+                            fullscreenTarget={playerContainer}
                             parts={group?.chain}
                             startAt={group?.index}
                             record={item}
@@ -924,6 +926,7 @@ export default function PreviewDialog({
                         }}
                     >
                         <Box
+                            ref={playerContainer}
                             sx={{
                                 flex: 1,
                                 minWidth: 0,

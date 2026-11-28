@@ -1,4 +1,5 @@
 import { diag, swallow } from "./diag";
+import { startThumbMigration, stopThumbMigration } from "./thumbMigrate";
 import { createProxyClient } from "./proxyClient";
 import { resetReadKey } from "./tgProxy";
 /**
@@ -443,6 +444,7 @@ export function logoutOthers() {
  * which is what unlinkTelegram() is for.
  */
 export async function logout() {
+    stopThumbMigration();
     // Invalidate in-memory uploads before any asynchronous logout work.
     resetReadKey();
     const logClosed = closeUploadLog().catch(console.error);
@@ -511,9 +513,11 @@ export async function acquireLease(takeover) {
         connection("leaseOk", true);
         leaseGrantedAt = Date.now();
         startHeartbeat();
+        startThumbMigration();
         await connectTelegram();
         return;
     }
+    stopThumbMigration();
     connection("leaseLost", false);
     set({ phase: "lease", lease: res });
     // keep asking: a waiting takeover gets the lease as soon as the other
@@ -528,6 +532,7 @@ export async function acquireLease(takeover) {
                     leaseGrantedAt = Date.now();
                     startHeartbeat();
                     await refresh().catch(swallow("account.leaseRefresh"));
+                    startThumbMigration();
                     await connectTelegram();
                 } else {
                     set({ lease: next });
@@ -579,6 +584,7 @@ function stopHeartbeat() {
 }
 
 async function yieldTelegram(release, notice) {
+    stopThumbMigration();
     connection("leaseLost", false);
     stopHeartbeat();
     await stopClient();

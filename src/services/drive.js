@@ -30,6 +30,10 @@ import { v4 as uuid4 } from "uuid";
 import { ApiError } from "./api";
 import { loadTree, saveShards, shardOf, SHARD_COUNT } from "./treeStore";
 import { fold } from "../utils/format";
+import { DIAG_LOG } from "../config/features.js";
+import { treeStats } from "./treeStats";
+import { setThumbKey, forgetThumbs } from "./thumbStore";
+import { stopThumbMigration } from "./thumbMigrate";
 
 const TOMBSTONE_TTL = 90 * 24 * 60 * 60 * 1000;
 const PUSH_DELAY = 400;
@@ -117,6 +121,35 @@ export function getRecord(id) {
     return record && !record.deleted ? record : undefined;
 }
 
+const THUMB_CANDIDATE_LIMIT = 256;
+
+export function thumbCandidates(skipped) {
+    const candidates = [];
+    for (const ids of shardRecords.values()) {
+        const shard = [];
+        for (const id of ids) {
+            const record = records.get(id);
+            if (record.deleted || record.thumbRef || skipped?.has(id)) continue;
+            const value = record.thumbData ?? record.thumbnail;
+            if (typeof value === "string" && value.startsWith("data:")) {
+                shard.push({
+                    id: record.id,
+                    value,
+                    thumbData: record.thumbData,
+                    thumbnail: record.thumbnail,
+                });
+            }
+        }
+        if (
+            candidates.length &&
+            candidates.length + shard.length > THUMB_CANDIDATE_LIMIT
+        )
+            break;
+        candidates.push(...shard);
+    }
+    return candidates;
+}
+
 /**
  * Whether the server holds this record's current file_id, not only this
  * tab's memory. The upload log keeps an entry until it does, so closing the
@@ -176,6 +209,7 @@ function merge(incoming, track = false) {
 
 export async function openDrive(key) {
     dek = key;
+    setThumbKey(key);
     records = new Map();
     shardRecords = new Map();
     tombstones = new Set();
@@ -187,6 +221,25 @@ export async function openDrive(key) {
     shardCount = remote.count;
     legacy = remote.legacy;
     merge(remote.records);
+    if (DIAG_LOG) {
+        try {
+            const openedRecords = records;
+            setTimeout(() => {
+                try {
+                    if (records !== openedRecords) return;
+                    const { totals, maxima } = treeStats(
+                        openedRecords.values(),
+                    );
+                    diag("tree.stats", totals);
+                    diag("tree.stats.max", maxima);
+                } catch {
+                    // Diagnostics are optional.
+                }
+            }, 0);
+        } catch {
+            // Diagnostics are optional.
+        }
+    }
     noteSaved(remote.records);
     publish();
     if (legacy) {
@@ -196,8 +249,11 @@ export async function openDrive(key) {
 }
 
 export function closeDrive() {
+    stopThumbMigration();
     clearTimeout(pushTimer);
+    pushTimer = null;
     dek = null;
+    setThumbKey(null);
     version = 0;
     records = new Map();
     shardRecords = new Map();
@@ -245,7 +301,7 @@ export function importLegacy(legacy) {
 
 // ----- pushing -------------------------------------------------------------------
 
-export function batch(fn) {
+export function batch(fn, { saveDelay = PUSH_DELAY } = {}) {
     batchDepth += 1;
     try {
         return fn();
@@ -255,12 +311,12 @@ export function batch(fn) {
             const immediate = batchImmediate;
             batchDirty = false;
             batchImmediate = false;
-            markDirty(immediate);
+            markDirty(immediate, saveDelay);
         }
     }
 }
 
-function markDirty(immediate) {
+function markDirty(immediate, saveDelay = PUSH_DELAY) {
     dirty = true;
     if (batchDepth) {
         batchDirty = true;
@@ -268,10 +324,14 @@ function markDirty(immediate) {
         return;
     }
     publish();
+    if (saveDelay > PUSH_DELAY && pushTimer) return;
     clearTimeout(pushTimer);
     pushTimer = setTimeout(
-        () => flush().catch(swallow("drive.scheduleFlush")),
-        immediate ? 0 : PUSH_DELAY,
+        () => {
+            pushTimer = null;
+            flush().catch(swallow("drive.scheduleFlush"));
+        },
+        immediate ? 0 : saveDelay,
     );
 }
 
@@ -494,12 +554,28 @@ export function linkFile(source, parent, name) {
 export function update(
     id,
     changes,
-    { immediate = false, preserveModifiedAt = false } = {},
+    {
+        immediate = false,
+        preserveModifiedAt = false,
+        deferThumbCleanup = false,
+    } = {},
 ) {
     const record = getRecord(id);
     if (!record) return undefined;
+    const currentKey = dek;
     put({ ...record, ...changes }, { preserveModifiedAt });
     markDirty(immediate);
+    if (
+        !deferThumbCleanup &&
+        record.thumbRef &&
+        Object.hasOwn(changes, "thumbRef") &&
+        record.thumbRef !== changes.thumbRef
+    )
+        flush()
+            .then(() => {
+                if (dek === currentKey) forgetUnusedThumbs([record.thumbRef]);
+            })
+            .catch(() => {});
     return records.get(id);
 }
 
@@ -664,13 +740,23 @@ export function move(ids, target) {
     return moved;
 }
 
+export function forgetUnusedThumbs(refs) {
+    const unused = new Set(refs.filter(Boolean));
+    for (const record of records.values())
+        if (!record.deleted && record.thumbRef) unused.delete(record.thumbRef);
+    if (unused.size) forgetThumbs([...unused]);
+}
+
 /** Turn records into tombstones. The caller deletes Telegram messages first. */
 export async function removeRecords(ids) {
+    const currentKey = dek;
+    const refs = ids.map((id) => getRecord(id)?.thumbRef);
     for (const id of ids) {
         if (records.has(id)) put({ id, deleted: true });
     }
     markDirty(true);
     await flush();
+    if (dek === currentKey) forgetUnusedThumbs(refs);
 }
 
 /** The adapter uploadQueue writes through. */

@@ -160,6 +160,7 @@ const saveResume = (resume) => {
         enc: resume.enc,
         name: resume.name,
         thumbData: resume.thumbData,
+        thumbRef: resume.thumbRef,
         pieces: resume.pieces,
         fileId: resume.fileId?.toString(),
         done: resume.done ? [...resume.done] : undefined,
@@ -553,6 +554,7 @@ async function run(job, release) {
                 enc: job.resume.enc,
                 name: job.resume.name,
                 thumbData: job.resume.thumbData,
+                thumbRef: job.resume.thumbRef,
             };
         // Telegram refused it, so nothing went out
         if (!error?.maybeSent)
@@ -899,14 +901,24 @@ export async function retryRemoveOriginals(ids) {
  * `kind` is how that tab sent it (photo, video or file), `replaces` the file
  * it was to take the place of.
  */
-export function adoptMessage(id, message, kind, replaces, enc, thumbData) {
+export function adoptMessage(
+    id,
+    message,
+    kind,
+    replaces,
+    enc,
+    thumbData,
+    thumbRef,
+) {
     return settle(
         id,
         {
             message,
             changes: {
                 ...sentChanges(message, kind, getRecord(id)?.size),
-                ...(enc ? { enc, thumbData } : {}),
+                ...(enc
+                    ? { enc, ...(thumbRef ? { thumbRef } : { thumbData }) }
+                    : {}),
             },
         },
         replaces,

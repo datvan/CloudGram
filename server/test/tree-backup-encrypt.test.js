@@ -44,6 +44,8 @@ async function vaultFor(key) {
             unwrapDek: async () => key,
             clearKey: async () => {},
             openDrive: async () => {},
+            startThumbMigration() {},
+            stopThumbMigration() {},
             openUploadLog() {},
             getSnapshot: () => ({ dirty: false }),
             localStorage: { getItem: () => "done" },

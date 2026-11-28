@@ -6,6 +6,7 @@ import vm from "node:vm";
 async function harness(initial = { version: 0 }) {
     let state = initial;
     const calls = [];
+    const forgotten = [];
     let conflict = null;
     let beforeSave = null;
     const source = (
@@ -68,6 +69,13 @@ async function harness(initial = { version: 0 }) {
         ApiError,
         uuid4: () => "new",
         diag() {},
+        DIAG_LOG: false,
+        treeStats() {},
+        setThumbKey() {},
+        forgetThumbs(refs) {
+            forgotten.push(...refs);
+        },
+        stopThumbMigration() {},
         swallow: () => () => {},
         setTimeout: (fn, ms) => (ms === 150 ? setTimeout(fn, 0) : 0),
         clearTimeout,
@@ -75,12 +83,13 @@ async function harness(initial = { version: 0 }) {
         decryptJson: async (_, blob) => blob,
     });
     const drive = vm.runInContext(
-        `${source}\n;({shardOf, groupByShard, saveShards, openDrive, closeDrive, batch, subscribe, getSnapshot, createFile, update, flush, getRecord, isSaved})`,
+        `${source}\n;({shardOf, groupByShard, saveShards, openDrive, closeDrive, batch, subscribe, getSnapshot, createFile, update, flush, getRecord, isSaved, removeRecords, refresh, wasDeleted})`,
         context,
     );
     return {
         drive,
         calls,
+        forgotten,
         get state() {
             return state;
         },
@@ -241,4 +250,37 @@ test("batch publishes once, including nested changes and changes before a throw"
         2,
     );
     unsubscribe();
+});
+
+test("local purge deletes only unshared thumbnail refs", async () => {
+    const h = await harness({
+        version: 1,
+        ct: "x",
+        records: [
+            { id: "a", type: "file", thumbRef: "unique" },
+            { id: "b", type: "file", thumbRef: "shared" },
+            { id: "c", type: "file", thumbRef: "shared", trashedAt: 1 },
+        ],
+    });
+    await h.drive.openDrive({});
+    await h.drive.removeRecords(["a", "b"]);
+    assert.deepEqual(h.forgotten, ["unique"]);
+});
+
+test("remote merge purge does not delete thumbnails", async () => {
+    const h = await harness({
+        version: 1,
+        ct: "x",
+        records: [{ id: "a", type: "file", thumbRef: "remote", updatedAt: 1 }],
+    });
+    await h.drive.openDrive({});
+    h.conflict((state) => ({
+        ...state,
+        version: state.version + 1,
+        records: [{ id: "a", deleted: true, updatedAt: Date.now() + 100000 }],
+    }));
+    h.drive.update("a", { name: "local" });
+    await h.drive.flush();
+    assert.equal(h.drive.wasDeleted("a"), true);
+    assert.deepEqual(h.forgotten, []);
 });

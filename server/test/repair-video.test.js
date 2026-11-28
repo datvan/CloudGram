@@ -81,6 +81,10 @@ function fixture(input = record) {
 test("canRepair accepts one video message within limit", () => {
     assert.equal(canRepair(record), true);
     assert.equal(
+        canRepair({ ...record, name: "video.mp4", mime: "video/mp4" }),
+        true,
+    );
+    assert.equal(
         canRepair({
             ...record,
             name: "x",
@@ -93,6 +97,7 @@ test("canRepair accepts one video message within limit", () => {
         { type: "folder" },
         { file_id: null },
         { size: REPAIR_MAX + 1 },
+        { name: "photo.jpg", mime: "image/jpeg" },
         { name: "x", mime: "text/plain" },
         { parts: [{ id: 1 }, { id: 2 }] },
         { pieces: [1, 2] },

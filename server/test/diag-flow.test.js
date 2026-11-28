@@ -757,6 +757,8 @@ test("tree saves report success and version conflict retries", async () => {
             }
         }
         const context = vm.createContext({
+            setThumbKey() {},
+            DIAG_LOG: false,
             diag: (evt, fields) => {
                 if (throwing) throw new Error("injected");
                 const event = { evt, ...fields };

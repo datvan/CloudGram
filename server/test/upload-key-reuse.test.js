@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { webcrypto as crypto } from "node:crypto";
 import vm from "node:vm";
 
-async function setup(limit = Infinity) {
+async function setup(limit = Infinity, thumb = null, ref = null) {
     const source = (
         await readFile(
             new URL("../../src/utils/uploadFile.js", import.meta.url),
@@ -38,7 +38,8 @@ async function setup(limit = Infinity) {
         importFileKey: async () => ({}),
         FILE_ENCRYPTION: true,
         SPLIT_RAW: true,
-        encryptedThumb: async () => null,
+        encryptedThumb: async () => thumb,
+        storeThumb: async () => ref,
         sliceLimit: () => limit,
         splitSizes: (size, max) => (size > max ? [max, size - max] : [size]),
         pieceName: (name, i) => `${name}.${i}`,
@@ -57,6 +58,30 @@ async function setup(limit = Infinity) {
     });
     return { uploadFile, client, deleted, uploads };
 }
+
+test("upload stores a reference or falls back to inline thumbnail", async () => {
+    for (const ref of ["ref-1", null]) {
+        const { uploadFile, client } = await setup(
+            Infinity,
+            "data:image/jpeg;base64,AQID",
+            ref,
+        );
+        const resume = {};
+        const result = await uploadFile("id", new File(["abc"], "a"), {
+            client,
+            resume,
+        });
+        if (ref) {
+            assert.equal(result.changes.thumbRef, ref);
+            assert.equal("thumbData" in result.changes, false);
+            assert.equal(resume.thumbRef, ref);
+        } else
+            assert.equal(
+                result.changes.thumbData,
+                "data:image/jpeg;base64,AQID",
+            );
+    }
+});
 
 test("fingerprint match resumes; changed or missing fingerprint starts fresh", async () => {
     const { uploadFile, client, uploads } = await setup();

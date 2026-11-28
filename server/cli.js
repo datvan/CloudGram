@@ -17,8 +17,16 @@ import { SharedTelegram } from "./shared-telegram.js";
 import { Owners } from "./owners.js";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
+import { Thumbs } from "./thumbs.js";
 
 const [command, username] = process.argv.slice(2);
+if (command === "thumbs-backup") {
+    if (!username) throw new Error("usage: thumbs-backup <dest>");
+    await new Thumbs(
+        process.env.CLOUDGRAM_DATA ?? "/var/lib/cloudgram-api",
+    ).backup(username);
+    process.exit(0);
+}
 const site =
     process.env.CLOUDGRAM_ORIGIN ||
     (process.env.NODE_ENV === "production" ? null : "http://localhost:5173");

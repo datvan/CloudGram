@@ -245,6 +245,8 @@ test("account rolls back only the newly sent key when enable fails", async () =>
             saveQuickKey: async () => ({ id: 42 }),
             clearKey: async () => {},
             openDrive: async () => {},
+            startThumbMigration() {},
+            stopThumbMigration() {},
             openUploadLog() {},
             getClient: () => client,
             getSnapshot: () => ({ dirty: false }),

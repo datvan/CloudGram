@@ -365,6 +365,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
         onDownload,
         onExternal,
         onPlayback,
+        fullscreenTarget,
         parts,
         startAt = 0,
     },
@@ -583,16 +584,14 @@ const VideoPlayer = forwardRef(function VideoPlayer(
 
     useEffect(() => {
         const onChange = () => {
-            const own = document.fullscreenElement === box.current;
+            const own = document.fullscreenElement === fullscreenTarget.current;
             setFullscreen(own);
-            // Everything outside a fullscreen element is inert, so the
-            // dialog's focus trap cannot hold the focus and keys would go to
-            // <body>. The box is inside the dialog, so its keys still reach it.
             if (own) box.current.focus({ preventScroll: true });
         };
         document.addEventListener("fullscreenchange", onChange);
+        onChange();
         return () => document.removeEventListener("fullscreenchange", onChange);
-    }, []);
+    }, [fullscreenTarget]);
 
     // the page closing keeps the place too
     useEffect(() => {
@@ -694,8 +693,8 @@ const VideoPlayer = forwardRef(function VideoPlayer(
     const toggleFullscreen = useCallback(() => {
         if (document.fullscreenElement)
             document.exitFullscreen().catch(() => {});
-        else box.current?.requestFullscreen?.().catch(() => {});
-    }, []);
+        else fullscreenTarget.current?.requestFullscreen?.().catch(() => {});
+    }, [fullscreenTarget]);
 
     const togglePip = useCallback(() => {
         const v = video.current;
@@ -1728,6 +1727,7 @@ VideoPlayer.propTypes = {
     // open the video in a player on this computer; absent when not offered
     onExternal: PropTypes.func,
     onPlayback: PropTypes.func,
+    fullscreenTarget: PropTypes.object.isRequired,
     // the records of one video cut into parts, in order, and which one was
     // opened; without them the player plays `record` alone
     parts: PropTypes.array,
