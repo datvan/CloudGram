@@ -224,13 +224,6 @@ export async function openDrive(key, account) {
     syncError = null;
     const loaded = account ? await loadCachedTree(dek, account) : null;
     const remote = loaded ? loaded.tree : await loadTree(dek);
-    if (loaded) {
-        try {
-            diag("tree.cache", loaded.cache);
-        } catch {
-            // Diagnostics are optional.
-        }
-    }
     version = remote.version;
     shardCount = remote.count;
     legacy = remote.legacy;
@@ -241,6 +234,13 @@ export async function openDrive(key, account) {
             setTimeout(() => {
                 try {
                     if (records !== openedRecords) return;
+                    if (loaded) {
+                        try {
+                            diag("tree.cache", loaded.cache);
+                        } catch {
+                            // Diagnostics are optional.
+                        }
+                    }
                     const { totals, maxima } = treeStats(
                         openedRecords.values(),
                     );

@@ -91,6 +91,44 @@ test("cache failure does not prevent full load", async () => {
     assert.equal((await h.load({}, "alice")).tree.records[0], "full");
 });
 
+test("openDrive defers cache diagnostics and ignores stale timers", async () => {
+    const driveSource = await readFile(
+        new URL("../../src/services/drive.js", import.meta.url),
+        "utf8",
+    );
+    const openSource = driveSource
+        .slice(
+            driveSource.indexOf("export async function openDrive("),
+            driveSource.indexOf("export function closeDrive()"),
+        )
+        .replace("export ", "");
+    const events = [];
+    const timers = [];
+    const context = vm.createContext({
+        setThumbKey() {},
+        loadCachedTree: async () => ({
+            tree: { version: 1, count: 1, records: [] },
+            cache: { hit: true },
+        }),
+        merge() {},
+        noteSaved() {},
+        publish() {},
+        DIAG_LOG: true,
+        diag: (name) => events.push(name),
+        treeStats: () => ({ totals: {}, maxima: {} }),
+        setTimeout: (callback) => timers.push(callback),
+    });
+    const open = vm.runInContext(`${openSource}\n;openDrive`, context);
+    await open({}, "alice");
+    assert.deepEqual(events, []);
+    timers.shift()();
+    assert.deepEqual(events, ["tree.cache", "tree.stats", "tree.stats.max"]);
+    await open({}, "alice");
+    await open({}, "bob");
+    timers.shift()();
+    assert.equal(events.length, 3);
+});
+
 test("IndexedDB write guard and account clearing", async () => {
     const cacheSource = (
         await readFile(
