@@ -10,8 +10,33 @@ import {
     flushUploadProgress,
     queuedProgress,
     queueUploadProgress,
+    repairProgress,
     uploadProgress,
 } from "../../src/redux/actions/progressAction.js";
+
+test("repair progress and skip keep index consistent", () => {
+    let state = reducer(
+        undefined,
+        batchProgress([
+            repairProgress("a", "queued", { name: "A" }),
+            repairProgress("b", "queued"),
+        ]),
+    );
+    state = reducer(
+        state,
+        repairProgress("a", "running", { phase: "repair", percentage: 42 }),
+    );
+    assert.equal(activeEntry({ progress: state }, "a").direction, "repair");
+    assert.equal(activeEntry({ progress: state }, "a").phase, "repair");
+    assert.equal(activeEntry({ progress: state }, "a").percentage, 42);
+    state = reducer(state, { type: "REPAIR_SKIPPED", id: "a" });
+    state = reducer(
+        state,
+        repairProgress("b", "failed", { message: "broken" }),
+    );
+    assert.equal(activeEntry({ progress: state }, "a"), undefined);
+    assert.equal(activeEntry({ progress: state }, "b").message, "broken");
+});
 
 test("index preserves order and previous state across batch and removal", () => {
     let state = reducer(

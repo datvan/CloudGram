@@ -21,12 +21,14 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import RestoreFromTrashOutlinedIcon from "@mui/icons-material/RestoreFromTrashOutlined";
 import DeleteForeverOutlinedIcon from "@mui/icons-material/DeleteForeverOutlined";
 import ReplayIcon from "@mui/icons-material/Replay";
+import BuildIcon from "@mui/icons-material/Build";
 import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
 import LinkIcon from "@mui/icons-material/Link";
 import LaunchIcon from "@mui/icons-material/Launch";
 
 import { EXTERNAL_PLAYER, FILE_ENCRYPTION } from "../../config/features";
 import { isEncrypted } from "../../services/fileCrypto";
+import { canRepair } from "../../services/convert";
 import { kindOf, previewKind } from "./fileTypes";
 
 function Item({ icon, label, hint, onClick, disabled }) {
@@ -151,6 +153,14 @@ export default function ItemMenu({
                                   onClick={act("reencrypt")}
                               />
                           ),
+                      canRepair(single) && (
+                          <Item
+                              key="repair"
+                              icon={icon(BuildIcon)}
+                              label="Sửa video"
+                              onClick={act("repair")}
+                          />
+                      ),
                       EXTERNAL_PLAYER &&
                           single?.type === "file" &&
                           kindOf(single) === "video" && (

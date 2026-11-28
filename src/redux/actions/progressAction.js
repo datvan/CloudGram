@@ -114,3 +114,7 @@ export function clearFinished() {
 export function reencryptProgress(id, status, options = {}) {
     return { id, type: "REENCRYPT", status, ...options };
 }
+
+export function repairProgress(id, status, options = {}) {
+    return { id, type: "REPAIR", status, ...options };
+}

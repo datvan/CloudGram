@@ -4,6 +4,7 @@ const ACTIVE_TYPES = [
     "DOWNLOADING",
     "ERROR",
     "REENCRYPT",
+    "REPAIR",
 ];
 const FINISHED_KEEP = 200;
 const indexes = new WeakMap();
@@ -31,7 +32,10 @@ export default function reducer(
     action,
 ) {
     const index = indexFor(state.activeProgress);
-    if (action.type === "REENCRYPT_SKIPPED") {
+    if (
+        action.type === "REENCRYPT_SKIPPED" ||
+        action.type === "REPAIR_SKIPPED"
+    ) {
         const list = state.activeProgress.filter(
             (item) => item.id !== action.id,
         );
@@ -142,6 +146,7 @@ function fields(action) {
     // the transfer was going from the entry it replaces.
     if (action.type === "DOWNLOADING") entry.direction = "down";
     if (action.type === "REENCRYPT") entry.direction = "reencrypt";
+    if (action.type === "REPAIR") entry.direction = "repair";
     if (action.type === "QUEUED" || action.type === "UPLOADING")
         entry.direction = "up";
     return entry;
