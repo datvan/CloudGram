@@ -84,6 +84,7 @@ const samples = {
         errCode: "ERR_CODE",
         stage: "read",
     },
+    "thumbs.backfill": { ok: 1, fail: 2, skipped: 3 },
     "tree.save": { ok: true, ms: 1, retries409: 0 },
     "conn.state": { state: "ready", leaseOk: true },
     "conn.heartbeatGap": { ms: 16000, visibility: "hidden" },

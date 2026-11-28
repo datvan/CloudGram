@@ -98,6 +98,7 @@ const EVENTS = {
         mime: /^(?:image|video)\/[a-z0-9][a-z0-9.+-]{0,63}$/,
         size: ["<10M", "<100M", "<1G", ">=1G"],
     },
+    "thumbs.backfill": { ok: "num", fail: "num", skipped: "num" },
     "thumbs.migrate.batch": { n: "num", ms: "num", kb: "num" },
     "thumbs.migrate.done": { n: "num", skipped: "num" },
     "thumbs.migrate.stop": {
