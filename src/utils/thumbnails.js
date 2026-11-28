@@ -303,10 +303,13 @@ export async function encryptedThumb(file) {
 // record key -> object URL, or null when there is no thumbnail to show.
 // A failure is never kept here: it is tried again. Kept for the life of the
 // tab; a few hundred 320px JPEGs is a few MB.
+export const THUMB_NONE = Symbol("thumbnail absent");
 const cache = new Map();
 const pointers = new Map();
 const identityOf = (record) =>
     JSON.stringify([
+        record.id,
+        record.file_id,
         record.thumbnailBlob,
         record.thumbData,
         record.thumbnail,
@@ -329,7 +332,7 @@ export function evictThumbnails(records) {
     for (const record of records) {
         const key = keyOf(record);
         const url = cache.get(key);
-        if (url) URL.revokeObjectURL(url);
+        if (url && url !== THUMB_NONE) URL.revokeObjectURL(url);
         cache.delete(key);
         pointers.delete(key);
         const entry = pending.get(key);
@@ -337,6 +340,22 @@ export function evictThumbnails(records) {
         entry?.resolve(null);
     }
     for (const listener of listeners) listener();
+}
+export function watchThumbBackfill(queue) {
+    return queue.onDone((id) => {
+        const records = [...cache]
+            .filter(
+                ([key, value]) =>
+                    key.slice(0, key.lastIndexOf(":")) === String(id) &&
+                    (value === null || value === THUMB_NONE),
+            )
+            .map(([key]) => key)
+            .map((key) => ({
+                id,
+                file_id: key.slice(key.lastIndexOf(":") + 1),
+            }));
+        if (records.length) evictThumbnails(records);
+    });
 }
 let waiting = [];
 let timer = null;
@@ -361,7 +380,8 @@ async function thumbFrom(message, record, client) {
     // a file sent as a photo carries its own scaled copies instead of thumbs
     const doc = media?.document;
     const sizes = doc ? doc.thumbs : media?.photo?.sizes;
-    if (!doc && !sizes) return null;
+    if (!message?.media) return null;
+    if (!doc && !sizes) return THUMB_NONE;
 
     const encrypted = record.enc || record.parts?.some((part) => part.enc);
     const size = encrypted ? null : pickSize(sizes);
@@ -391,12 +411,17 @@ async function thumbFrom(message, record, client) {
         // either, and each retry would download the whole file again
         return shrink(new Blob([bytes], { type }), type).catch(() => null);
     }
-    return null;
+    return size ? null : THUMB_NONE;
 }
 
 function settle(entry, blob) {
     if (pending.get(entry.key) !== entry) return;
-    const url = blob ? URL.createObjectURL(blob) : null;
+    const url =
+        blob === THUMB_NONE
+            ? THUMB_NONE
+            : blob
+            ? URL.createObjectURL(blob)
+            : null;
     cache.set(entry.key, url);
     pointers.set(entry.key, identityOf(entry.record));
     pending.delete(entry.key);
@@ -528,7 +553,8 @@ function schedule() {
 onClientChange((client) => {
     if (client) return schedule();
     // a sign-out: these message ids mean nothing to the next account
-    for (const url of cache.values()) if (url) URL.revokeObjectURL(url);
+    for (const url of cache.values())
+        if (url && url !== THUMB_NONE) URL.revokeObjectURL(url);
     cache.clear();
     pointers.clear();
     held.clear();
@@ -576,6 +602,15 @@ function loadThumb(record) {
             record.thumbnailBlob.message <= 0)
     )
         return Promise.resolve(null);
+    if (
+        !hasBlob(record) &&
+        !record.thumbnail &&
+        (record.enc || record.parts?.some((part) => part.enc))
+    ) {
+        cache.set(key, THUMB_NONE);
+        pointers.set(key, identityOf(record));
+        return Promise.resolve(THUMB_NONE);
+    }
     if (cache.has(key)) return Promise.resolve(cache.get(key));
     if (pending.has(key)) pending.get(key).cancelled = false;
     if (!pending.has(key)) {
@@ -600,7 +635,7 @@ function loadThumb(record) {
  * Only files whose kind can carry a picture are asked for, and only once the
  * upload has finished.
  */
-export function useThumbnail(record, wanted, visible) {
+export function useThumbnail(record, wanted, visible, exposeNone = false) {
     const [revision, refresh] = useState(0);
     useEffect(() => {
         const changed = () => refresh((n) => n + 1);
@@ -645,5 +680,6 @@ export function useThumbnail(record, wanted, visible) {
         revision,
     ]);
 
-    return ready && result.identity === identity ? result.url : null;
+    const url = ready && result.identity === identity ? result.url : null;
+    return url === THUMB_NONE && !exposeNone ? null : url;
 }

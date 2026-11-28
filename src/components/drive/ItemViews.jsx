@@ -26,7 +26,12 @@ import LabelChips from "./LabelChips";
 import { activeEntry } from "../../redux/reducers/progressReducer";
 import { DRAG_TYPE, kindOf } from "./fileTypes";
 import { formatDate, formatSize } from "../../utils/format";
-import { useThumbnail } from "../../utils/thumbnails";
+import {
+    THUMB_NONE,
+    useThumbnail,
+    watchThumbBackfill,
+} from "../../utils/thumbnails";
+import thumbBackfill from "../../services/thumbBackfill";
 
 const PAGE = 200;
 // how many items each view had drawn, so coming back to it (e.g. after a label
@@ -473,11 +478,17 @@ function useSeen() {
 }
 
 /** Missing/failed covers open the same menu, including regeneration. */
+watchThumbBackfill(thumbBackfill);
+
 function Thumbnail({ item, onContextMenu, large = false }) {
     const [ref, seen] = useSeen();
     const kind = kindOf(item);
     const wanted = kind === "image" || kind === "video";
-    const thumb = useThumbnail(item, wanted, seen);
+    const result = useThumbnail(item, wanted, seen, true);
+    useEffect(() => {
+        if (seen && result === THUMB_NONE) thumbBackfill.request(item);
+    }, [seen, result, item]);
+    const thumb = result === THUMB_NONE ? null : result;
     const [failed, setFailed] = useState(null);
     return (
         <Box
