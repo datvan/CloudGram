@@ -121,6 +121,8 @@ export function getRecord(id) {
     return record && !record.deleted ? record : undefined;
 }
 
+const THUMB_CANDIDATE_LIMIT = 256;
+
 export function thumbCandidates(skipped) {
     const candidates = [];
     for (const ids of shardRecords.values()) {
@@ -138,7 +140,11 @@ export function thumbCandidates(skipped) {
                 });
             }
         }
-        if (candidates.length && candidates.length + shard.length > 64) break;
+        if (
+            candidates.length &&
+            candidates.length + shard.length > THUMB_CANDIDATE_LIMIT
+        )
+            break;
         candidates.push(...shard);
     }
     return candidates;

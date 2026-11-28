@@ -63,6 +63,57 @@ test("store batches 70 encrypted thumbnails", async () => {
     );
 });
 
+test("200 writes use four PUTs with at most three in flight", async () => {
+    store.setThumbKey(key);
+    const originalFetch = globalThis.fetch;
+    let active = 0,
+        max = 0;
+    const sizes = [];
+    globalThis.fetch = async (path, options) => {
+        active++;
+        max = Math.max(max, active);
+        sizes.push(Object.keys(JSON.parse(options.body).thumbs).length);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        active--;
+        return { ok: true, status: 200, json: async () => ({}) };
+    };
+    try {
+        const refs = await Promise.all(
+            Array.from({ length: 200 }, () => store.storeThumb(bytes)),
+        );
+        assert.equal(new Set(refs).size, 200);
+        assert.deepEqual(
+            sizes.sort((a, b) => b - a),
+            [64, 64, 64, 8],
+        );
+        assert.equal(max, 3);
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test("large ciphertext splits PUTs below three MiB", async () => {
+    store.setThumbKey(key);
+    calls.length = 0;
+    status = 200;
+    handler = () => ({});
+    const refs = await Promise.all(
+        Array.from({ length: 4 }, () =>
+            store.storeThumb(new Uint8Array(800000)),
+        ),
+    );
+    assert.ok(refs.every(Boolean));
+    assert.equal(calls.length, 2);
+    for (const call of calls)
+        assert.ok(
+            Object.values(call.thumbs).reduce(
+                (n, blob) => n + blob.ct.length,
+                0,
+            ) <=
+                3 * 1024 * 1024,
+        );
+});
+
 test("forget batches, coalesces and swallows errors", async () => {
     store.setThumbKey(key);
     calls.length = 0;

@@ -36,8 +36,9 @@ async function migrate(current) {
                 return;
             }
             const started = Date.now();
+            const stats = { bytes: 0 };
             const refs = await Promise.all(
-                candidates.map(({ value }) => storeThumb(value)),
+                candidates.map(({ value }) => storeThumb(value, stats)),
             );
             if (current !== generation) break;
             if (refs.every((ref) => !ref)) {
@@ -84,6 +85,7 @@ async function migrate(current) {
             diag("thumbs.migrate.batch", {
                 n: count,
                 ms: Date.now() - started,
+                kb: Math.round(stats.bytes / 1024),
             });
             await new Promise((resolve) => setTimeout(resolve, 300));
         }

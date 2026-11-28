@@ -84,12 +84,12 @@ test("migrates inline thumbnails and removes them from saved shard JSON", async 
     assert.equal(saved.modifiedAt, 1);
 });
 
-test("migrates whole shards once per batch, including shards over 64", async () => {
+test("migrates whole shards within 256 candidates per batch", async () => {
     const empty = await harness([], async () => "ref");
     const groups = new Map();
     for (
         let i = 0;
-        groups.size < 4 || [...groups.values()].some((g) => g.length < 70);
+        groups.size < 4 || [...groups.values()].some((g) => g.length < 160);
         i++
     ) {
         const id = `record-${i}`;
@@ -97,12 +97,12 @@ test("migrates whole shards once per batch, including shards over 64", async () 
         if (groups.has(shard)) groups.get(shard).push(id);
         else if (groups.size < 4) groups.set(shard, [id]);
     }
-    const sizes = [70, 40, 24, 10];
+    const sizes = [160, 96, 24, 10];
     const selected = [...groups.values()].map((ids, i) =>
         ids.slice(0, sizes[i]),
     );
     const records = [];
-    for (let i = 0; i < 70; i++)
+    for (let i = 0; i < 160; i++)
         for (const ids of selected)
             if (ids[i])
                 records.push({
@@ -116,7 +116,7 @@ test("migrates whole shards once per batch, including shards over 64", async () 
     const counts = h.events
         .filter((e) => e.event === "thumbs.migrate.batch")
         .map((e) => e.n);
-    assert.deepEqual(counts, [70, 64, 10]);
+    assert.deepEqual(counts, [256, 34]);
     const shards = h.batches.flatMap((batch) => [...batch]);
     assert.equal(shards.length, 4);
     assert.equal(new Set(shards).size, 4);

@@ -83,7 +83,7 @@ const EVENTS = {
         errName: "errName",
         stage: ["read", "encrypt", "send", "save", "other"],
     },
-    "thumbs.migrate.batch": { n: "num", ms: "num" },
+    "thumbs.migrate.batch": { n: "num", ms: "num", kb: "num" },
     "thumbs.migrate.done": { n: "num", skipped: "num" },
     "thumbs.migrate.stop": {
         n: "num",

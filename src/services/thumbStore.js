@@ -26,6 +26,7 @@ const pending = new Map();
 let waiting = new Set();
 let writeTimer = null;
 let writes = [];
+let writeFlush = Promise.resolve();
 let unavailableUntil = 0;
 let forgetTimer = null;
 let forgotten = new Set();
@@ -65,7 +66,7 @@ export function forgetThumbs(refs) {
     }
 }
 
-export function storeThumb(input) {
+export function storeThumb(input, stats) {
     if (!input || !key || Date.now() < unavailableUntil)
         return Promise.resolve(null);
     try {
@@ -79,7 +80,7 @@ export function storeThumb(input) {
         }
         const ref = newThumbRef();
         return new Promise((resolve) => {
-            writes.push({ ref, bytes, resolve, epoch: generation, key });
+            writes.push({ ref, bytes, resolve, epoch: generation, key, stats });
             if (!writeTimer) writeTimer = setTimeout(flushWrites, 30);
         });
     } catch {
@@ -87,34 +88,73 @@ export function storeThumb(input) {
     }
 }
 
-async function flushWrites() {
+function flushWrites() {
     writeTimer = null;
     const queued = writes;
     writes = [];
-    for (let i = 0; i < queued.length; i += 64) {
-        const batch = queued.slice(i, i + 64);
-        try {
-            if (Date.now() < unavailableUntil || batch[0].epoch !== generation)
-                throw new Error("Thumbnail store unavailable");
-            const blobs = await Promise.all(
-                batch.map((item) =>
-                    encryptThumb(item.key, item.ref, item.bytes),
-                ),
-            );
-            if (batch[0].epoch !== generation) throw new Error("Drive changed");
-            await putThumbs(
-                Object.fromEntries(
-                    batch.map((item, n) => [item.ref, blobs[n]]),
-                ),
-            );
-            for (const item of batch)
-                item.resolve(item.epoch === generation ? item.ref : null);
-        } catch (error) {
-            if (error?.status === 503 && error.code === "thumbs_unavailable")
-                unavailableUntil = Date.now() + 5 * 60 * 1000;
-            for (const item of batch) item.resolve(null);
+    writeFlush = writeFlush.then(() => processWrites(queued));
+}
+
+async function processWrites(queued) {
+    let offset = 0;
+    const maxBytes = 3 * 1024 * 1024;
+    async function worker() {
+        while (offset < queued.length) {
+            const batch = [];
+            let size = 0;
+            while (offset < queued.length && batch.length < 64) {
+                const item = queued[offset];
+                const ctSize = 4 * Math.ceil((item.bytes.byteLength + 16) / 3);
+                if (batch.length && item.epoch !== batch[0].epoch) break;
+                if (batch.length && size + ctSize > maxBytes) break;
+                offset++;
+                if (ctSize > maxBytes) {
+                    item.resolve(null);
+                    continue;
+                }
+                batch.push(item);
+                size += ctSize;
+            }
+            if (!batch.length) continue;
+            try {
+                if (
+                    Date.now() < unavailableUntil ||
+                    batch[0].epoch !== generation
+                )
+                    throw new Error("Thumbnail store unavailable");
+                const blobs = await Promise.all(
+                    batch.map((item) =>
+                        encryptThumb(item.key, item.ref, item.bytes),
+                    ),
+                );
+                if (
+                    batch[0].epoch !== generation ||
+                    Date.now() < unavailableUntil
+                )
+                    throw new Error(
+                        "Drive changed or thumbnail store unavailable",
+                    );
+                await putThumbs(
+                    Object.fromEntries(
+                        batch.map((item, n) => [item.ref, blobs[n]]),
+                    ),
+                );
+                for (const [n, item] of batch.entries()) {
+                    if (item.stats && item.epoch === generation)
+                        item.stats.bytes += blobs[n].ct.length;
+                    item.resolve(item.epoch === generation ? item.ref : null);
+                }
+            } catch (error) {
+                if (
+                    error?.status === 503 &&
+                    error.code === "thumbs_unavailable"
+                )
+                    unavailableUntil = Date.now() + 5 * 60 * 1000;
+                for (const item of batch) item.resolve(null);
+            }
         }
     }
+    await Promise.all(Array.from({ length: 3 }, () => worker()));
 }
 
 export function setThumbKey(next) {
