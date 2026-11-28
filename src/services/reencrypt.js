@@ -30,7 +30,7 @@ export function unsharedMessages(
     return [...new Set(idsOf(record))].filter((id) => !referenced.has(id));
 }
 
-async function realDeps() {
+export async function realDeps() {
     const [{ fetchFile }, { default: uploadFile }, drive] = await Promise.all([
         import("../utils/downloadFile.js"),
         import("../utils/uploadFile.js"),
@@ -47,7 +47,7 @@ async function realDeps() {
         uploadEncrypted: async (
             record,
             blob,
-            { destination, onProgress, signal, resume },
+            { destination, onProgress, signal, resume, assertCurrent },
         ) => {
             const parts = record.parts?.length > 1 ? record.parts : null;
             if (!parts)
@@ -58,7 +58,8 @@ async function realDeps() {
                         client: destination,
                         resume,
                         onProgress,
-                        assertCurrent: () => signal?.throwIfAborted(),
+                        assertCurrent:
+                            assertCurrent ?? (() => signal?.throwIfAborted()),
                     },
                 );
             const sent = (resume.pieces = []);
@@ -85,7 +86,9 @@ async function realDeps() {
                                         blob.size) *
                                         100,
                                 ),
-                            assertCurrent: () => signal?.throwIfAborted(),
+                            assertCurrent:
+                                assertCurrent ??
+                                (() => signal?.throwIfAborted()),
                         },
                     );
                 } finally {
@@ -130,7 +133,7 @@ async function realDeps() {
     };
 }
 
-export async function reencryptRecord(
+export async function replaceRecord(
     record,
     {
         source,
@@ -142,15 +145,25 @@ export async function reencryptRecord(
         extraChanges,
         sameTelegram = () => true,
         deleteOriginalMedia = false,
+        transform,
+        encrypted = true,
+        assertCurrent,
+        assertScope,
+        checkThumbnail,
+        checkMediaReferences,
+        uploadRecord = record,
     },
 ) {
     const api = deps ?? (await realDeps());
-    const resume = { encrypted: true };
+    const resume = { encrypted };
     let uploaded;
     let thumbnail;
     let changed = false;
     let saved = false;
-    const check = () => signal?.throwIfAborted();
+    const check = () => {
+        signal?.throwIfAborted();
+        assertCurrent?.();
+    };
     try {
         check();
         const blob = await api.readPlain(record, {
@@ -160,10 +173,13 @@ export async function reencryptRecord(
                 onProgress?.({ phase: "read", percentage }),
         });
         check();
-        uploaded = await api.uploadEncrypted(record, blob, {
+        const output = transform ? await transform(blob) : blob;
+        check();
+        uploaded = await api.uploadEncrypted(uploadRecord, output, {
             destination,
             signal,
             resume,
+            assertCurrent: check,
             onProgress: (percentage) =>
                 onProgress?.({ phase: "upload", percentage }),
         });
@@ -183,7 +199,8 @@ export async function reencryptRecord(
             JSON.stringify(messagesOf(current)) !==
                 JSON.stringify(messagesOf(record)) ||
             JSON.stringify(current.thumbnailBlob) !==
-                JSON.stringify(record.thumbnailBlob)
+                JSON.stringify(record.thumbnailBlob) ||
+            (checkThumbnail && current.thumbnail !== record.thumbnail)
         )
             throw new Error("File changed during encryption");
         const changes = {
@@ -207,6 +224,13 @@ export async function reencryptRecord(
     } catch (error) {
         let safeToDelete = !changed;
         if (changed && !saved) {
+            if (assertScope) {
+                try {
+                    assertScope();
+                } catch {
+                    throw error;
+                }
+            }
             const changes = {};
             for (const key of Object.keys({
                 ...uploaded.changes,
@@ -233,11 +257,20 @@ export async function reencryptRecord(
                 ...(thumbnail ? [thumbnail.id] : []),
             ]),
         ];
-        if (safeToDelete && ids.length)
+        if (safeToDelete && ids.length) {
+            if (assertScope) {
+                try {
+                    assertScope();
+                } catch {
+                    throw error;
+                }
+            }
             await api.deleteMessages(destination, ids).catch(() => {});
+        }
         throw error;
     }
     if (deleteOriginal) {
+        if (assertCurrent) check();
         const records = api.getSnapshot().records;
         const current = records.find((item) => item.id === record.id);
         const currentIds = new Set(
@@ -262,6 +295,18 @@ export async function reencryptRecord(
         ).filter(
             (id) =>
                 !currentIds.has(id) &&
+                (!checkMediaReferences ||
+                    !records.some(
+                        (other) =>
+                            other.id !== record.id &&
+                            !other.deleted &&
+                            sameTelegram(other) &&
+                            [
+                                other.thumbnail,
+                                other.thumbnailBlob?.message,
+                                other.storyboard?.message,
+                            ].includes(id),
+                    )) &&
                 (id !== record.thumbnailBlob?.message ||
                     (current &&
                         (!thumbnail ||
@@ -281,4 +326,8 @@ export async function reencryptRecord(
         if (ids.length) await api.deleteMessages(source, ids);
     }
     return uploaded;
+}
+
+export async function reencryptRecord(record, options) {
+    return replaceRecord(record, options);
 }
