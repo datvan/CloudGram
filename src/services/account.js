@@ -41,6 +41,7 @@ import {
     refresh,
 } from "./drive";
 import { browserId, clearKey, loadKey, saveKey } from "./keystore";
+import { clearTreeCache } from "./treeCache";
 import { closeUploadLog, openUploadLog } from "./uploadLog";
 import {
     clearLegacySession,
@@ -154,7 +155,10 @@ export async function login(username, password, remember) {
 
 async function loginSuccess(key, remember) {
     if (remember) await saveKey(account.username, key);
-    else await clearKey();
+    else {
+        await clearKey();
+        await clearTreeCache(account?.username).catch(() => {});
+    }
     const current = await api.me();
     account = current;
     set({ quick: current.quick, via: current.via, admin: current.admin });
@@ -374,7 +378,10 @@ export async function recover(username, typedCode, newPassword, remember) {
         code,
         enter: async () => {
             if (remember) await saveKey(account.username, key);
-            else await clearKey();
+            else {
+                await clearKey();
+                await clearTreeCache(account?.username).catch(() => {});
+            }
             await enter(key);
         },
     };
@@ -464,6 +471,7 @@ export async function logout() {
         // the cookie may be gone already
     }
     await clearKey();
+    await clearTreeCache(account?.username).catch(() => {});
     closeDrive();
     await logClosed;
     dek = null;
@@ -486,7 +494,7 @@ async function enter(key) {
     dek = key;
     set({ phase: "connecting", username: account.username });
     try {
-        await openDrive(dek);
+        await openDrive(dek, account.username);
         openUploadLog(account.username, dek);
         await migrateLegacyTree();
     } catch (error) {

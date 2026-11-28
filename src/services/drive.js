@@ -28,7 +28,13 @@ import { useSyncExternalStore } from "react";
 import { v4 as uuid4 } from "uuid";
 
 import { ApiError } from "./api";
-import { loadTree, saveShards, shardOf, SHARD_COUNT } from "./treeStore";
+import {
+    loadCachedTree,
+    loadTree,
+    saveShards,
+    shardOf,
+    SHARD_COUNT,
+} from "./treeStore";
 import { fold } from "../utils/format";
 import { DIAG_LOG } from "../config/features.js";
 import { treeStats } from "./treeStats";
@@ -207,7 +213,7 @@ function merge(incoming, track = false) {
     return changed;
 }
 
-export async function openDrive(key) {
+export async function openDrive(key, account) {
     dek = key;
     setThumbKey(key);
     records = new Map();
@@ -216,7 +222,15 @@ export async function openDrive(key) {
     dirty = false;
     dirtyShards = new Map();
     syncError = null;
-    const remote = await loadTree(dek);
+    const loaded = account ? await loadCachedTree(dek, account) : null;
+    const remote = loaded ? loaded.tree : await loadTree(dek);
+    if (loaded) {
+        try {
+            diag("tree.cache", loaded.cache);
+        } catch {
+            // Diagnostics are optional.
+        }
+    }
     version = remote.version;
     shardCount = remote.count;
     legacy = remote.legacy;

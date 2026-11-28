@@ -106,6 +106,7 @@ const EVENTS = {
         skipped: "num",
         reason: ["fail", "closed"],
     },
+    "tree.cache": { hit: "bool", shards: "num", ms: "num" },
     "tree.save": { ok: "bool", ms: "num", retries409: "num" },
     "tree.stats": {
         records: "num",

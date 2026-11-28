@@ -85,6 +85,7 @@ const samples = {
         stage: "read",
     },
     "thumbs.backfill": { ok: 1, fail: 2, skipped: 3 },
+    "tree.cache": { hit: true, shards: 1, ms: 1 },
     "tree.save": { ok: true, ms: 1, retries409: 0 },
     "conn.state": { state: "ready", leaseOk: true },
     "conn.heartbeatGap": { ms: 16000, visibility: "hidden" },
