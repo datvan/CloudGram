@@ -32,7 +32,7 @@ import { loadTree, saveShards, shardOf, SHARD_COUNT } from "./treeStore";
 import { fold } from "../utils/format";
 import { DIAG_LOG } from "../config/features.js";
 import { treeStats } from "./treeStats";
-import { setThumbKey } from "./thumbStore";
+import { setThumbKey, forgetThumbs } from "./thumbStore";
 import { stopThumbMigration } from "./thumbMigrate";
 
 const TOMBSTONE_TTL = 90 * 24 * 60 * 60 * 1000;
@@ -548,12 +548,28 @@ export function linkFile(source, parent, name) {
 export function update(
     id,
     changes,
-    { immediate = false, preserveModifiedAt = false } = {},
+    {
+        immediate = false,
+        preserveModifiedAt = false,
+        deferThumbCleanup = false,
+    } = {},
 ) {
     const record = getRecord(id);
     if (!record) return undefined;
+    const currentKey = dek;
     put({ ...record, ...changes }, { preserveModifiedAt });
     markDirty(immediate);
+    if (
+        !deferThumbCleanup &&
+        record.thumbRef &&
+        Object.hasOwn(changes, "thumbRef") &&
+        record.thumbRef !== changes.thumbRef
+    )
+        flush()
+            .then(() => {
+                if (dek === currentKey) forgetUnusedThumbs([record.thumbRef]);
+            })
+            .catch(() => {});
     return records.get(id);
 }
 
@@ -718,13 +734,23 @@ export function move(ids, target) {
     return moved;
 }
 
+export function forgetUnusedThumbs(refs) {
+    const unused = new Set(refs.filter(Boolean));
+    for (const record of records.values())
+        if (!record.deleted && record.thumbRef) unused.delete(record.thumbRef);
+    if (unused.size) forgetThumbs([...unused]);
+}
+
 /** Turn records into tombstones. The caller deletes Telegram messages first. */
 export async function removeRecords(ids) {
+    const currentKey = dek;
+    const refs = ids.map((id) => getRecord(id)?.thumbRef);
     for (const id of ids) {
         if (records.has(id)) put({ id, deleted: true });
     }
     markDirty(true);
     await flush();
+    if (dek === currentKey) forgetUnusedThumbs(refs);
 }
 
 /** The adapter uploadQueue writes through. */

@@ -172,6 +172,7 @@ async function harness({
             uploadScope: () => scope,
             getRecord: (id) => records.find((r) => r.id === id),
             getSnapshot: () => ({ records }),
+            forgetUnusedThumbs() {},
             update(id, patch, options) {
                 updateOptions.push(options);
                 Object.assign(

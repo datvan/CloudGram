@@ -27,6 +27,43 @@ let waiting = new Set();
 let writeTimer = null;
 let writes = [];
 let unavailableUntil = 0;
+let forgetTimer = null;
+let forgotten = new Set();
+
+export function forgetThumbs(refs) {
+    for (const ref of refs) {
+        if (!ref) continue;
+        if (cache.has(ref)) URL.revokeObjectURL(cache.get(ref));
+        cache.delete(ref);
+        missing.delete(ref);
+        if (key && Date.now() >= unavailableUntil) forgotten.add(ref);
+    }
+    if (forgotten.size && !forgetTimer) {
+        const epoch = generation;
+        forgetTimer = setTimeout(async () => {
+            forgetTimer = null;
+            const ids = [...forgotten];
+            forgotten.clear();
+            for (let i = 0; i < ids.length; i += 500) {
+                if (
+                    !key ||
+                    epoch !== generation ||
+                    Date.now() < unavailableUntil
+                )
+                    break;
+                try {
+                    await deleteThumbs(ids.slice(i, i + 500));
+                } catch (error) {
+                    if (
+                        error?.status === 503 &&
+                        error.code === "thumbs_unavailable"
+                    )
+                        unavailableUntil = Date.now() + 5 * 60 * 1000;
+                }
+            }
+        }, 30);
+    }
+}
 
 export function storeThumb(input) {
     if (!input || !key || Date.now() < unavailableUntil)
@@ -82,6 +119,9 @@ async function flushWrites() {
 
 export function setThumbKey(next) {
     generation++;
+    clearTimeout(forgetTimer);
+    forgetTimer = null;
+    forgotten.clear();
     key = next;
     clearTimeout(timer);
     timer = null;

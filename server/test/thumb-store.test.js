@@ -63,6 +63,25 @@ test("store batches 70 encrypted thumbnails", async () => {
     );
 });
 
+test("forget batches, coalesces and swallows errors", async () => {
+    store.setThumbKey(key);
+    calls.length = 0;
+    status = 200;
+    handler = () => ({});
+    store.forgetThumbs(Array.from({ length: 600 }, (_, i) => String(i)));
+    store.forgetThumbs(["0"]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual(
+        calls.map((call) => call.ids.length),
+        [500, 100],
+    );
+    status = 500;
+    store.forgetThumbs(["failed"]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(calls.length, 3);
+    status = 200;
+});
+
 test("quota failure and unavailable backoff fall back", async () => {
     store.setThumbKey(key);
     calls.length = 0;
