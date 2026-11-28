@@ -59,6 +59,9 @@ let snapshot = {
 let dirty = false;
 let pushing = null;
 let pushTimer = null;
+let batchDepth = 0;
+let batchDirty = false;
+let batchImmediate = false;
 let syncError = null;
 // file_id of each record as the server last acknowledged it
 let savedFileIds = new Map();
@@ -222,8 +225,28 @@ export function importLegacy(legacy) {
 
 // ----- pushing -------------------------------------------------------------------
 
+export function batch(fn) {
+    batchDepth += 1;
+    try {
+        return fn();
+    } finally {
+        batchDepth -= 1;
+        if (!batchDepth && batchDirty) {
+            const immediate = batchImmediate;
+            batchDirty = false;
+            batchImmediate = false;
+            markDirty(immediate);
+        }
+    }
+}
+
 function markDirty(immediate) {
     dirty = true;
+    if (batchDepth) {
+        batchDirty = true;
+        batchImmediate ||= Boolean(immediate);
+        return;
+    }
     publish();
     clearTimeout(pushTimer);
     pushTimer = setTimeout(

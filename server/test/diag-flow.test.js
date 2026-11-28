@@ -256,6 +256,7 @@ async function loadUpload({
         SPLIT_RAW: true,
         uploadLimit: () => Infinity,
         buildTreeFromPaths: (entries) => ({ folders: [], files: entries }),
+        batch: (fn) => fn(),
         getSnapshot: () => ({ records }),
         findFolder: () => null,
         enqueueUpload: () => (enqueue ? {} : null),

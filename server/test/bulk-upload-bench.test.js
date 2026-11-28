@@ -64,7 +64,7 @@ test("offline bulk upload benchmark", async () => {
             },
         });
         const drive = vm.runInContext(
-            `${driveCode}\n;({openDrive, createFolder, createFile, update, flush, getSnapshot})`,
+            `${driveCode}\n;({openDrive, batch, createFolder, createFile, update, flush, getSnapshot})`,
             context,
         );
         const progress = vm.runInContext(
@@ -85,6 +85,23 @@ test("offline bulk upload benchmark", async () => {
                 mime: "text/plain",
             });
         const createMs = performance.now() - start;
+        assert.equal(drive.getSnapshot().records.length, n + 300);
+
+        await drive.openDrive({});
+        for (let i = 0; i < 300; i++)
+            drive.createFolder(`folder ${i}`, null, { id: `folder-${i}` });
+        start = performance.now();
+        drive.batch(() => {
+            for (let i = 0; i < n; i++)
+                drive.createFile({
+                    id: `file-${i}`,
+                    name: `file ${i}`,
+                    parent: `folder-${i % 300}`,
+                    size: 1,
+                    mime: "text/plain",
+                });
+        });
+        const batchCreateMs = performance.now() - start;
         assert.equal(drive.getSnapshot().records.length, n + 300);
 
         let state = {
@@ -130,6 +147,7 @@ test("offline bulk upload benchmark", async () => {
         rows.push({
             N: n,
             "create ms": createMs.toFixed(2),
+            "create in batch ms": batchCreateMs.toFixed(2),
             "100 ticks ms": progressMs.toFixed(2),
             "selection ms": selectionMs.toFixed(2),
         });

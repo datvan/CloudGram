@@ -17,6 +17,7 @@ import { collectSubtree, findFolder, messageIdsOf, recordIdsOf } from "./tree";
 import { cancelUploads, enqueueUpload, isQueued } from "./uploadQueue";
 import { storyboardsOf } from "../services/storyboard";
 import {
+    batch,
     createFolder,
     getSnapshot,
     linkFile,
@@ -129,7 +130,7 @@ export async function uploadEntries(
         const parent = parentOf(entry);
         const name = entry.name ?? entry.file.name;
         const there =
-            parent === MISSING ? [] : (named.get(nameKey(parent, name)) ?? []);
+            parent === MISSING ? [] : named.get(nameKey(parent, name)) ?? [];
         const files = there.filter((r) => r.type === "file");
         return {
             entry,
@@ -193,13 +194,13 @@ export async function uploadEntries(
 
     const conflicts = placed.filter((p) => !p.unfinished && p.taken);
     const choice = conflicts.length
-        ? ((await onConflict?.(
+        ? (await onConflict?.(
               conflicts.map((p) => ({
                   name: p.name,
                   size: p.entry.file.size,
                   existingSize: p.taken.size,
               })),
-          )) ?? "skip")
+          )) ?? "skip"
         : null;
 
     const counts = {
@@ -219,7 +220,7 @@ export async function uploadEntries(
 
     const found = placed.filter((p) => p.elsewhere);
     const link = found.length
-        ? ((await onElsewhere?.(
+        ? (await onElsewhere?.(
               found.map((p) => ({
                   name: p.name,
                   size: p.entry.file.size,
@@ -228,7 +229,7 @@ export async function uploadEntries(
                       records.find((r) => r.id === p.elsewhere.parent)?.name ??
                       null,
               })),
-          )) ?? "upload")
+          )) ?? "upload"
         : null;
     if (link === "cancel") {
         trace(() =>
@@ -246,132 +247,142 @@ export async function uploadEntries(
         };
     }
 
-    for (const folder of missing) {
-        const record = createFolder(folder.name, parentOf(folder));
-        realId.set(folder.tempId, record.id);
-    }
-    const queue = (p, extra = {}) =>
-        enqueueUpload({
-            file: p.entry.file,
-            name: p.name,
-            handle: p.entry.handle,
-            path: p.entry.path,
-            asMedia,
-            removeOriginal,
-            group,
-            run,
-            diagKind: extra.replaces
-                ? "replace"
-                : extra.name
-                  ? "rename"
-                  : "new",
-            parentID: parentOf(p.entry),
-            ...extra,
-        });
+    batch(() => {
+        for (const folder of missing) {
+            const record = createFolder(folder.name, parentOf(folder));
+            realId.set(folder.tempId, record.id);
+        }
+        const queue = (p, extra = {}) =>
+            enqueueUpload({
+                file: p.entry.file,
+                name: p.name,
+                handle: p.entry.handle,
+                path: p.entry.path,
+                asMedia,
+                removeOriginal,
+                group,
+                run,
+                diagKind: extra.replaces
+                    ? "replace"
+                    : extra.name
+                    ? "rename"
+                    : "new",
+                parentID: parentOf(p.entry),
+                ...extra,
+            });
 
-    // A file not sent leaves its original on disk; with "xoá sau khi tải lên"
-    // that is said in the transfer panel, one row per file, with the reason.
-    const keep = (p, reason) => {
-        if (removeOriginal)
-            Store.dispatch(
-                keptProgress(
-                    p.keptId ?? `kept:${Math.random()}`,
-                    p.name,
-                    reason,
-                ),
-            );
-    };
-
-    for (const p of oversize) keep(p, KEPT.tooBig);
-
-    trace(() => {
-        const plan = {
-            queued: 0,
-            replaced: 0,
-            renamed: 0,
-            linked: 0,
-            skipped: counts.skipped,
+        // A file not sent leaves its original on disk; with "xoá sau khi tải lên"
+        // that is said in the transfer panel, one row per file, with the reason.
+        const keep = (p, reason) => {
+            if (removeOriginal)
+                Store.dispatch(
+                    keptProgress(
+                        p.keptId ?? `kept:${Math.random()}`,
+                        p.name,
+                        reason,
+                    ),
+                );
         };
+
+        for (const p of oversize) keep(p, KEPT.tooBig);
+
+        trace(() => {
+            const plan = {
+                queued: 0,
+                replaced: 0,
+                renamed: 0,
+                linked: 0,
+                skipped: counts.skipped,
+            };
+            for (const p of placed) {
+                if (p.unfinished) {
+                    const log = logOf.get(p.unfinished.id);
+                    if (
+                        isQueued(p.unfinished.id) ||
+                        (log && log.tab !== TAB && live.has(log.tab)) ||
+                        log?.messageId ||
+                        log?.sending
+                    )
+                        plan.skipped++;
+                } else if (p.elsewhere && link === "link") plan.linked++;
+                else if (!p.taken) plan.queued++;
+                else if (choice === "replace") plan.replaced++;
+                else if (choice === "keep") plan.renamed++;
+                else plan.skipped++;
+            }
+            diag("upload.entries.plan", {
+                run: run?.diagId,
+                ...plan,
+                oversize: oversize.length,
+                unfinished: placed.filter((p) => p.unfinished).length,
+                elsewhere: found.length,
+            });
+        });
         for (const p of placed) {
-            if (p.unfinished) {
-                const log = logOf.get(p.unfinished.id);
+            const { entry, unfinished, taken } = p;
+            if (unfinished) {
+                const log = logOf.get(unfinished.id);
                 if (
-                    isQueued(p.unfinished.id) ||
+                    isQueued(unfinished.id) ||
                     (log && log.tab !== TAB && live.has(log.tab)) ||
+                    // its message may be out already; the resume banner looks
+                    // for it in Saved Messages instead of sending a second copy
                     log?.messageId ||
                     log?.sending
-                )
-                    plan.skipped++;
-            } else if (p.elsewhere && link === "link") plan.linked++;
-            else if (!p.taken) plan.queued++;
-            else if (choice === "replace") plan.replaced++;
-            else if (choice === "keep") plan.renamed++;
-            else plan.skipped++;
-        }
-        diag("upload.entries.plan", {
-            run: run?.diagId,
-            ...plan,
-            oversize: oversize.length,
-            unfinished: placed.filter((p) => p.unfinished).length,
-            elsewhere: found.length,
-        });
-    });
-    for (const p of placed) {
-        const { entry, unfinished, taken } = p;
-        if (unfinished) {
-            const log = logOf.get(unfinished.id);
-            if (
-                isQueued(unfinished.id) ||
-                (log && log.tab !== TAB && live.has(log.tab)) ||
-                // its message may be out already; the resume banner looks
-                // for it in Saved Messages instead of sending a second copy
-                log?.messageId ||
-                log?.sending
-            ) {
+                ) {
+                    counts.skipped += 1;
+                    keep(p, KEPT.busy);
+                    continue;
+                }
+                const unchanged =
+                    log?.lastModified == null ||
+                    log.lastModified === entry.file.lastModified;
+                const record = enqueueUpload({
+                    file: entry.file,
+                    recordId: unfinished.id,
+                    handle: entry.handle,
+                    path: entry.path,
+                    asMedia: log?.asMedia ?? asMedia,
+                    resume: unchanged ? log?.resume : undefined,
+                    replaces: log?.replaces,
+                    // picked again just now, so what was chosen just now
+                    removeOriginal,
+                    run,
+                });
+                if (record) counts.resumed += 1;
+                else
+                    counts.reason =
+                        "Không thể đưa một số tệp vào hàng tải lên.";
+            } else if (p.elsewhere && link === "link") {
+                // p.parent is MISSING for a folder made only just now
+                linkFile(p.elsewhere, parentOf(entry), p.name);
+                counts.linked += 1;
+                keep(p, KEPT.linked);
+            } else if (!taken) {
+                if (queue(p)) counts.queued += 1;
+                else
+                    counts.reason =
+                        "Không thể đưa một số tệp vào hàng tải lên.";
+            } else if (choice === "replace") {
+                if (queue(p, { replaces: taken.id })) counts.replaced += 1;
+                else
+                    counts.reason =
+                        "Không thể đưa một số tệp vào hàng tải lên.";
+            } else if (choice === "keep") {
+                const name = freeName(named, parentOf(entry), p.name);
+                // taken from now on, for the next file of this batch
+                named.set(nameKey(parentOf(entry), name), [{ name }]);
+                // renamed, so it is no piece of the cut: not counted for the group
+                if (queue(p, { name, group: undefined })) counts.renamed += 1;
+                else
+                    counts.reason =
+                        "Không thể đưa một số tệp vào hàng tải lên.";
+            } else {
                 counts.skipped += 1;
-                keep(p, KEPT.busy);
-                continue;
+                keep(p, KEPT.skipped);
             }
-            const unchanged =
-                log?.lastModified == null ||
-                log.lastModified === entry.file.lastModified;
-            const record = enqueueUpload({
-                file: entry.file,
-                recordId: unfinished.id,
-                handle: entry.handle,
-                path: entry.path,
-                asMedia: log?.asMedia ?? asMedia,
-                resume: unchanged ? log?.resume : undefined,
-                replaces: log?.replaces,
-                // picked again just now, so what was chosen just now
-                removeOriginal,
-                run,
-            });
-            if (record) counts.resumed += 1;
-            else counts.reason = "Không thể đưa một số tệp vào hàng tải lên.";
-        } else if (p.elsewhere && link === "link") {
-            // p.parent is MISSING for a folder made only just now
-            linkFile(p.elsewhere, parentOf(entry), p.name);
-            counts.linked += 1;
-            keep(p, KEPT.linked);
-        } else if (!taken) {
-            if (queue(p)) counts.queued += 1;
-            else counts.reason = "Không thể đưa một số tệp vào hàng tải lên.";
-        } else if (choice === "replace") {
-            if (queue(p, { replaces: taken.id })) counts.replaced += 1;
-            else counts.reason = "Không thể đưa một số tệp vào hàng tải lên.";
-        } else if (choice === "keep") {
-            const name = freeName(named, parentOf(entry), p.name);
-            // taken from now on, for the next file of this batch
-            named.set(nameKey(parentOf(entry), name), [{ name }]);
-            // renamed, so it is no piece of the cut: not counted for the group
-            if (queue(p, { name, group: undefined })) counts.renamed += 1;
-            else counts.reason = "Không thể đưa một số tệp vào hàng tải lên.";
-        } else {
-            counts.skipped += 1;
-            keep(p, KEPT.skipped);
         }
-    }
+    });
     if (counts.reason)
         trace(() =>
             diag("upload.entries.stop", {
@@ -605,8 +616,7 @@ export async function deleteForever(ids, { withLinks = false } = {}) {
             messageIds.delete(other.thumbnailBlob.message);
     for (const r of covers) {
         const cover = r.thumbnailBlob?.message;
-        if (!Number.isSafeInteger(cover) || cover <= 0)
-            continue;
+        if (!Number.isSafeInteger(cover) || cover <= 0) continue;
         const safe =
             mode === savedMode &&
             (r.tg == null || r.tg === "private" || r.tg === "shared") &&

@@ -75,7 +75,7 @@ async function harness(initial = { version: 0 }) {
         decryptJson: async (_, blob) => blob,
     });
     const drive = vm.runInContext(
-        `${source}\n;({shardOf, groupByShard, saveShards, openDrive, closeDrive, createFile, update, flush, getRecord, isSaved})`,
+        `${source}\n;({shardOf, groupByShard, saveShards, openDrive, closeDrive, batch, subscribe, getSnapshot, createFile, update, flush, getRecord, isSaved})`,
         context,
     );
     return {
@@ -175,4 +175,37 @@ test("an edit during a save stays dirty and is not acknowledged early", async ()
     await h.drive.flush();
     assert.equal(h.drive.isSaved("new"), true);
     assert.equal(h.calls.length, 2);
+});
+
+test("batch publishes once, including nested changes and changes before a throw", async () => {
+    const h = await harness();
+    await h.drive.openDrive({});
+    let publications = 0;
+    const unsubscribe = h.drive.subscribe(() => publications++);
+    const failure = new Error("batch failure");
+    assert.throws(
+        () =>
+            h.drive.batch(() => {
+                h.drive.createFile({ id: "a", name: "A" });
+                assert.equal(h.drive.getRecord("a").name, "A");
+                assert.equal(h.drive.getSnapshot().records.length, 0);
+                h.drive.batch(() => {
+                    h.drive.createFile({ id: "b", name: "B" });
+                });
+                assert.equal(publications, 0);
+                h.drive.update("a", { file_id: 123 });
+                throw failure;
+            }),
+        (error) => error === failure,
+    );
+    assert.equal(publications, 1);
+    assert.equal(h.drive.getSnapshot().records.length, 2);
+    assert.equal(h.drive.isSaved("a"), false);
+    await h.drive.flush();
+    assert.equal(h.drive.isSaved("a"), true);
+    assert.equal(
+        Object.values(h.state.shards).flatMap((shard) => shard.records).length,
+        2,
+    );
+    unsubscribe();
 });
