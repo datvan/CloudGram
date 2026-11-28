@@ -84,6 +84,7 @@ const samples = {
         errCode: "ERR_CODE",
         stage: "read",
     },
+    "thumbs.backfill": { ok: 1, fail: 2, skipped: 3 },
     "tree.save": { ok: true, ms: 1, retries409: 0 },
     "conn.state": { state: "ready", leaseOk: true },
     "conn.heartbeatGap": { ms: 16000, visibility: "hidden" },
@@ -127,4 +128,26 @@ assert.equal(
 assert.equal(
     sanitizeDiag({ evt: "upload.scan.progress", sizeB: 61 }).dropped,
     1,
+);
+
+const thumb = {
+    evt: "thumb.fail",
+    kind: "video",
+    reason: "decode",
+    mime: "video/mp4",
+    size: "<100M",
+};
+assert.deepEqual(
+    sanitizeDiag({
+        ...thumb,
+        filename: "secret.mp4",
+        file: "abc123",
+        path: "/private",
+    }),
+    { event: thumb, dropped: 3 },
+);
+assert.equal(
+    sanitizeDiag({ ...thumb, mime: "video/mp4;name=secret", reason: "secret" })
+        .dropped,
+    2,
 );

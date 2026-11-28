@@ -9,6 +9,7 @@ import {
 import { fetchFile } from "./downloadFile";
 import { decryptPreview } from "../services/previewCrypto";
 import { thumbUrl } from "../services/thumbStore";
+import { diag } from "../services/diag";
 
 // Telegram's own limit for a document thumbnail: JPEG, at most 320px a side
 const SIZE = 320;
@@ -54,6 +55,23 @@ export function typeOf({ type, name }) {
     return EXT_TYPES[dot > 0 ? name.slice(dot + 1).toLowerCase() : ""] ?? "";
 }
 
+export function thumbFail(file, reason) {
+    const type = typeOf(file).toLowerCase();
+    const kind = type.startsWith("video/") ? "video" : "image";
+    const mime = /^(?:image|video)\/[a-z0-9][a-z0-9.+-]{0,63}$/.test(type)
+        ? type
+        : `${kind}/unknown`;
+    const size =
+        file.size < 10 * 1024 ** 2
+            ? "<10M"
+            : file.size < 100 * 1024 ** 2
+            ? "<100M"
+            : file.size < 1024 ** 3
+            ? "<1G"
+            : ">=1G";
+    diag("thumb.fail", { kind, reason, mime, size });
+}
+
 function isImageType(type) {
     return type?.startsWith("image/") && type !== "image/svg+xml";
 }
@@ -85,7 +103,7 @@ async function decode(blob, type) {
         return await createImageBitmap(blob);
     } catch (error) {
         if (isHeicType(type)) {
-            if (heicStuck) throw error;
+            if (heicStuck) throw new Error("heic fallback off");
             const { heicTo } = await import("heic-to/csp");
             return withTimeout(
                 heicTo({ blob, type: "bitmap" }),
@@ -162,16 +180,20 @@ export async function fitsAsPhoto(file) {
  * video does not say (some WebM). Null when the browser cannot read it.
  */
 export function probeVideo(file) {
-    if (!isVideoType(typeOf(file))) return Promise.resolve(null);
+    if (!isVideoType(typeOf(file))) {
+        if (typeOf(file).startsWith("video/")) thumbFail(file, "unsupported");
+        return Promise.resolve(null);
+    }
     return new Promise((resolve) => {
         const url = URL.createObjectURL(file);
         const video = document.createElement("video");
         let info = null;
         let done = false;
         let seekTimer;
-        const finish = (value) => {
+        const finish = (value, reason) => {
             if (done) return;
             done = true;
+            if (reason) thumbFail(file, reason);
             clearTimeout(timer);
             clearTimeout(seekTimer);
             video.removeAttribute("src");
@@ -186,17 +208,18 @@ export function probeVideo(file) {
                     await encodeScaled(video, info.w, info.h),
                 );
             } catch {
-                // a video without a cover still plays
+                finish(info, "canvas");
+                return;
             }
             finish(info);
         };
-        const timer = setTimeout(() => finish(info), VIDEO_TIMEOUT);
+        const timer = setTimeout(() => finish(info, "timeout"), VIDEO_TIMEOUT);
         video.muted = true;
         video.preload = "auto";
-        video.onerror = () => finish(null);
+        video.onerror = () => finish(null, "decode");
         video.onloadedmetadata = () => {
-            if (!video.videoWidth) {
-                finish(null);
+            if (!video.videoWidth || !video.videoHeight) {
+                finish(null, "no_frame");
                 return;
             }
             const finite = Number.isFinite(video.duration);
@@ -228,11 +251,37 @@ export function probeVideo(file) {
  */
 export async function makeThumb(file) {
     const type = typeOf(file);
-    if (!isImageType(type) || file.size > MAKE_LIMIT) return undefined;
-    try {
-        return asThumbFile(await shrink(file, type));
-    } catch {
+    if (!isImageType(type)) {
+        if (type.startsWith("image/")) thumbFail(file, "unsupported");
         return undefined;
+    }
+    if (file.size > MAKE_LIMIT) {
+        thumbFail(file, "too_large");
+        return undefined;
+    }
+    let bitmap;
+    try {
+        bitmap = await decode(file, type);
+    } catch (error) {
+        thumbFail(
+            file,
+            error?.message === "timed out"
+                ? "timeout"
+                : error?.message === "heic fallback off"
+                ? "heic_fallback_off"
+                : "decode",
+        );
+        return undefined;
+    }
+    try {
+        return asThumbFile(
+            await encodeScaled(bitmap, bitmap.width, bitmap.height),
+        );
+    } catch {
+        thumbFail(file, "canvas");
+        return undefined;
+    } finally {
+        bitmap.close();
     }
 }
 
@@ -254,10 +303,13 @@ export async function encryptedThumb(file) {
 // record key -> object URL, or null when there is no thumbnail to show.
 // A failure is never kept here: it is tried again. Kept for the life of the
 // tab; a few hundred 320px JPEGs is a few MB.
+export const THUMB_NONE = Symbol("thumbnail absent");
 const cache = new Map();
 const pointers = new Map();
 const identityOf = (record) =>
     JSON.stringify([
+        record.id,
+        record.file_id,
         record.thumbnailBlob,
         record.thumbData,
         record.thumbnail,
@@ -280,7 +332,7 @@ export function evictThumbnails(records) {
     for (const record of records) {
         const key = keyOf(record);
         const url = cache.get(key);
-        if (url) URL.revokeObjectURL(url);
+        if (url && url !== THUMB_NONE) URL.revokeObjectURL(url);
         cache.delete(key);
         pointers.delete(key);
         const entry = pending.get(key);
@@ -288,6 +340,22 @@ export function evictThumbnails(records) {
         entry?.resolve(null);
     }
     for (const listener of listeners) listener();
+}
+export function watchThumbBackfill(queue) {
+    return queue.onDone((id) => {
+        const records = [...cache]
+            .filter(
+                ([key, value]) =>
+                    key.slice(0, key.lastIndexOf(":")) === String(id) &&
+                    (value === null || value === THUMB_NONE),
+            )
+            .map(([key]) => key)
+            .map((key) => ({
+                id,
+                file_id: key.slice(key.lastIndexOf(":") + 1),
+            }));
+        if (records.length) evictThumbnails(records);
+    });
 }
 let waiting = [];
 let timer = null;
@@ -312,7 +380,8 @@ async function thumbFrom(message, record, client) {
     // a file sent as a photo carries its own scaled copies instead of thumbs
     const doc = media?.document;
     const sizes = doc ? doc.thumbs : media?.photo?.sizes;
-    if (!doc && !sizes) return null;
+    if (!message?.media) return null;
+    if (!doc && !sizes) return THUMB_NONE;
 
     const encrypted = record.enc || record.parts?.some((part) => part.enc);
     const size = encrypted ? null : pickSize(sizes);
@@ -342,12 +411,17 @@ async function thumbFrom(message, record, client) {
         // either, and each retry would download the whole file again
         return shrink(new Blob([bytes], { type }), type).catch(() => null);
     }
-    return null;
+    return size ? null : THUMB_NONE;
 }
 
 function settle(entry, blob) {
     if (pending.get(entry.key) !== entry) return;
-    const url = blob ? URL.createObjectURL(blob) : null;
+    const url =
+        blob === THUMB_NONE
+            ? THUMB_NONE
+            : blob
+            ? URL.createObjectURL(blob)
+            : null;
     cache.set(entry.key, url);
     pointers.set(entry.key, identityOf(entry.record));
     pending.delete(entry.key);
@@ -479,7 +553,8 @@ function schedule() {
 onClientChange((client) => {
     if (client) return schedule();
     // a sign-out: these message ids mean nothing to the next account
-    for (const url of cache.values()) if (url) URL.revokeObjectURL(url);
+    for (const url of cache.values())
+        if (url && url !== THUMB_NONE) URL.revokeObjectURL(url);
     cache.clear();
     pointers.clear();
     held.clear();
@@ -527,6 +602,15 @@ function loadThumb(record) {
             record.thumbnailBlob.message <= 0)
     )
         return Promise.resolve(null);
+    if (
+        !hasBlob(record) &&
+        !record.thumbnail &&
+        (record.enc || record.parts?.some((part) => part.enc))
+    ) {
+        cache.set(key, THUMB_NONE);
+        pointers.set(key, identityOf(record));
+        return Promise.resolve(THUMB_NONE);
+    }
     if (cache.has(key)) return Promise.resolve(cache.get(key));
     if (pending.has(key)) pending.get(key).cancelled = false;
     if (!pending.has(key)) {
@@ -551,7 +635,7 @@ function loadThumb(record) {
  * Only files whose kind can carry a picture are asked for, and only once the
  * upload has finished.
  */
-export function useThumbnail(record, wanted, visible) {
+export function useThumbnail(record, wanted, visible, exposeNone = false) {
     const [revision, refresh] = useState(0);
     useEffect(() => {
         const changed = () => refresh((n) => n + 1);
@@ -596,5 +680,6 @@ export function useThumbnail(record, wanted, visible) {
         revision,
     ]);
 
-    return ready && result.identity === identity ? result.url : null;
+    const url = ready && result.identity === identity ? result.url : null;
+    return url === THUMB_NONE && !exposeNone ? null : url;
 }

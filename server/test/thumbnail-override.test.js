@@ -1026,6 +1026,7 @@ test("encrypted loader authenticates and changes identity for all metadata", asy
         id: "a",
         file_id: 1,
         thumbnail: 50,
+        enc: {},
         thumbData: "plaintext",
         thumbnailBlob: { ...encrypted.metadata, message: 101 },
     };
@@ -1076,7 +1077,7 @@ test("tree data respects hold and replaces cached legacy thumbnail", async () =>
     );
     const old = { id: "a", file_id: 1, thumbnail: 50 };
     h.cache.set("a:1", "blob:old");
-    h.pointers.set("a:1", JSON.stringify([null, null, 50, null]));
+    h.pointers.set("a:1", JSON.stringify(["a", 1, null, null, 50, null]));
     const release = h.holdThumbnails([old]);
     const next = {
         ...old,
