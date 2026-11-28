@@ -25,10 +25,11 @@ const bytes = new Uint8Array([1, 2, 3]);
 const blob = await store.encryptThumb(key, "a", bytes);
 const calls = [];
 let handler = () => ({ thumbs: {} });
+let status = 200;
 globalThis.fetch = async (path, options) => {
     const call = { path, ...JSON.parse(options.body) };
     calls.push(call);
-    return { ok: true, json: async () => handler(call) };
+    return { ok: status === 200, status, json: async () => handler(call) };
 };
 const originalUrl = globalThis.URL;
 let next = 0;
@@ -39,6 +40,41 @@ globalThis.URL = {
 };
 test.after(() => {
     globalThis.URL = originalUrl;
+});
+
+test("store batches 70 encrypted thumbnails", async () => {
+    store.setThumbKey(key);
+    calls.length = 0;
+    status = 200;
+    handler = () => ({});
+    const refs = await Promise.all(
+        Array.from({ length: 70 }, () =>
+            store.storeThumb("data:image/jpeg;base64,AQID"),
+        ),
+    );
+    assert.equal(new Set(refs).size, 70);
+    assert.deepEqual(
+        calls.map((call) => Object.keys(call.thumbs).length),
+        [64, 6],
+    );
+    assert.deepEqual(
+        await store.decryptThumb(key, refs[0], calls[0].thumbs[refs[0]]),
+        bytes,
+    );
+});
+
+test("quota failure and unavailable backoff fall back", async () => {
+    store.setThumbKey(key);
+    calls.length = 0;
+    status = 413;
+    handler = () => ({ error: "thumbs_quota" });
+    assert.equal(await store.storeThumb(bytes), null);
+    status = 503;
+    handler = () => ({ error: "thumbs_unavailable" });
+    assert.equal(await store.storeThumb(bytes), null);
+    assert.equal(await store.storeThumb(bytes), null);
+    assert.equal(calls.length, 2);
+    status = 200;
 });
 
 test("encryption round trip, ref binding and inline precedence", async () => {

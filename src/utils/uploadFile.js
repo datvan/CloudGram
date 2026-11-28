@@ -26,6 +26,7 @@ import {
 } from "./thumbnails";
 import { turns, uploadParts } from "./transfer";
 import { sliceLimit } from "./uploadLimit";
+import { storeThumb } from "../services/thumbStore";
 
 // Messages being sent at once. The pool frees a file's place once its parts
 // are out, so without a cap a large folder had hundreds of sends waiting on
@@ -258,8 +259,15 @@ export default async function uploadFile(
         resume.fileId = undefined;
         resume.done = undefined;
     }
-    if (encrypted && resume.thumbData === undefined) {
-        resume.thumbData = (await encryptedThumb(file)) ?? null;
+    let thumbReady = Promise.resolve();
+    if (encrypted && resume.thumbData === undefined && !resume.thumbRef) {
+        const thumb = (await encryptedThumb(file)) ?? null;
+        thumbReady = (thumb ? storeThumb(thumb) : Promise.resolve(null)).then(
+            (ref) => {
+                if (ref) resume.thumbRef = ref;
+                else resume.thumbData = thumb;
+            },
+        );
     }
     const plainLimit =
         encrypted && Number.isFinite(limit)
@@ -305,6 +313,7 @@ export default async function uploadFile(
 
     /** Send one message for bytes already uploaded; `final` is the last one. */
     async function send(inputFile, extra, final) {
+        if (final) await thumbReady;
         await sendTurns.take();
         let given = false;
         const give = () => {
@@ -362,7 +371,12 @@ export default async function uploadFile(
             changes: {
                 ...sentChanges(message, kind, file.size),
                 ...(encrypted
-                    ? { enc: resume.enc, thumbData: resume.thumbData }
+                    ? {
+                          enc: resume.enc,
+                          ...(resume.thumbRef
+                              ? { thumbRef: resume.thumbRef }
+                              : { thumbData: resume.thumbData }),
+                      }
                     : {}),
             },
         };
@@ -452,6 +466,7 @@ export default async function uploadFile(
         await onPiece?.();
         offset += piece.size;
     }
+    await thumbReady;
     const [first] = sent;
     return {
         message: { id: first.id },
@@ -459,7 +474,11 @@ export default async function uploadFile(
         messages: sent.map((piece) => piece.id),
         changes: {
             sentAs: "file",
-            ...(encrypted ? { thumbData: resume.thumbData } : {}),
+            ...(encrypted
+                ? resume.thumbRef
+                    ? { thumbRef: resume.thumbRef }
+                    : { thumbData: resume.thumbData }
+                : {}),
             parts: sent.map(({ id, size, enc }) => ({
                 id,
                 size,

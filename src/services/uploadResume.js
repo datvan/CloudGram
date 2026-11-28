@@ -480,6 +480,7 @@ export async function resume(found, granted, onProgress) {
                             entry.replaces,
                             entry.resume?.enc,
                             entry.resume?.thumbData,
+                            entry.resume?.thumbRef,
                         ).then(
                             () => {
                                 result.adopted += 1;
