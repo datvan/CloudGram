@@ -30,6 +30,7 @@ import {
     Button,
     Chip,
     Drawer,
+    Divider,
     Fab,
     IconButton,
     Link,
@@ -44,6 +45,9 @@ import {
     useMediaQuery,
 } from "@mui/material";
 import { useTheme } from "@mui/material/styles";
+import CheckIcon from "@mui/icons-material/Check";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import ViewListIcon from "@mui/icons-material/ViewList";
@@ -63,6 +67,7 @@ import AddIcon from "@mui/icons-material/Add";
 import CloudUploadOutlinedIcon from "@mui/icons-material/CloudUploadOutlined";
 import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
 
+import { parseSort, nextSort } from "../../utils/sort";
 import TopBar from "../../components/drive/TopBar";
 import QuickSettings from "../../components/drive/QuickSettings";
 import MigrateSharedDialog from "../../components/drive/MigrateSharedDialog";
@@ -255,7 +260,13 @@ export default function DriveApp({ mode, onToggleMode }) {
     const [layout, setLayout] = useState(() =>
         readPref("cloudgram.layout", "list"),
     );
-    const [sort, setSort] = useState({ key: "name", dir: "asc" });
+    const [sort, setSort] = useState(() =>
+        parseSort(readPref("cloudgram.sort", null)),
+    );
+    const [sortMenu, setSortMenu] = useState(null);
+    useEffect(() => {
+        writePref("cloudgram.sort", JSON.stringify(sort));
+    }, [sort]);
     const [kindFilter, setKindFilter] = useState(null);
     const [selected, setSelected] = useState(() => new Set());
     const marquee = useMarquee(selected, setSelected);
@@ -1623,6 +1634,116 @@ export default function DriveApp({ mode, onToggleMode }) {
                                 </Typography>
                             )}
                         </Box>
+                        {layout === "grid" && view.kind !== "recent" && (
+                            <Box sx={{ display: "flex", alignItems: "center" }}>
+                                <Button
+                                    size="small"
+                                    aria-haspopup="menu"
+                                    aria-expanded={Boolean(sortMenu)}
+                                    onClick={(e) =>
+                                        setSortMenu(e.currentTarget)
+                                    }
+                                >
+                                    {sort.key === "name"
+                                        ? "Tên"
+                                        : sort.key === "updatedAt"
+                                        ? inTrash
+                                            ? "Ngày xoá"
+                                            : "Ngày sửa đổi"
+                                        : "Kích thước"}
+                                </Button>
+                                <IconButton
+                                    size="small"
+                                    aria-label={
+                                        sort.dir === "asc"
+                                            ? "Đổi sang giảm dần"
+                                            : "Đổi sang tăng dần"
+                                    }
+                                    onClick={() =>
+                                        setSort((s) =>
+                                            nextSort(
+                                                s,
+                                                "dir",
+                                                s.dir === "asc"
+                                                    ? "desc"
+                                                    : "asc",
+                                            ),
+                                        )
+                                    }
+                                >
+                                    {sort.dir === "asc" ? (
+                                        <ArrowUpwardIcon fontSize="small" />
+                                    ) : (
+                                        <ArrowDownwardIcon fontSize="small" />
+                                    )}
+                                </IconButton>
+                                <Menu
+                                    anchorEl={sortMenu}
+                                    open={Boolean(sortMenu)}
+                                    onClose={() => setSortMenu(null)}
+                                >
+                                    {[
+                                        ["name", "Tên"],
+                                        [
+                                            "updatedAt",
+                                            inTrash
+                                                ? "Ngày xoá"
+                                                : "Ngày sửa đổi",
+                                        ],
+                                        ["size", "Kích thước"],
+                                    ].map(([value, label]) => (
+                                        <MenuItem
+                                            key={value}
+                                            onClick={() => {
+                                                setSort((s) =>
+                                                    nextSort(s, "key", value),
+                                                );
+                                                setSortMenu(null);
+                                            }}
+                                        >
+                                            <CheckIcon
+                                                fontSize="small"
+                                                sx={{
+                                                    mr: 1,
+                                                    visibility:
+                                                        sort.key === value
+                                                            ? "visible"
+                                                            : "hidden",
+                                                }}
+                                            />
+                                            {label}
+                                        </MenuItem>
+                                    ))}
+                                    <Divider />
+                                    {[
+                                        ["asc", "Tăng dần"],
+                                        ["desc", "Giảm dần"],
+                                    ].map(([value, label]) => (
+                                        <MenuItem
+                                            key={value}
+                                            onClick={() => {
+                                                setSort((s) =>
+                                                    nextSort(s, "dir", value),
+                                                );
+                                                setSortMenu(null);
+                                            }}
+                                        >
+                                            <CheckIcon
+                                                fontSize="small"
+                                                sx={{
+                                                    mr: 1,
+                                                    visibility:
+                                                        sort.dir === value
+                                                            ? "visible"
+                                                            : "hidden",
+                                                }}
+                                            />
+                                            {label}
+                                        </MenuItem>
+                                    ))}
+                                </Menu>
+                            </Box>
+                        )}
                         <ToggleButtonGroup
                             size="small"
                             exclusive
