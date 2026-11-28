@@ -244,6 +244,7 @@ test("account rolls back only the newly sent key when enable fails", async () =>
             quickSecrets: async () => ({ proof: "proof", wrapKey: {} }),
             saveQuickKey: async () => ({ id: 42 }),
             clearKey: async () => {},
+            clearTreeCache: async () => {},
             openDrive: async () => {},
             startThumbMigration() {},
             stopThumbMigration() {},

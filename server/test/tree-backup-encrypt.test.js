@@ -43,6 +43,7 @@ async function vaultFor(key) {
             deriveKeys: async () => ({}),
             unwrapDek: async () => key,
             clearKey: async () => {},
+            clearTreeCache: async () => {},
             openDrive: async () => {},
             startThumbMigration() {},
             stopThumbMigration() {},

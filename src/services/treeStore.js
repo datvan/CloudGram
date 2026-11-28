@@ -14,6 +14,7 @@
  */
 import { api } from "./api";
 import { decryptJson, encryptJson } from "./crypto";
+import { readTreeCache, writeTreeCache } from "./treeCache";
 
 export const SHARD_COUNT = 512;
 const LEGACY_LABEL = "file-tree";
@@ -39,6 +40,10 @@ export function shardOf(id, count = SHARD_COUNT) {
  */
 export async function loadTree(dek, since = 0) {
     const blob = await api.getTree(since);
+    return decryptTree(dek, blob);
+}
+
+async function decryptTree(dek, blob) {
     if (!blob.version)
         return { version: 0, count: SHARD_COUNT, records: [], legacy: false };
     if (!blob.shards) {
@@ -63,6 +68,87 @@ export async function loadTree(dek, since = 0) {
         records: parts.flatMap((tree) => tree.records ?? []),
         legacy: Boolean(blob.legacy),
     };
+}
+
+function validCache(value) {
+    return (
+        value &&
+        Number.isSafeInteger(value.version) &&
+        value.version > 0 &&
+        Number.isSafeInteger(value.count) &&
+        value.count > 0 &&
+        value.shards &&
+        typeof value.shards === "object" &&
+        !Array.isArray(value.shards) &&
+        Object.entries(value.shards).every(
+            ([n, shard]) =>
+                /^(0|[1-9]\d*)$/.test(n) &&
+                Number(n) < value.count &&
+                shard &&
+                typeof shard.iv === "string" &&
+                typeof shard.ct === "string",
+        )
+    );
+}
+
+export async function loadCachedTree(dek, account) {
+    const started = Date.now();
+    let cached;
+    let hit = false;
+    let fetched = 0;
+    try {
+        cached = await readTreeCache(account);
+    } catch {
+        // Cache is optional.
+    }
+    let blob;
+    let tree;
+    if (validCache(cached)) {
+        blob = await api.getTree(cached.version);
+        fetched += Object.keys(blob.shards ?? {}).length;
+        if (
+            blob.shards &&
+            !blob.legacy &&
+            blob.count === cached.count &&
+            blob.version >= cached.version
+        ) {
+            const combined = {
+                version: blob.version,
+                count: blob.count,
+                shards: { ...cached.shards, ...blob.shards },
+            };
+            if (validCache(combined)) {
+                try {
+                    tree = await decryptTree(dek, combined);
+                    blob = combined;
+                    hit = true;
+                } catch {
+                    // A stale or damaged cached shard requires a full load.
+                }
+            }
+        }
+    }
+    if (!tree) {
+        blob = await api.getTree(0);
+        fetched += Object.keys(blob.shards ?? {}).length;
+        tree = await decryptTree(dek, blob);
+    }
+    if (!blob.legacy && validCache(blob)) {
+        try {
+            await writeTreeCache(
+                account,
+                {
+                    version: blob.version,
+                    count: blob.count,
+                    shards: blob.shards,
+                },
+                { force: cached != null && !hit },
+            );
+        } catch {
+            // Cache is optional.
+        }
+    }
+    return { tree, cache: { hit, shards: fetched, ms: Date.now() - started } };
 }
 
 /** Records grouped by shard, for every shard in `wanted` (all when omitted). */
