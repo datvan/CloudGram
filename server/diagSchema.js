@@ -83,6 +83,13 @@ const EVENTS = {
         errName: "errName",
         stage: ["read", "encrypt", "send", "save", "other"],
     },
+    "thumbs.migrate.batch": { n: "num", ms: "num" },
+    "thumbs.migrate.done": { n: "num", skipped: "num" },
+    "thumbs.migrate.stop": {
+        n: "num",
+        skipped: "num",
+        reason: ["fail", "closed"],
+    },
     "tree.save": { ok: "bool", ms: "num", retries409: "num" },
     "tree.stats": {
         records: "num",

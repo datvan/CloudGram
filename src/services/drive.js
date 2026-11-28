@@ -33,6 +33,7 @@ import { fold } from "../utils/format";
 import { DIAG_LOG } from "../config/features.js";
 import { treeStats } from "./treeStats";
 import { setThumbKey } from "./thumbStore";
+import { stopThumbMigration } from "./thumbMigrate";
 
 const TOMBSTONE_TTL = 90 * 24 * 60 * 60 * 1000;
 const PUSH_DELAY = 400;
@@ -118,6 +119,29 @@ export function getSnapshot() {
 export function getRecord(id) {
     const record = records.get(id);
     return record && !record.deleted ? record : undefined;
+}
+
+export function thumbCandidates(skipped) {
+    const candidates = [];
+    for (const ids of shardRecords.values()) {
+        const shard = [];
+        for (const id of ids) {
+            const record = records.get(id);
+            if (record.deleted || record.thumbRef || skipped?.has(id)) continue;
+            const value = record.thumbData ?? record.thumbnail;
+            if (typeof value === "string" && value.startsWith("data:")) {
+                shard.push({
+                    id: record.id,
+                    value,
+                    thumbData: record.thumbData,
+                    thumbnail: record.thumbnail,
+                });
+            }
+        }
+        if (candidates.length && candidates.length + shard.length > 64) break;
+        candidates.push(...shard);
+    }
+    return candidates;
 }
 
 /**
@@ -219,7 +243,9 @@ export async function openDrive(key) {
 }
 
 export function closeDrive() {
+    stopThumbMigration();
     clearTimeout(pushTimer);
+    pushTimer = null;
     dek = null;
     setThumbKey(null);
     version = 0;
@@ -269,7 +295,7 @@ export function importLegacy(legacy) {
 
 // ----- pushing -------------------------------------------------------------------
 
-export function batch(fn) {
+export function batch(fn, { saveDelay = PUSH_DELAY } = {}) {
     batchDepth += 1;
     try {
         return fn();
@@ -279,12 +305,12 @@ export function batch(fn) {
             const immediate = batchImmediate;
             batchDirty = false;
             batchImmediate = false;
-            markDirty(immediate);
+            markDirty(immediate, saveDelay);
         }
     }
 }
 
-function markDirty(immediate) {
+function markDirty(immediate, saveDelay = PUSH_DELAY) {
     dirty = true;
     if (batchDepth) {
         batchDirty = true;
@@ -292,10 +318,14 @@ function markDirty(immediate) {
         return;
     }
     publish();
+    if (saveDelay > PUSH_DELAY && pushTimer) return;
     clearTimeout(pushTimer);
     pushTimer = setTimeout(
-        () => flush().catch(swallow("drive.scheduleFlush")),
-        immediate ? 0 : PUSH_DELAY,
+        () => {
+            pushTimer = null;
+            flush().catch(swallow("drive.scheduleFlush"));
+        },
+        immediate ? 0 : saveDelay,
     );
 }
 

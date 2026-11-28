@@ -434,6 +434,7 @@ async function load(path, globals, exports) {
         DIAG_LOG: false,
         treeStats() {},
         setThumbKey() {},
+        stopThumbMigration() {},
         thumbUrl: async (record) => record.thumbData ?? null,
         ...globals,
     });

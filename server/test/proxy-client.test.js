@@ -652,6 +652,8 @@ test("non-admin installs proxy only after lease and stops it on lease loss", asy
         diag: (event, fields) => events.push({ event, ...fields }),
         set: (state) => calls.push(state.phase),
         openDrive: async () => calls.push("drive"),
+        startThumbMigration() {},
+        stopThumbMigration() {},
         openUploadLog() {},
         migrateLegacyTree: async () => {},
         refresh: async () => {},
