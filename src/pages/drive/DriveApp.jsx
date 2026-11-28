@@ -617,6 +617,7 @@ export default function DriveApp({ mode, onToggleMode }) {
                     setDialog({ type: "repair", ids: repairIds });
                 else
                     setNotice({
+                        kind: "noRepairableVideo",
                         severity: "info",
                         text: "Không có video nào sửa được",
                     });

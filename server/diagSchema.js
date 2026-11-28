@@ -88,7 +88,10 @@ const EVENTS = {
         state: ["connecting", "ready", "offline", "leaseLost", "leaseOk"],
         leaseOk: "bool",
     },
-    "conn.heartbeatGap": { ms: "num", visibility: ["visible", "hidden", "prerender"] },
+    "conn.heartbeatGap": {
+        ms: "num",
+        visibility: ["visible", "hidden", "prerender"],
+    },
     "remove.original": {
         result: ["deleted", "kept", "changed", "locked", "permission"],
     },
@@ -106,6 +109,7 @@ const EVENTS = {
     "ui.notice": {
         sev: ["info", "warning", "error", "success"],
         kind: [
+            "noRepairableVideo",
             "openTrashed",
             "actionFailed",
             "thumbnailCreated",
@@ -187,8 +191,8 @@ export function sanitizeDiag(input) {
         const rule = Object.hasOwn(schema, key)
             ? schema[key]
             : Object.hasOwn(CONTEXT, key)
-              ? CONTEXT[key]
-              : null;
+            ? CONTEXT[key]
+            : null;
         if (!rule || count >= 24) {
             dropped++;
             continue;
