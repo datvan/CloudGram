@@ -128,3 +128,25 @@ assert.equal(
     sanitizeDiag({ evt: "upload.scan.progress", sizeB: 61 }).dropped,
     1,
 );
+
+const thumb = {
+    evt: "thumb.fail",
+    kind: "video",
+    reason: "decode",
+    mime: "video/mp4",
+    size: "<100M",
+};
+assert.deepEqual(
+    sanitizeDiag({
+        ...thumb,
+        filename: "secret.mp4",
+        file: "abc123",
+        path: "/private",
+    }),
+    { event: thumb, dropped: 3 },
+);
+assert.equal(
+    sanitizeDiag({ ...thumb, mime: "video/mp4;name=secret", reason: "secret" })
+        .dropped,
+    2,
+);

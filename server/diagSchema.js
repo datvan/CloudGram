@@ -83,6 +83,21 @@ const EVENTS = {
         errName: "errName",
         stage: ["read", "encrypt", "send", "save", "other"],
     },
+    "thumb.fail": {
+        kind: ["image", "video"],
+        reason: [
+            "unsupported",
+            "too_large",
+            "timeout",
+            "decode",
+            "no_frame",
+            "canvas",
+            "heic_fallback_off",
+            "store",
+        ],
+        mime: /^(?:image|video)\/[a-z0-9][a-z0-9.+-]{0,63}$/,
+        size: ["<10M", "<100M", "<1G", ">=1G"],
+    },
     "thumbs.migrate.batch": { n: "num", ms: "num", kb: "num" },
     "thumbs.migrate.done": { n: "num", skipped: "num" },
     "thumbs.migrate.stop": {
@@ -224,11 +239,14 @@ export function sanitizeDiag(input) {
     let count = 0;
     for (const [key, value] of Object.entries(input)) {
         if (key === "evt") continue;
-        const rule = Object.hasOwn(schema, key)
-            ? schema[key]
-            : Object.hasOwn(CONTEXT, key)
-            ? CONTEXT[key]
-            : null;
+        const rule =
+            input.evt === "thumb.fail" && ["file", "run", "req"].includes(key)
+                ? null
+                : Object.hasOwn(schema, key)
+                ? schema[key]
+                : Object.hasOwn(CONTEXT, key)
+                ? CONTEXT[key]
+                : null;
         if (!rule || count >= 24) {
             dropped++;
             continue;

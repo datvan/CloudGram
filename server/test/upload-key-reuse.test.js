@@ -40,6 +40,7 @@ async function setup(limit = Infinity, thumb = null, ref = null) {
         SPLIT_RAW: true,
         encryptedThumb: async () => thumb,
         storeThumb: async () => ref,
+        thumbFail() {},
         sliceLimit: () => limit,
         splitSizes: (size, max) => (size > max ? [max, size - max] : [size]),
         pieceName: (name, i) => `${name}.${i}`,
@@ -81,6 +82,20 @@ test("upload stores a reference or falls back to inline thumbnail", async () => 
                 "data:image/jpeg;base64,AQID",
             );
     }
+});
+
+test("resume regenerates a null encrypted thumbnail", async () => {
+    const { uploadFile, client } = await setup(
+        Infinity,
+        "data:image/jpeg;base64,AQID",
+        "ref-1",
+    );
+    const resume = { thumbData: null };
+    const result = await uploadFile("id", new File(["abc"], "a"), {
+        client,
+        resume,
+    });
+    assert.equal(result.changes.thumbRef, "ref-1");
 });
 
 test("fingerprint match resumes; changed or missing fingerprint starts fresh", async () => {

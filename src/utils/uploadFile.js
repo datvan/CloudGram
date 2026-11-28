@@ -22,6 +22,7 @@ import {
     fitsAsPhoto,
     makeThumb,
     probeVideo,
+    thumbFail,
     typeOf,
 } from "./thumbnails";
 import { turns, uploadParts } from "./transfer";
@@ -260,12 +261,15 @@ export default async function uploadFile(
         resume.done = undefined;
     }
     let thumbReady = Promise.resolve();
-    if (encrypted && resume.thumbData === undefined && !resume.thumbRef) {
+    if (encrypted && resume.thumbData == null && !resume.thumbRef) {
         const thumb = (await encryptedThumb(file)) ?? null;
         thumbReady = (thumb ? storeThumb(thumb) : Promise.resolve(null)).then(
             (ref) => {
                 if (ref) resume.thumbRef = ref;
-                else resume.thumbData = thumb;
+                else {
+                    if (thumb) thumbFail(file, "store");
+                    resume.thumbData = thumb;
+                }
             },
         );
     }
