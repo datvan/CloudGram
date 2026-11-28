@@ -14,7 +14,16 @@
  * so a crash mid-write leaves the previous version intact instead of half a
  * JSON document.
  */
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+    mkdir,
+    open,
+    readFile,
+    rename,
+    rm,
+    stat,
+    writeFile,
+} from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import { join } from "node:path";
 
 export class Db {
@@ -48,7 +57,16 @@ export class Db {
     #write(path, text) {
         const run = async () => {
             const temp = `${path}.${process.pid}.tmp`;
-            await writeFile(temp, text, { mode: 0o600 });
+            if (Array.isArray(text)) {
+                const file = await open(temp, "w", 0o600);
+                try {
+                    for (const part of text)
+                        for (let i = 0; i < part.length; i += 65536)
+                            await file.writeFile(part.slice(i, i + 65536));
+                } finally {
+                    await file.close();
+                }
+            } else await writeFile(temp, text, { mode: 0o600 });
             await rename(temp, path);
         };
         const next = this.queue.then(run, run);
@@ -101,16 +119,21 @@ export class Db {
         }
     }
 
-    async readShard(userId, n, version) {
+    shardPath(userId, n, version) {
         if (!Number.isInteger(n) || n < 0) throw new Error("bad shard");
         if (!Number.isSafeInteger(version) || version < 1)
             throw new Error("bad version");
+        return join(this.#shardDir(userId), `${n}-${version}.json`);
+    }
+
+    async readShard(userId, n, version) {
         return JSON.parse(
-            await readFile(
-                join(this.#shardDir(userId), `${n}-${version}.json`),
-                "utf8",
-            ),
+            await readFile(this.shardPath(userId, n, version), "utf8"),
         );
+    }
+
+    streamShard(userId, n, version) {
+        return createReadStream(this.shardPath(userId, n, version));
     }
 
     /**
@@ -121,10 +144,13 @@ export class Db {
         const dir = this.#shardDir(userId);
         await mkdir(dir, { recursive: true, mode: 0o700 });
         for (const [n, blob] of Object.entries(shards))
-            await this.#write(
-                join(dir, `${Number(n)}-${meta.version}.json`),
-                JSON.stringify(blob),
-            );
+            await this.#write(join(dir, `${Number(n)}-${meta.version}.json`), [
+                '{"iv":"',
+                blob.iv,
+                '","ct":"',
+                blob.ct,
+                '"}',
+            ]);
         await this.#write(join(dir, "meta.json"), JSON.stringify(meta));
         for (const n of Object.keys(shards)) {
             const old = previous?.shards[n];

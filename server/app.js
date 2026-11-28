@@ -985,6 +985,12 @@ export class CloudGramApi {
             const legacy = await this.db.readTree(user.id);
             if (!meta) return legacy ?? { version: 0 };
             const since = Number(req.query?.since) || 0;
+            if (res.streamTree) {
+                await res.streamTree(meta, legacy, since, (n, at) =>
+                    this.db.streamShard(user.id, Number(n), at),
+                );
+                return;
+            }
             const shards = {};
             for (const [n, at] of Object.entries(meta.shards))
                 if (at > since)

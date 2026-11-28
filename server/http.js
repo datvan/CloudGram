@@ -6,6 +6,8 @@
  */
 import { createReadStream } from "node:fs";
 import { createServer } from "node:http";
+import { createGzip } from "node:zlib";
+import { finished } from "node:stream/promises";
 
 import { HttpError, LIMITS } from "./app.js";
 import { PlayReply } from "./play.js";
@@ -292,6 +294,84 @@ export function createApiServer(
         };
         const cookies = [];
         const reply = {
+            async streamTree(meta, legacy, since, openShard) {
+                if (cookies.length) headers["Set-Cookie"] = cookies;
+                const gzip = String(req.headers["accept-encoding"] ?? "")
+                    .split(",")
+                    .some((item) =>
+                        /^\s*gzip\s*(?:;\s*q=(?!0(?:\.0*)?(?:\s|$))\d*(?:\.\d+)?)?\s*$/i.test(
+                            item,
+                        ),
+                    );
+                if (gzip) {
+                    headers["Content-Encoding"] = "gzip";
+                    headers.Vary = "Accept-Encoding";
+                }
+                res.writeHead(200, headers);
+                const output = gzip ? createGzip() : res;
+                if (gzip) {
+                    output.on("error", (error) => res.destroy(error));
+                    res.once("close", () => output.destroy());
+                    output.pipe(res);
+                }
+                const write = async (chunk) => {
+                    if (res.destroyed) throw new Error("response closed");
+                    if (output.write(chunk)) return;
+                    await new Promise((resolve, reject) => {
+                        const cleanup = () => {
+                            output.off("drain", drained);
+                            res.off("close", closed);
+                            output.off("error", failed);
+                            res.off("error", failed);
+                        };
+                        const drained = () => {
+                            cleanup();
+                            resolve();
+                        };
+                        const closed = () => {
+                            cleanup();
+                            reject(new Error("response closed"));
+                        };
+                        const failed = (error) => {
+                            cleanup();
+                            reject(error);
+                        };
+                        output.once("drain", drained);
+                        res.once("close", closed);
+                        output.once("error", failed);
+                        res.once("error", failed);
+                    });
+                };
+                try {
+                    await write(
+                        `{"version":${JSON.stringify(
+                            meta.version,
+                        )},"count":${JSON.stringify(meta.count)},"shards":{`,
+                    );
+                    let first = true;
+                    for (const [n, at] of Object.entries(meta.shards)) {
+                        if (at <= since) continue;
+                        await write(`${first ? "" : ","}${JSON.stringify(n)}:`);
+                        first = false;
+                        for await (const chunk of openShard(n, at))
+                            await write(chunk);
+                    }
+                    await write(
+                        `}${
+                            legacy && !since
+                                ? `,"legacy":${JSON.stringify({
+                                      iv: legacy.iv,
+                                      ct: legacy.ct,
+                                  })}`
+                                : ""
+                        }}`,
+                    );
+                    output.end();
+                    await finished(res);
+                } finally {
+                    if (gzip) output.destroy();
+                }
+            },
             cookie(name, value, maxAge) {
                 cookies.push(
                     `${name}=${encodeURIComponent(
@@ -398,6 +478,7 @@ export function createApiServer(
                     ev,
                 });
             const result = await resolve(api, found.handler)(request, reply);
+            if (res.headersSent) return;
             // the player route writes its own response, bytes as they come
             if (result instanceof PlayReply)
                 return await result.run(res, req.method === "HEAD");
