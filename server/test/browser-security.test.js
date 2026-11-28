@@ -40,6 +40,7 @@ async function load(path, globals, exports) {
         clearInterval,
         queueMicrotask,
         swallow: (_site, fallback) => () => fallback,
+        batch: (fn) => fn(),
         ...globals,
     });
     return vm.runInContext(`${source}\n;({${exports.join(",")}})`, context);

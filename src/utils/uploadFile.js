@@ -2,7 +2,10 @@ import { Api, errors } from "telegram";
 
 import { getClient } from "../services/telegram";
 import { Store } from "../redux/store";
-import { uploadProgress } from "../redux/actions/progressAction";
+import {
+    queueUploadProgress,
+    uploadProgress,
+} from "../redux/actions/progressAction";
 import { FILE_ENCRYPTION, SPLIT_RAW } from "../config/features";
 import {
     CHUNK,
@@ -294,7 +297,8 @@ export default async function uploadFile(
         told = now;
         // every part is out: what is left is sending the message, which
         // moves no bytes however long it waits
-        Store.dispatch(
+        queueUploadProgress(
+            Store.dispatch,
             uploadProgress(id, fraction * 100, fraction < 1 ? rate : 0),
         );
     };

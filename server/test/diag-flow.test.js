@@ -4,6 +4,63 @@ import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { sanitizeDiag } from "../diagSchema.js";
 
+test("diagnostic batches match the previous serialization algorithm", async () => {
+    const source = (
+        await readFile(
+            new URL("../../src/services/diag.js", import.meta.url),
+            "utf8",
+        )
+    )
+        .replace(/^import [\s\S]*?;\r?\n/gm, "")
+        .replace(/\bexport /g, "");
+    const cases = [
+        Array.from({ length: 80 }, (_, i) => ({ i, text: 'é"\\' })),
+        [
+            { text: "x".repeat(24540) },
+            { text: "1234567890" },
+            { text: "z".repeat(24540) },
+        ],
+        Array.from({ length: 205 }, (_, i) => ({ i })),
+        [{ text: "x".repeat(24576) }, { text: "after" }],
+    ];
+    for (const input of cases) {
+        const remaining = [...input];
+        const expected = [];
+        while (remaining.length) {
+            const events = [];
+            while (remaining.length && events.length < 100) {
+                if (
+                    JSON.stringify({ events: [...events, remaining[0]] })
+                        .length >
+                    24 * 1024
+                )
+                    break;
+                events.push(remaining.shift());
+            }
+            if (!events.length) break;
+            expected.push(JSON.stringify({ events }));
+        }
+        const bodies = [];
+        const scope = {};
+        const context = vm.createContext({
+            DIAG_LOG: false,
+            fetch: async (_url, options) => {
+                bodies.push(options.body);
+                return { ok: true };
+            },
+        });
+        context.input = input;
+        context.scope = scope;
+        const api = vm.runInContext(
+            `${source}\nqueue = input.map((event) => ({ event, scope })); getScope = () => scope; ({ flush, remaining: () => queue.length })`,
+            context,
+        );
+        await api.flush();
+        assert.deepEqual(bodies, expected);
+        assert.equal(api.remaining(), remaining.length);
+    }
+});
+
 async function load(throws = false, folders = [], windowExtra = {}) {
     const source = async (path) =>
         (await readFile(new URL(path, import.meta.url), "utf8"))
@@ -256,6 +313,7 @@ async function loadUpload({
         SPLIT_RAW: true,
         uploadLimit: () => Infinity,
         buildTreeFromPaths: (entries) => ({ folders: [], files: entries }),
+        batch: (fn) => fn(),
         getSnapshot: () => ({ records }),
         findFolder: () => null,
         enqueueUpload: () => (enqueue ? {} : null),

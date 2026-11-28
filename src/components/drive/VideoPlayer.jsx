@@ -39,6 +39,8 @@ import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import CheckIcon from "@mui/icons-material/Check";
 import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 import LaunchIcon from "@mui/icons-material/Launch";
+import { canRepair } from "../../services/convert";
+import { enqueueRepair } from "../../services/repairQueue";
 
 import {
     setBitrate,
@@ -1324,6 +1326,7 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                     sx={{
                         position: "absolute",
                         top: 24,
+                        zIndex: 1,
                         left: "50%",
                         transform: "translateX(-50%)",
                         bgcolor: "rgba(0,0,0,.7)",
@@ -1412,6 +1415,20 @@ const VideoPlayer = forwardRef(function VideoPlayer(
                             : "Không tải được đoạn video này."}
                     </Typography>
                     <Stack direction="row" spacing={1}>
+                        {error === "format" && canRepair(record) && (
+                            <Button
+                                variant="contained"
+                                onClick={() => {
+                                    enqueueRepair([record.id]);
+                                    setNotice({
+                                        text: "Đang sửa video, xem tiến độ ở bảng tải lên",
+                                        key: Date.now(),
+                                    });
+                                }}
+                            >
+                                Thử sửa video
+                            </Button>
+                        )}
                         <Button variant="contained" onClick={retry}>
                             Thử lại
                         </Button>

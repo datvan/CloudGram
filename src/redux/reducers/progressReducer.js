@@ -4,8 +4,24 @@ const ACTIVE_TYPES = [
     "DOWNLOADING",
     "ERROR",
     "REENCRYPT",
+    "REPAIR",
 ];
 const FINISHED_KEEP = 200;
+const indexes = new WeakMap();
+
+function indexFor(list) {
+    let index = indexes.get(list);
+    if (!index) {
+        index = new Map(list.map((item, i) => [item.id, i]));
+        indexes.set(list, index);
+    }
+    return index;
+}
+
+function indexed(list, index) {
+    indexes.set(list, index);
+    return list;
+}
 
 export default function reducer(
     state = {
@@ -15,22 +31,32 @@ export default function reducer(
     },
     action,
 ) {
-    if (action.type === "REENCRYPT_SKIPPED") {
+    const index = indexFor(state.activeProgress);
+    if (
+        action.type === "REENCRYPT_SKIPPED" ||
+        action.type === "REPAIR_SKIPPED"
+    ) {
+        const list = state.activeProgress.filter(
+            (item) => item.id !== action.id,
+        );
         return {
             ...state,
-            activeProgress: state.activeProgress.filter(
-                (item) => item.id !== action.id,
+            activeProgress: indexed(
+                list,
+                new Map(list.map((item, i) => [item.id, i])),
             ),
         };
     }
     if (action.type === "COMPLETED") {
-        const entry = state.activeProgress.find(
-            (item) => item.id === action.id,
+        const entry = state.activeProgress[index.get(action.id)];
+        const list = state.activeProgress.filter(
+            (item) => item.id !== action.id,
         );
         return {
             ...state,
-            activeProgress: state.activeProgress.filter(
-                (item) => item.id !== action.id,
+            activeProgress: indexed(
+                list,
+                new Map(list.map((item, i) => [item.id, i])),
             ),
             finished: entry
                 ? [
@@ -70,32 +96,39 @@ export default function reducer(
     // so the page renders once rather than once per file
     if (action.type === "BATCH") {
         const list = [...state.activeProgress];
-        const at = new Map(list.map((item, i) => [item.id, i]));
+        let at = index;
         for (const one of action.actions) {
             if (!ACTIVE_TYPES.includes(one.type)) continue;
             const i = at.get(one.id);
             if (i == null) {
+                if (at === index) at = new Map(index);
                 at.set(one.id, list.length);
                 list.push(created(one));
             } else list[i] = updated(list[i], one);
         }
-        return { ...state, activeProgress: list };
+        return { ...state, activeProgress: indexed(list, at) };
     }
 
     if (!ACTIVE_TYPES.includes(action.type)) return state;
 
-    if (!state.activeProgress.some((item) => item.id === action.id)) {
+    const i = index.get(action.id);
+    if (i == null) {
+        const at = new Map(index);
+        at.set(action.id, state.activeProgress.length);
         return {
             ...state,
-            activeProgress: [...state.activeProgress, created(action)],
+            activeProgress: indexed(
+                [...state.activeProgress, created(action)],
+                at,
+            ),
         };
     }
 
+    const list = state.activeProgress.slice();
+    list[i] = updated(list[i], action);
     return {
         ...state,
-        activeProgress: state.activeProgress.map((item) =>
-            item.id === action.id ? updated(item, action) : item,
-        ),
+        activeProgress: indexed(list, index),
     };
 }
 
@@ -113,6 +146,7 @@ function fields(action) {
     // the transfer was going from the entry it replaces.
     if (action.type === "DOWNLOADING") entry.direction = "down";
     if (action.type === "REENCRYPT") entry.direction = "reencrypt";
+    if (action.type === "REPAIR") entry.direction = "repair";
     if (action.type === "QUEUED" || action.type === "UPLOADING")
         entry.direction = "up";
     return entry;
@@ -141,13 +175,7 @@ function updated(item, action) {
  * The active entry for one id. Every file in the drive asks this on every
  * update, so the list is indexed once per change instead of searched by each.
  */
-const indexes = new WeakMap();
 export function activeEntry(state, id) {
     const list = state.progress.activeProgress;
-    let index = indexes.get(list);
-    if (!index) {
-        index = new Map(list.map((item) => [item.id, item]));
-        indexes.set(list, index);
-    }
-    return index.get(id);
+    return list[indexFor(list).get(id)];
 }

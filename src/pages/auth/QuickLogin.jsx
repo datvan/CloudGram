@@ -260,7 +260,10 @@ export default function QuickLogin({ onBack }) {
             <form onSubmit={submit}>
                 <Stack spacing={2}>
                     <Typography variant="body2">
-                        Chỉ nhập mã khi địa chỉ trang là cloudgram.example.com.
+                        Chỉ nhập mã khi địa chỉ trang là{" "}
+                        {import.meta.env.VITE_SITE_HOST ||
+                            globalThis.location?.hostname}
+                        .
                     </Typography>
                     {step === "username" && (
                         <TextField

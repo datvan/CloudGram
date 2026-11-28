@@ -24,7 +24,7 @@ import { spawn, spawnSync } from "node:child_process";
 const PORT = Number(process.env.CLOUDGRAM_HELPER_PORT) || 47633;
 // the page that may talk to this program; add more with CLOUDGRAM_ORIGINS=a,b
 const ORIGINS = new Set([
-    "https://cloudgram.example.com",
+    "__CLOUDGRAM_ORIGIN__",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     ...(process.env.CLOUDGRAM_ORIGINS?.split(",").filter(Boolean) ?? []),

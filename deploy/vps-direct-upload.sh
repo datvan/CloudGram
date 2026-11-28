@@ -22,14 +22,25 @@
 # và khôi phục cloudgram.conf từ thư mục sao lưu in ra ở bước đầu.
 set -euo pipefail
 
-if [ -z "${DEPLOY_HOST:-}" ] && [ -f .env ]; then
-    DEPLOY_HOST=$(sed -n "s/^[[:space:]]*DEPLOY_HOST[[:space:]]*=[[:space:]]*//p" .env | tr -d "\"' \r" | head -1)
-fi
+
+for key in DEPLOY_HOST SITE_HOST UPLOAD_HOST; do
+    if [ -z "${!key:-}" ] && [ -f .env ]; then
+        value=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" .env | sed 's/[[:space:]]*#.*$//' | tr -d "\"' \r" | head -1)
+        printf -v "$key" '%s' "$value"
+    fi
+done
+for key in SITE_HOST UPLOAD_HOST; do
+    value=${!key:-}
+    if [[ ! "$value" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+        echo "$key missing or invalid in .env" >&2
+        exit 1
+    fi
+done
 if [ -z "${DEPLOY_HOST:-}" ]; then
     echo "Chưa có DEPLOY_HOST trong .env." >&2
     exit 1
 fi
-UP_HOST=up.example.com
+UP_HOST=$UPLOAD_HOST
 UP_PORT=8444
 
 echo "→ tải cấu hình lên"
@@ -38,10 +49,11 @@ ssh -o BatchMode=yes "$DEPLOY_HOST" "rm -rf '$STAGE' && mkdir -p '$STAGE'"
 scp -q deploy/nginx/cloudgram-upload.conf deploy/nginx/cloudgram.conf "$DEPLOY_HOST:$STAGE/"
 
 echo "→ cài đặt"
-ssh -o BatchMode=yes "$DEPLOY_HOST" "STAGE='$STAGE' UP_HOST='$UP_HOST' UP_PORT='$UP_PORT' bash -s" <<'REMOTE'
+ssh -o BatchMode=yes "$DEPLOY_HOST" "STAGE='$STAGE' UP_HOST='$UP_HOST' UP_PORT='$UP_PORT' SITE_HOST='$SITE_HOST' UPLOAD_HOST='$UPLOAD_HOST' bash -s" <<'REMOTE'
 set -euo pipefail
 cd "$STAGE"
 sed -i 's/\r$//' cloudgram-upload.conf cloudgram.conf
+sed -i "s/__SITE_HOST__/$SITE_HOST/g; s/__UPLOAD_HOST__/$UPLOAD_HOST/g" cloudgram-upload.conf cloudgram.conf
 
 # DNS phải trỏ thẳng vào máy này (không qua Cloudflare)
 dns=$(getent ahostsv4 "$UP_HOST" | awk '{print $1; exit}' || true)
@@ -119,12 +131,12 @@ echo "→ thử từ máy này"
 # --resolve: bỏ qua bộ nhớ DNS của máy này (có thể còn nhớ "chưa có bản ghi up")
 PIN="--resolve $UP_HOST:$UP_PORT:${DEPLOY_HOST#*@}"
 code=$(curl $PIN -s -o /dev/null -w '%{http_code}' -m 20 -X OPTIONS \
-    -H 'Origin: https://cloudgram.example.com' \
+    -H "Origin: https://$SITE_HOST" \
     -H 'Access-Control-Request-Method: PUT' \
     "https://$UP_HOST:$UP_PORT/api/play/AAAAAAAAAAAAAAAAAAAAAA/chunks/0" || true)
 echo "   OPTIONS: $code (204 là đúng)"
 code=$(curl $PIN -s -o /dev/null -w '%{http_code}' -m 20 "https://$UP_HOST:$UP_PORT/" || true)
 echo "   GET /: $code (404 là đúng)"
-curl -s -o /dev/null -w '%{http_code}' -m 20 https://cloudgram.example.com/ | grep -q 200 &&
-    echo "   cloudgram.example.com vẫn lên (200)" || true
+curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$SITE_HOST/" | grep -q 200 &&
+    echo "   ${SITE_HOST} vẫn lên (200)" || true
 echo "Xong. Thêm vào .env:  VITE_PLAY_DIRECT_URL=https://$UP_HOST:$UP_PORT  rồi npm run deploy."

@@ -19,6 +19,7 @@ set -a
 . /etc/cloudgram-api.env
 set +a
 export CLOUDGRAM_DATA=${CLOUDGRAM_DATA:-/var/lib/cloudgram-api}
+export NODE_ENV=production
 
 # chạy bằng user của dịch vụ để file nó tạo vẫn thuộc về dịch vụ
 runuser -u cloudgram -- /usr/bin/node /opt/cloudgram-api/cli.js "$@"

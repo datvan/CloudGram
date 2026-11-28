@@ -23,6 +23,7 @@ import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import { FileIcon } from "./FileIcon";
 import { getRecord } from "../../services/drive";
 import { cancelReencrypt } from "../../services/reencryptQueue";
+import { cancelRepair } from "../../services/repairQueue";
 import { formatSpeed } from "../../utils/format";
 import { clearFinished } from "../../redux/actions/progressAction";
 import {
@@ -83,7 +84,7 @@ export default function TransferPanel() {
 
     const reencryptFinished = active.filter(
         (p) =>
-            p.direction === "reencrypt" &&
+            ["reencrypt", "repair"].includes(p.direction) &&
             ["done", "failed", "cancelled"].includes(p.status),
     );
     const running = active.filter(
@@ -98,8 +99,10 @@ export default function TransferPanel() {
     const reencrypting = running.filter(
         (p) => p.direction === "reencrypt",
     ).length;
+    const repairing = running.filter((p) => p.direction === "repair").length;
     const title = running.length
         ? [
+              repairing && `Đang sửa ${repairing} video`,
               reencrypting && `Đang mã hoá lại ${reencrypting} mục`,
               uploading &&
                   `Đang tải lên ${uploading} mục${
@@ -130,7 +133,13 @@ export default function TransferPanel() {
             return;
         }
         reencryptFinished.forEach((entry) =>
-            dispatch({ type: "REENCRYPT_SKIPPED", id: entry.id }),
+            dispatch({
+                type:
+                    entry.direction === "repair"
+                        ? "REPAIR_SKIPPED"
+                        : "REENCRYPT_SKIPPED",
+                id: entry.id,
+            }),
         );
         dispatch(clearFinished());
         setHidden(true);
@@ -145,7 +154,7 @@ export default function TransferPanel() {
     const queued = active.filter((p) => p.type === "QUEUED");
     const rows = [
         ...inMotion,
-        ...active.filter((p) => p.direction === "reencrypt"),
+        ...active.filter((p) => ["reencrypt", "repair"].includes(p.direction)),
         ...failed,
         ...queued.slice(0, SHOWN),
         // kept originals first: they are what still needs a look
@@ -262,7 +271,9 @@ export default function TransferPanel() {
                             >
                                 {nameOf(entry)}
                             </Typography>
-                            {entry.direction === "reencrypt" && (
+                            {["reencrypt", "repair"].includes(
+                                entry.direction,
+                            ) && (
                                 <>
                                     <Typography
                                         variant="caption"
@@ -271,16 +282,24 @@ export default function TransferPanel() {
                                         {entry.status === "queued"
                                             ? "Đang chờ"
                                             : entry.status === "done"
-                                            ? "Đã mã hoá lại"
+                                            ? entry.direction === "repair"
+                                                ? "Đã sửa video"
+                                                : "Đã mã hoá lại"
                                             : entry.status === "failed"
                                             ? `Thất bại: ${
                                                   entry.message ?? "Lỗi"
                                               }`
                                             : entry.status === "cancelled"
                                             ? "Đã huỷ"
-                                            : `Đang mã hoá lại · ${
+                                            : `Đang ${
+                                                  entry.direction === "repair"
+                                                      ? "sửa video"
+                                                      : "mã hoá lại"
+                                              } · ${
                                                   entry.phase === "upload"
                                                       ? "Tải lên"
+                                                      : entry.phase === "repair"
+                                                      ? "Sửa"
                                                       : "Đọc"
                                               } ${Math.round(
                                                   entry.percentage ?? 0,
@@ -290,9 +309,15 @@ export default function TransferPanel() {
                                         entry.status === "running") && (
                                         <IconButton
                                             size="small"
-                                            aria-label="Huỷ mã hoá lại"
+                                            aria-label={
+                                                entry.direction === "repair"
+                                                    ? "Huỷ sửa video"
+                                                    : "Huỷ mã hoá lại"
+                                            }
                                             onClick={() =>
-                                                cancelReencrypt(entry.id)
+                                                (entry.direction === "repair"
+                                                    ? cancelRepair
+                                                    : cancelReencrypt)(entry.id)
                                             }
                                         >
                                             <CloseIcon fontSize="small" />

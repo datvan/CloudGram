@@ -114,6 +114,20 @@ function forget(job) {
     Store.dispatch(completedProgress(job.id));
 }
 let running = 0;
+const queueWaiters = new Set();
+export const queuedCount = () => waiting.length + running;
+export function whenQueueBelow(n) {
+    if (queuedCount() <= n) return Promise.resolve();
+    return new Promise((resolve) => queueWaiters.add({ n, resolve }));
+}
+function notifyQueueWaiters() {
+    for (const waiter of queueWaiters) {
+        if (queuedCount() <= waiter.n) {
+            queueWaiters.delete(waiter);
+            waiter.resolve();
+        }
+    }
+}
 export const hasActiveUploads = () => running > 0 || waiting.length > 0;
 const checkMigration = () => {
     if (isMigrating())
@@ -375,6 +389,7 @@ function pump() {
     // Without Telegram every file would fail at once and use up its retries
     // (another device took the lease, the network dropped). They wait instead.
     if (!isOnline()) {
+        notifyQueueWaiters();
         pumpState(waiting.length ? "offline" : "idle");
         trace(() => {
             for (const job of waiting) {
@@ -422,6 +437,7 @@ function pump() {
         run(job, release).finally(release);
     }
     if (!waiting.length) pumpState("idle");
+    notifyQueueWaiters();
 }
 
 // Telegram keeps uploaded parts only for a while; lost ones have to go again

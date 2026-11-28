@@ -222,13 +222,14 @@ async function flush() {
         while (queue.length) {
             if (scopeNow() !== scope) break;
             const events = [];
+            let bodyLength = '{"events":[]}'.length;
             while (queue.length && events.length < 100) {
                 const next = queue[0];
-                if (
-                    JSON.stringify({ events: [...events, next.event] }).length >
-                    24 * 1024
-                )
-                    break;
+                const eventLength = JSON.stringify(next.event).length;
+                const nextLength =
+                    bodyLength + eventLength + (events.length ? 1 : 0);
+                if (nextLength > 24 * 1024) break;
+                bodyLength = nextLength;
                 events.push(queue.shift().event);
             }
             if (!events.length) break;

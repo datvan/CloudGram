@@ -46,7 +46,7 @@ const COPYABLE_AUDIO = ["aac", "mp3"];
  * `blob` (a video in any container ffmpeg reads) as an MP4 Blob.
  * `onProgress(percent | null)`: null while the work cannot be measured.
  */
-export async function convertToMp4(blob, name, onProgress = () => {}) {
+async function convert(blob, name, onProgress, repair) {
     onProgress(null);
     const [{ FFmpeg }, coreURL, wasmURL] = await Promise.all([
         import("@ffmpeg/ffmpeg"),
@@ -80,7 +80,25 @@ export async function convertToMp4(blob, name, onProgress = () => {}) {
             if (Number.isFinite(progress) && progress >= 0)
                 onProgress(Math.min(99, Math.round(progress * 100)));
         });
-        const args = copy
+        const args = repair
+            ? [
+                  ...(COPYABLE_VIDEO.includes(video)
+                      ? ["-c:v", "copy"]
+                      : [
+                            "-c:v",
+                            "libx264",
+                            "-preset",
+                            "ultrafast",
+                            "-crf",
+                            "28",
+                            "-vf",
+                            "scale='min(854,iw)':-2",
+                            "-pix_fmt",
+                            "yuv420p",
+                        ]),
+                  ...(audio ? ["-c:a", "aac", "-b:a", "128k"] : ["-an"]),
+              ]
+            : copy
             ? ["-c", "copy"]
             : [
                   ...["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28"],
@@ -89,16 +107,40 @@ export async function convertToMp4(blob, name, onProgress = () => {}) {
                   ...(audio ? ["-c:a", "aac", "-b:a", "128k"] : []),
               ];
         const code = await ffmpeg.exec([
+            ...(repair ? ["-err_detect", "ignore_err"] : []),
             ...["-i", input],
             ...args,
             ...["-movflags", "+faststart", "out.mp4"],
         ]);
         if (code !== 0) throw new Error("ffmpeg không chuyển được tệp này");
         const out = await ffmpeg.readFile("out.mp4");
+        if (repair && !out.length)
+            throw new Error("ffmpeg không sửa được tệp này");
         onProgress(100);
         return new Blob([out], { type: "video/mp4" });
     } finally {
         // frees the WebAssembly memory, which can be gigabytes
         ffmpeg.terminate();
     }
+}
+
+export const REPAIR_MAX = 1536 * 1024 * 1024;
+
+export const canRepair = (record) =>
+    record?.type === "file" &&
+    record.file_id != null &&
+    !(record.parts?.length > 1) &&
+    !(record.pieces?.length > 1) &&
+    Number.isFinite(record.size) &&
+    record.size >= 0 &&
+    record.size <= REPAIR_MAX &&
+    (/\.(mp4|m4v|mov|mkv|webm)$/i.test(record.name ?? "") ||
+        /^video\//i.test(record.mime ?? ""));
+
+export function convertToMp4(blob, name, onProgress = () => {}) {
+    return convert(blob, name, onProgress, false);
+}
+
+export function repairVideo(blob, name, onProgress = () => {}) {
+    return convert(blob, name, onProgress, true);
 }

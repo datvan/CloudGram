@@ -58,6 +58,7 @@ import RestoreFromTrashOutlinedIcon from "@mui/icons-material/RestoreFromTrashOu
 import DeleteForeverOutlinedIcon from "@mui/icons-material/DeleteForeverOutlined";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import ReplayIcon from "@mui/icons-material/Replay";
+import BuildIcon from "@mui/icons-material/Build";
 import AddIcon from "@mui/icons-material/Add";
 import CloudUploadOutlinedIcon from "@mui/icons-material/CloudUploadOutlined";
 import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
@@ -105,6 +106,8 @@ import { uploadScope } from "../../services/uploadLog";
 import { UPLOAD_OWNER } from "../../config/security";
 import { FILE_ENCRYPTION } from "../../config/features";
 import { enqueueReencrypt } from "../../services/reencryptQueue";
+import { enqueueRepair } from "../../services/repairQueue";
+import { canRepair } from "../../services/convert";
 import { isEncrypted } from "../../services/fileCrypto";
 import { startTreeBackup, stopTreeBackup } from "../../services/treeBackup";
 import {
@@ -134,7 +137,12 @@ import {
     scanProgress,
 } from "../../utils/pickers";
 import { isHidden, pathTo } from "../../utils/tree";
-import { retryUpload, sealPieces, watchPieces } from "../../utils/uploadQueue";
+import {
+    retryUpload,
+    sealPieces,
+    watchPieces,
+    whenQueueBelow,
+} from "../../utils/uploadQueue";
 
 const trace = (fn) => {
     try {
@@ -376,9 +384,7 @@ export default function DriveApp({ mode, onToggleMode }) {
 
         const dir = sort.dir === "asc" ? 1 : -1;
         const dateOf = (record) =>
-            inTrash
-                ? record.trashedAt
-                : (record.modifiedAt ?? record.updatedAt);
+            inTrash ? record.trashedAt : record.modifiedAt ?? record.updatedAt;
         return [...list].sort((a, b) => {
             // folders first, whatever the sort
             if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
@@ -603,6 +609,20 @@ export default function DriveApp({ mode, onToggleMode }) {
             case "download":
                 downloadMany(targets);
                 break;
+            case "repair": {
+                const repairIds = targets
+                    .filter(canRepair)
+                    .map((item) => item.id);
+                if (repairIds.length)
+                    setDialog({ type: "repair", ids: repairIds });
+                else
+                    setNotice({
+                        kind: "noRepairableVideo",
+                        severity: "info",
+                        text: "Không có video nào sửa được",
+                    });
+                break;
+            }
             case "reencrypt": {
                 const legacyIds = targets
                     .filter(
@@ -731,7 +751,7 @@ export default function DriveApp({ mode, onToggleMode }) {
     /**
      * One upload of picked or dropped files. A big folder arrives in batches
      * while it is still being read (scanProgress), so uploading starts after
-     * the first hundred files instead of after the last. The questions, send
+     * the first batch of files instead of after the last. The questions, send
      * as media and what to do with names already taken, are asked once and
      * the answer kept for every batch after.
      */
@@ -975,9 +995,9 @@ export default function DriveApp({ mode, onToggleMode }) {
                     "Không thể đưa một số tệp vào hàng tải lên."
                         ? "enqueueFailed"
                         : counts.reason ===
-                            "Tài khoản đã thay đổi; không thể bắt đầu tải lên."
-                          ? "scope"
-                          : "cancel";
+                          "Tài khoản đã thay đổi; không thể bắt đầu tải lên."
+                        ? "scope"
+                        : "cancel";
             });
             run.reason ??= counts.reason;
         }
@@ -1018,16 +1038,16 @@ export default function DriveApp({ mode, onToggleMode }) {
                     ? "warning"
                     : "none"
                 : target &&
-                    !resumed &&
-                    !skipped &&
-                    !replaced &&
-                    !renamed &&
-                    !linked &&
-                    !run.permissionDenied &&
-                    !run.outsideFolder &&
-                    !run.reason
-                  ? "none"
-                  : "info";
+                  !resumed &&
+                  !skipped &&
+                  !replaced &&
+                  !renamed &&
+                  !linked &&
+                  !run.permissionDenied &&
+                  !run.outsideFolder &&
+                  !run.reason
+                ? "none"
+                : "info";
         recordFinish(run, notice, "none");
         endRun(run);
         // what the banner offered to resume may have just been picked up
@@ -1125,6 +1145,12 @@ export default function DriveApp({ mode, onToggleMode }) {
                 setScanning((now) => (now ? { ...now, ...seen } : now));
             },
             (entries) => addBatch(run, entries),
+            {
+                gate: () =>
+                    run.chain.then(() =>
+                        run.stopped ? undefined : whenQueueBelow(50),
+                    ),
+            },
         );
         // stopping the run, e.g. "Huỷ tải lên" on a name conflict, also
         // stops reading the rest
@@ -1429,7 +1455,7 @@ export default function DriveApp({ mode, onToggleMode }) {
             ? undefined
             : (item) =>
                   item.parent
-                      ? (byId.get(item.parent)?.name ?? "—")
+                      ? byId.get(item.parent)?.name ?? "—"
                       : "Drive của tôi";
 
     const openDropbox = () =>
@@ -1719,6 +1745,13 @@ export default function DriveApp({ mode, onToggleMode }) {
                                                     }
                                                 />
                                             )}
+                                        <ToolbarButton
+                                            title="Sửa video"
+                                            icon={
+                                                <BuildIcon fontSize="small" />
+                                            }
+                                            onClick={() => act("repair")}
+                                        />
                                         <ToolbarButton
                                             title="Di chuyển"
                                             icon={
@@ -2054,6 +2087,17 @@ export default function DriveApp({ mode, onToggleMode }) {
                 ))}
             </Menu>
 
+            <ConfirmDialog
+                open={dialog?.type === "repair"}
+                title="Sửa video"
+                body="Sửa video sẽ tải video về, làm lại phần tiếng bị hỏng ngay trong trình duyệt rồi thay bản cũ trên Telegram. Video tối đa 1,5 GB."
+                confirmLabel="Sửa video"
+                onClose={() => setDialog(null)}
+                onConfirm={() => {
+                    enqueueRepair(dialog.ids);
+                    setDialog(null);
+                }}
+            />
             <ConfirmDialog
                 open={dialog?.type === "reencrypt"}
                 title="Mã hoá lại"

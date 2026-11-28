@@ -19,7 +19,10 @@ import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 
 const [command, username] = process.argv.slice(2);
-const site = process.env.CLOUDGRAM_ORIGIN ?? "https://cloudgram.example.com";
+const site =
+    process.env.CLOUDGRAM_ORIGIN ||
+    (process.env.NODE_ENV === "production" ? null : "http://localhost:5173");
+if (!site) throw new Error("CLOUDGRAM_ORIGIN is required in production");
 const db = await new Db(
     process.env.CLOUDGRAM_DATA ?? "/var/lib/cloudgram-api",
 ).open();

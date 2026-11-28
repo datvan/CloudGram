@@ -2,7 +2,7 @@
 
 [English](deploy.en.md) · **Tiếng Việt**
 
-Đang chạy tại https://cloudgram.example.com, phục vụ bởi nginx trên VPS riêng,
+Ví dụ: https://cloudgram.example.com, phục vụ bởi nginx trên VPS riêng,
 đứng sau proxy Cloudflare.
 
 > Repo này công khai, nên IP máy chủ không được viết ở đây. Nó nằm trong `.env`
@@ -64,9 +64,12 @@ Thêm máy đích vào `.env`, cùng chỗ với khoá Telegram:
 
 ```
 DEPLOY_HOST=root@<ip-vps>
+SITE_HOST=cloudgram.example.com
+UPLOAD_HOST=up.example.com
+VITE_SITE_HOST=cloudgram.example.com
 ```
 
-Tiền tố không phải `VITE_` nên Vite không nhúng nó vào bundle gửi cho trình
+`DEPLOY_HOST` không có tiền tố `VITE_` nên Vite không nhúng nó vào bundle gửi cho trình
 duyệt.
 
 **Lần đầu**, cài dịch vụ tài khoản và cấu hình nginx mới:
@@ -178,81 +181,7 @@ tài khoản.
 
 Phần này ghi lại những thứ mất công tìm ra, để lần sau khỏi dò lại.
 
-**Mọi traffic web phải đi qua Cloudflare.** `ufw` trên VPS chỉ mở 80/443 cho 22
-dải IP của Cloudflare (15 IPv4 + 7 IPv6), chặn mọi nguồn khác. Gọi thẳng vào IP
-máy chủ từ ngoài sẽ timeout, kể cả cổng 443.
-
-Hệ quả thực tế: **bản ghi DNS bắt buộc phải để Proxied (đám mây cam).** Để
-`DNS only` thì trang không chạy — không phải vấn đề bảo mật mà là không có
-đường vào.
-
-Thiết kế này tốt: DDoS bị Cloudflare hứng, và mọi luật WAF hay rate limit đặt ở
-Cloudflare đều không bị đi vòng. Nó cũng giữ kín IP gốc — nhưng chỉ chừng nào
-IP đó không bị viết ra chỗ khác, nên đừng đưa nó vào repo, issue hay ảnh chụp
-màn hình.
-
-**SSL mode của zone là Full (strict).** Biết được vì khi origin chưa có chứng
-chỉ cho hostname, Cloudflare trả `526` chứ không phải phục vụ tạm.
-
-**Certbot chạy được dù đứng sau proxy**, vì Cloudflare cho đường
-`/.well-known/acme-challenge/` đi thẳng qua HTTP về origin, không ép sang
-HTTPS. Đã kiểm chứng: đường đó trả 200 và có trong access log của nginx, trong
-khi mọi đường khác bị Cloudflare 301 tại biên.
-
-**Chứng chỉ** hết hạn 2027-01-22, Certbot đã cài sẵn tác vụ tự gia hạn.
-
-**Cấu hình nginx** nằm ở [deploy/nginx/cloudgram.conf](../deploy/nginx/cloudgram.conf),
-bản sao của `/etc/nginx/sites-available/cloudgram.conf`. Những điểm đáng chú ý:
-
--   `location /` dùng `try_files $uri $uri/ /index.html` — đây là thứ làm
-    `/folder/<id>` không 404 khi bấm F5.
--   `location /assets/` dùng `try_files $uri =404` — cố ý. Asset thiếu phải báo
-    thiếu; nếu để nó rơi về `index.html` thì trình duyệt nhận HTML với mã 200
-    trong lúc đang chờ JavaScript, và lỗi đó rất khó lần.
--   `location /api/` dùng `proxy_pass` tới dịch vụ tài khoản ở
-    `127.0.0.1:4322`, không có `try_files`: đường `/api` sai phải nhận 404 JSON.
--   Content-Security-Policy chỉ cho script từ chính site và kết nối tới
-    `wss://*.web.telegram.org` (nơi GramJS nói MTProto). Thêm thư viện gọi ra
-    ngoài thì phải mở thêm ở đây, không thì trình duyệt chặn lặng lẽ — xem
-    console. `worker-src blob:` là cho bộ đọc ảnh HEIC (`heic-to/csp`), vốn
-    chạy trong một worker tạo từ blob.
-
-**Đăng nhập SSH chỉ bằng khoá.** Từ 2026-10-24 máy chủ không nhận mật khẩu nữa.
-Ba dòng sau nằm trong `/etc/ssh/sshd_config.d/00-hardening.conf`:
-
-```
-PermitRootLogin prohibit-password
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-```
-
-**Tên file bắt đầu bằng `00` là cố ý.** sshd lấy giá trị đọc được **đầu tiên**,
-mà thư mục đó có sẵn `50-cloud-init.conf` chứa `PasswordAuthentication yes`.
-`00` đọc trước `50` nên thắng. Thêm vào cuối `/etc/ssh/sshd_config` thì vô tác
-dụng, vì dòng `Include` nằm ở đầu file, đã nạp cả thư mục trước khi đọc tới
-cuối.
-
-`prohibit-password` chứ không phải `no`: root là tài khoản duy nhất có shell
-thật trên máy, đặt `no` là tự khoá mình ra ngoài.
-
-Hệ quả vận hành: **không còn đường dự phòng bằng mật khẩu.** Muốn vào từ một
-máy khác thì phải `ssh-copy-id` từ máy đang vào được **trước**. Mất hết khoá thì
-chỉ còn console VNC của nhà cung cấp VPS.
-
-Kiểm tra bằng cách hỏi thẳng máy chủ xem nó chào những cách đăng nhập nào:
-
-```bash
-ssh -v -o BatchMode=yes -o PubkeyAuthentication=no <user>@<ip-vps> 2>&1 | grep -i "that can continue"
-```
-
-Đúng thì chỉ in `publickey`. Còn thấy `password` nghĩa là cấu hình chưa có hiệu
-lực — thường do quên `systemctl reload ssh`. (`BatchMode=yes` có mặt chính vì
-trường hợp hỏng đó: không có nó, lệnh in ra dòng cần xem rồi đứng chờ bạn gõ
-mật khẩu.) Đừng nhìn PID của sshd để đoán:
-`SIGHUP` làm nó `exec` lại chính nó, PID và giờ khởi động giữ nguyên dù cấu hình
-đã đổi.
-
----
+Cấu hình DNS, TLS và tường lửa cho hệ thống của bạn. Giới hạn truy cập máy chủ gốc qua proxy tin cậy nếu dùng proxy.
 
 ## Dựng lại từ đầu
 
@@ -267,7 +196,7 @@ không khởi động được, vì nó trỏ tới file chứng chỉ chưa t�
 ```bash
 # trên VPS
 mkdir -p /var/www/cloudgram
-# chép deploy/nginx/cloudgram.bootstrap.conf vào
+# thay __SITE_HOST__ bằng tên miền của bạn, rồi chép deploy/nginx/cloudgram.bootstrap.conf vào
 #   /etc/nginx/sites-available/cloudgram.conf
 ln -s /etc/nginx/sites-available/cloudgram.conf /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
@@ -279,8 +208,7 @@ Rồi tạo bản ghi DNS `cloudgram` kiểu A trỏ về IP VPS, **bật Proxie
 certbot --nginx -d cloudgram.example.com -n --redirect
 ```
 
-Thứ tự quan trọng: phải có DNS trỏ đúng và proxy đã bật trước khi gọi certbot,
-nếu không Let's Encrypt gọi thẳng vào IP và bị ufw chặn.
+Đảm bảo DNS và tường lửa cho phép xác thực chứng chỉ trước khi chạy certbot.
 
 Bản bootstrap không có `/api`. Sau khi certbot xong, chạy `bash deploy/vps-setup.sh`
 để cài dịch vụ tài khoản và thay bằng `cloudgram.conf`. Trước đó, xem lại phần

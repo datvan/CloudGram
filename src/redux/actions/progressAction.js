@@ -1,4 +1,5 @@
 export function queuedProgress(id, name) {
+    flushUploadProgress();
     return {
         id: id,
         name: name,
@@ -9,6 +10,7 @@ export function queuedProgress(id, name) {
 
 // back in line after a failed attempt; `message` says when it goes again
 export function retryingProgress(id, message) {
+    flushUploadProgress();
     return {
         id: id,
         message: message,
@@ -36,6 +38,7 @@ export function downloadProgress(id, percentage) {
 }
 
 export function errorProgress(id, message) {
+    flushUploadProgress();
     return {
         id: id,
         message: message,
@@ -49,6 +52,7 @@ export function errorProgress(id, message) {
 // `kept` says why the original asked to be deleted is still on disk
 // `unsaved`: on Telegram, but the vault has not taken its id yet
 export function completedProgress(id, kept = null, unsaved = false) {
+    flushUploadProgress();
     return {
         id: id,
         kept: kept,
@@ -72,10 +76,33 @@ export function keptProgress(id, name, kept, unsent = true) {
 
 /** Several of the actions above as one update. */
 export function batchProgress(actions) {
+    if (actions.some((action) => action.type !== "UPLOADING"))
+        flushUploadProgress();
     return {
         type: "BATCH",
         actions: actions,
     };
+}
+
+const pendingUploads = new Map();
+let uploadTimer;
+let uploadDispatch;
+
+export function queueUploadProgress(dispatch, action) {
+    if (uploadDispatch && uploadDispatch !== dispatch) flushUploadProgress();
+    uploadDispatch = dispatch;
+    pendingUploads.set(action.id, action);
+    if (!uploadTimer) uploadTimer = setTimeout(flushUploadProgress, 200);
+}
+
+export function flushUploadProgress() {
+    if (uploadTimer) clearTimeout(uploadTimer);
+    uploadTimer = undefined;
+    if (!pendingUploads.size) return;
+    const actions = [...pendingUploads.values()];
+    pendingUploads.clear();
+    uploadDispatch({ type: "BATCH", actions });
+    uploadDispatch = undefined;
 }
 
 export function clearFinished() {
@@ -86,4 +113,8 @@ export function clearFinished() {
 
 export function reencryptProgress(id, status, options = {}) {
     return { id, type: "REENCRYPT", status, ...options };
+}
+
+export function repairProgress(id, status, options = {}) {
+    return { id, type: "REPAIR", status, ...options };
 }

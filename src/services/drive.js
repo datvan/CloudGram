@@ -28,13 +28,7 @@ import { useSyncExternalStore } from "react";
 import { v4 as uuid4 } from "uuid";
 
 import { ApiError } from "./api";
-import {
-    groupByShard,
-    loadTree,
-    saveShards,
-    shardOf,
-    SHARD_COUNT,
-} from "./treeStore";
+import { loadTree, saveShards, shardOf, SHARD_COUNT } from "./treeStore";
 import { fold } from "../utils/format";
 
 const TOMBSTONE_TTL = 90 * 24 * 60 * 60 * 1000;
@@ -47,6 +41,9 @@ let legacy = false;
 let dirtyShards = new Map();
 let revision = 0;
 let records = new Map();
+let shardRecords = new Map();
+let tombstones = new Set();
+let savedShards = new Map();
 let snapshot = {
     records: [],
     byId: new Map(),
@@ -59,6 +56,10 @@ let snapshot = {
 let dirty = false;
 let pushing = null;
 let pushTimer = null;
+let flushPending = null;
+let batchDepth = 0;
+let batchDirty = false;
+let batchImmediate = false;
 let syncError = null;
 // file_id of each record as the server last acknowledged it
 let savedFileIds = new Map();
@@ -127,9 +128,17 @@ export function isSaved(id) {
 }
 
 function noteSaved(list, all = true) {
-    if (all) savedFileIds = new Map();
+    if (all) {
+        savedFileIds = new Map();
+        savedShards = new Map();
+    }
     for (const record of list)
-        if (record.file_id != null) savedFileIds.set(record.id, record.file_id);
+        if (record.file_id != null) {
+            savedFileIds.set(record.id, record.file_id);
+            const n = shardOf(record.id, shardCount);
+            if (!savedShards.has(n)) savedShards.set(n, new Set());
+            savedShards.get(n).add(record.id);
+        }
 }
 
 /** Deleted on purpose (a tombstone), as opposed to never having arrived. */
@@ -143,12 +152,21 @@ function touch(id) {
     dirtyShards.set(shardOf(id, shardCount), ++revision);
 }
 
+function setRecord(record) {
+    records.set(record.id, record);
+    const n = shardOf(record.id, shardCount);
+    if (!shardRecords.has(n)) shardRecords.set(n, new Set());
+    shardRecords.get(n).add(record.id);
+    if (record.deleted) tombstones.add(record.id);
+    else tombstones.delete(record.id);
+}
+
 function merge(incoming, track = false) {
     let changed = false;
     for (const record of incoming) {
         const mine = records.get(record.id);
         if (!mine || (record.updatedAt ?? 0) > (mine.updatedAt ?? 0)) {
-            records.set(record.id, record);
+            setRecord(record);
             if (track) touch(record.id);
             changed = true;
         }
@@ -159,6 +177,8 @@ function merge(incoming, track = false) {
 export async function openDrive(key) {
     dek = key;
     records = new Map();
+    shardRecords = new Map();
+    tombstones = new Set();
     dirty = false;
     dirtyShards = new Map();
     syncError = null;
@@ -180,6 +200,9 @@ export function closeDrive() {
     dek = null;
     version = 0;
     records = new Map();
+    shardRecords = new Map();
+    tombstones = new Set();
+    savedShards = new Map();
     savedFileIds = new Map();
     dirty = false;
     dirtyShards = new Map();
@@ -222,8 +245,28 @@ export function importLegacy(legacy) {
 
 // ----- pushing -------------------------------------------------------------------
 
+export function batch(fn) {
+    batchDepth += 1;
+    try {
+        return fn();
+    } finally {
+        batchDepth -= 1;
+        if (!batchDepth && batchDirty) {
+            const immediate = batchImmediate;
+            batchDirty = false;
+            batchImmediate = false;
+            markDirty(immediate);
+        }
+    }
+}
+
 function markDirty(immediate) {
     dirty = true;
+    if (batchDepth) {
+        batchDirty = true;
+        batchImmediate ||= Boolean(immediate);
+        return;
+    }
     publish();
     clearTimeout(pushTimer);
     pushTimer = setTimeout(
@@ -238,17 +281,26 @@ function markDirty(immediate) {
  */
 export function flush() {
     if (!dek) return Promise.resolve();
-    if (pushing) {
-        // a change made during a push still needs a push of its own
-        return pushing.then(() => (dirty ? flush() : undefined));
-    }
-    if (!dirty) return Promise.resolve();
-    pushing = push().finally(() => {
-        pushing = null;
-        publish();
-    });
-    publish();
-    return pushing;
+    if (!dirty && !pushing) return Promise.resolve();
+    if (flushPending) return flushPending;
+    const scheduled = Promise.resolve()
+        .then(async () => {
+            if (pushing) await pushing;
+            flushPending = null;
+            if (!dirty || !dek) return;
+            pushing = push().finally(() => {
+                pushing = null;
+                publish();
+            });
+            publish();
+            await pushing;
+        })
+        .catch((error) => {
+            if (flushPending === scheduled) flushPending = null;
+            throw error;
+        });
+    flushPending = scheduled;
+    return scheduled;
 }
 
 async function push() {
@@ -264,27 +316,33 @@ async function push() {
         for (let attempt = 0; attempt < 5; attempt += 1) {
             if (attempt > 0) retries409 += 1;
             const cutoff = Date.now() - TOMBSTONE_TTL;
-            for (const [id, record] of records) {
+            for (const id of tombstones) {
+                const record = records.get(id);
                 if (record.deleted && record.updatedAt < cutoff) {
                     records.delete(id);
+                    tombstones.delete(id);
+                    shardRecords.get(shardOf(id, shardCount)).delete(id);
                     touch(id);
                 }
             }
             const sent = new Map(dirtyShards);
-            const groups = groupByShard(
-                records.values(),
-                shardCount,
-                sent.keys(),
-            );
+            const groups = new Map();
+            for (const n of sent.keys())
+                groups.set(
+                    n,
+                    Array.from(shardRecords.get(n) ?? [], (id) =>
+                        records.get(id),
+                    ),
+                );
             try {
                 await saveShards(dek, { version, count: shardCount }, groups, {
                     dropLegacy: legacy,
                     onSaved: (indexes, nextVersion) => {
                         version = nextVersion;
                         for (const n of indexes) {
-                            for (const id of savedFileIds.keys())
-                                if (shardOf(id, shardCount) === n)
-                                    savedFileIds.delete(id);
+                            for (const id of savedShards.get(n) ?? [])
+                                savedFileIds.delete(id);
+                            savedShards.delete(n);
                             noteSaved(groups.get(n), false);
                             if (dirtyShards.get(n) === sent.get(n))
                                 dirtyShards.delete(n);
@@ -340,7 +398,7 @@ async function push() {
 
 function put(record, { preserveModifiedAt = false } = {}) {
     const now = Date.now();
-    records.set(record.id, {
+    setRecord({
         ...record,
         modifiedAt: preserveModifiedAt
             ? record.modifiedAt ?? record.updatedAt
