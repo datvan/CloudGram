@@ -480,9 +480,9 @@ export async function readDrop(dataTransfer, scan) {
         try {
             const resolved = await Promise.all(handles);
             if (resolved.every(Boolean)) {
-                const lists = await Promise.all(
-                    resolved.map((handle) => entriesOf(handle, scan)),
-                );
+                const lists = [];
+                for (const handle of resolved)
+                    lists.push(await entriesOf(handle, scan));
                 scan?.done();
                 return lists.flat();
             }
@@ -496,16 +496,15 @@ export async function readDrop(dataTransfer, scan) {
     }
     if (!roots.length) {
         const entries = loose.map((file) => ({ file, path: file.name }));
-        entries.forEach((entry) => {
+        for (const entry of entries) {
             scan?.add(entry.file);
-            scan?.found(entry);
-        });
+            if (scan?.found(entry)) await scan.wait();
+        }
         scan?.done();
-        return entries;
+        return scan?.streaming ? [] : entries;
     }
-    const lists = await Promise.all(
-        roots.map((entry) => walk(entry, "", scan)),
-    );
+    const lists = [];
+    for (const entry of roots) lists.push(await walk(entry, "", scan));
     scan?.done();
     return lists.flat();
 }
@@ -517,24 +516,52 @@ async function walk(entry, prefix, scan) {
             entry.file(resolve, reject),
         );
         scan?.add(file);
-        scan?.found({ file, path });
-        return [{ file, path }];
+        if (scan?.found({ file, path })) await scan.wait();
+        return scan?.streaming ? [] : [{ file, path }];
     }
     const reader = entry.createReader();
-    const children = [];
+    const entries = [];
     // readEntries hands back at most ~100 at a time; keep going until empty
     for (;;) {
         const batch = await new Promise((resolve, reject) =>
             reader.readEntries(resolve, reject),
         );
         if (!batch.length) break;
-        children.push(...batch);
+        let files = [];
+        const readFiles = async () => {
+            const read = await Promise.all(
+                files.map(
+                    (child) =>
+                        new Promise((resolve, reject) =>
+                            child.file(resolve, reject),
+                        ),
+                ),
+            );
+            for (let i = 0; i < files.length; i += 1) {
+                const item = {
+                    file: read[i],
+                    path: `${path}/${files[i].name}`,
+                };
+                scan?.add(item.file);
+                if (scan?.found(item)) await scan.wait();
+                if (!scan?.streaming) entries.push(item);
+            }
+            files = [];
+        };
+        for (const child of batch) {
+            scan?.check();
+            if (child.isFile) {
+                files.push(child);
+                if (files.length === 64) await readFiles();
+            } else {
+                await readFiles();
+                entries.push(...(await walk(child, path, scan)));
+            }
+        }
+        await readFiles();
     }
     scan?.check();
-    const lists = await Promise.all(
-        children.map((child) => walk(child, path, scan)),
-    );
-    return lists.flat();
+    return entries;
 }
 
 // files fetched at once; they share one pool of parts in flight

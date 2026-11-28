@@ -33,7 +33,7 @@ const READ_AHEAD = 64;
 // the most often a scan reports how far it got, in ms
 const REPORT_EVERY = 100;
 // files a scan hands over at a time to start uploading (scanProgress)
-const BATCH = 100;
+const BATCH = 200;
 
 const cancelled = () => new DOMException("Scan cancelled", "AbortError");
 
@@ -47,12 +47,13 @@ const cancelled = () => new DOMException("Scan cancelled", "AbortError");
  * groups of BATCH and the rest at done(), so uploading can start long before
  * a folder of thousands is read to the end.
  */
-export function scanProgress(onProgress, onBatch) {
+export function scanProgress(onProgress, onBatch, { gate } = {}) {
     const seen = { files: 0, bytes: 0 };
     let last = 0;
     let stopped = false;
     let batch = [];
     let handed = 0;
+    let rejectWait;
     const hand = () => {
         if (!batch.length) return;
         const entries = batch;
@@ -64,6 +65,22 @@ export function scanProgress(onProgress, onBatch) {
         /** How many entries already went to `onBatch`. */
         get handed() {
             return handed;
+        },
+        get streaming() {
+            return Boolean(onBatch);
+        },
+        async wait() {
+            if (stopped) throw cancelled();
+            if (!onBatch || !gate) return;
+            await Promise.race([
+                Promise.resolve().then(gate),
+                new Promise((_, reject) => {
+                    rejectWait = reject;
+                }),
+            ]).finally(() => {
+                rejectWait = undefined;
+            });
+            if (stopped) throw cancelled();
         },
         /** Forget what was read but not handed over, to read it again. */
         restart() {
@@ -84,7 +101,10 @@ export function scanProgress(onProgress, onBatch) {
         found(entry) {
             if (!onBatch) return;
             batch.push(entry);
-            if (batch.length >= BATCH) hand();
+            if (batch.length >= BATCH) {
+                hand();
+                return true;
+            }
         },
         check() {
             if (stopped) throw cancelled();
@@ -92,6 +112,7 @@ export function scanProgress(onProgress, onBatch) {
         cancel() {
             stopped = true;
             batch = [];
+            rejectWait?.(cancelled());
         },
         done() {
             if (stopped) throw cancelled();
@@ -110,16 +131,17 @@ async function walk(dir, root, rootId, prefix, out, scan) {
         files = [];
         // one at a time, a folder of thousands takes long enough to look stuck
         const read = await Promise.all(batch.map(([child]) => child.getFile()));
-        batch.forEach(([, sub], j) => {
+        for (const [j, [, sub]] of batch.entries()) {
             const entry = {
                 file: read[j],
                 path: `${root.name}/${sub}`,
                 handle: { rootId, root, sub },
             };
             scan?.add(read[j]);
-            scan?.found(entry);
-            out.push(entry);
-        });
+            const handed = scan?.found(entry);
+            if (!scan?.streaming) out.push(entry);
+            if (handed) await scan.wait();
+        }
     };
     for await (const child of dir.values()) {
         scan?.check();
@@ -146,8 +168,8 @@ export async function entriesOf(root, scan) {
             handle: { rootId, root, sub: "" },
         };
         scan?.add(file);
-        scan?.found(entry);
-        return [entry];
+        if (scan?.found(entry)) await scan.wait();
+        return scan?.streaming ? [] : [entry];
     }
     const out = [];
     await walk(root, root, rootId, "", out, scan);
@@ -161,7 +183,8 @@ export async function entriesOf(root, scan) {
 export async function pickFiles({ onPicked, scan } = {}) {
     const handles = await window.showOpenFilePicker({ multiple: true });
     onPicked?.();
-    const lists = await Promise.all(handles.map((h) => entriesOf(h, scan)));
+    const lists = [];
+    for (const handle of handles) lists.push(await entriesOf(handle, scan));
     scan?.done();
     return lists.flat();
 }
@@ -533,8 +556,8 @@ export async function askToWrite(entries, run, wait = {}) {
                                 (run.outsideFolder ?? 0) > outsideBefore
                                     ? "outside"
                                     : answer === "granted"
-                                      ? "granted"
-                                      : "denied",
+                                    ? "granted"
+                                    : "denied",
                                 (run.outsideFolder ?? 0) - outsideBefore,
                             ),
                         () => {},
@@ -634,12 +657,12 @@ export async function removePicked(handle, uploaded, job) {
                     value === null
                         ? "deleted"
                         : value === KEPT.changed
-                          ? "changed"
-                          : value === KEPT.locked
-                            ? "locked"
-                            : value === KEPT.permission
-                              ? "permission"
-                              : "kept",
+                        ? "changed"
+                        : value === KEPT.locked
+                        ? "locked"
+                        : value === KEPT.permission
+                        ? "permission"
+                        : "kept",
             });
         } catch {
             // Diagnostics are optional.
